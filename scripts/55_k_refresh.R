@@ -94,6 +94,22 @@ P$pred <- P$pred %>% select(-any_of(c(dyn, "spread", "total_line", "implied_own"
   left_join(base_cols, by = "team") %>% left_join(B$te %>% transmute(team, implied_own_base = (total_line + spread) / 2), by = "team") %>%
   left_join(info, by = "team") %>%
   left_join(wx_all %>% select(game_id, wx_gust = gust, wx_precip_prob = precip_prob, wx_precip_in = precip_in), by = "game_id")
+# kicker injury status (starters.R; the sources were fetched by the D/ST refresh minutes ago and are reused).
+# Display only: an Out kicker is flagged with the likely replacement; the projection keeps the listed kicker.
+source(file.path(PROJ_DIR, "scripts/starters.R"))
+ks <- tryCatch({
+  S <- starter_sources(SEASON, WEEK, sort(unique(P$pred$team)), cache = file.path(WORK_DIR, "starter_sources.rds"), now = NOW,
+                       snap_dir = file.path(PROJ_DIR, "data/lines/sources"))
+  k <- kicker_status(S, P$pred %>% transmute(team, kicker_id = if ("kicker_id" %in% names(P$pred)) kicker_id else NA_character_, kicker))
+  started <- P$pred$team[P$pred$locked %in% TRUE]
+  log_starters(file.path(PROJ_DIR, "data/lines/starter_history.csv"), NOW, SEASON, WEEK,
+               k %>% filter(!team %in% started) %>% left_join(P$pred %>% select(team, kicker, any_of("kicker_id")), by = "team") %>%
+                 transmute(team, pos = "K", player = kicker, player_id = if ("kicker_id" %in% names(.)) kicker_id else "", status = coalesce(k_status, ""),
+                           rule = "weekly run (status check only)", note = ifelse(is.na(k_alt), "", paste("replacement:", k_alt))))
+  message(sprintf("kickers: status checked (%s) · flagged: %s", paste(S$ok, collapse = ", "),
+                  if (any(!is.na(k$k_status))) paste(sprintf("%s %s", k$team, k$k_status)[!is.na(k$k_status)], collapse = ", ") else "none"))
+  k }, error = function(e) { message("kickers: status check failed — ", conditionMessage(e)); NULL })
+if (!is.null(ks)) P$pred <- P$pred %>% select(-any_of(c("k_status", "k_out", "k_status_detail", "k_alt"))) %>% left_join(ks, by = "team")
 # projection history → dotted trend line (weekly run + one point per refresh day)
 ph <- ph_update(PH_CSV, "k", SEASON, WEEK, fit_time = B$created,
                 base = bind_rows(map(names(B$SCORING), ~ tibble(system = .x, team = P$pred$team, proj = P$pred[[paste0("proj_base_", .x)]]))),

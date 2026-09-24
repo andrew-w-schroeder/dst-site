@@ -32,7 +32,9 @@ week_games <- function(season, week) {
   g <- readRDS(tmp)
   g <- g[g$season == season & g$week == week & g$game_type == "REG", ]
   tibble::tibble(game_id = g$game_id, stadium_id = g$stadium_id, roof = ifelse(is.na(g$roof), "", g$roof),
-                 kickoff = as.POSIXct(format(as.POSIXct(paste(g$gameday, g$gametime), tz = "America/New_York"), tz = "UTC"), tz = "UTC"))
+                 kickoff = as.POSIXct(format(as.POSIXct(paste(g$gameday, g$gametime), tz = "America/New_York"), tz = "UTC"), tz = "UTC"),
+                 home_team = g$home_team, away_team = g$away_team,          # projected starters (starters.R)
+                 home_qb_id = g$home_qb_id, home_qb_name = g$home_qb_name, away_qb_id = g$away_qb_id, away_qb_name = g$away_qb_name)
 }
 
 wx_fetch1 <- function(lat, lon, ko) {          # mean over kickoff hour + 2 h; max gust / rain chance; total rain

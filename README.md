@@ -15,6 +15,11 @@ How it works
   forecasts (`data/lines/weather_history.csv`; no key, no extra Odds API credits) and writes `site/k/`.
   Both pages get tiers, forecast gusts / rain, a dotted trend line per team (`data/lines/proj_history.csv`)
   and hover text with what drives each projection (`scripts/site_utils.R`).
+* **Starting QBs:** every refresh re-checks each offense's starter (`scripts/starters.R`: official injury report,
+  Sleeper and Ourlads depth charts, nflverse schedule) and re-scores a new starter exactly; kickers get an
+  injury-status flag. Choices are logged to `data/lines/starter_history.csv`.
+  **To force a starter:** edit `data/lines/qb_override.csv` on GitHub (pencil icon) and add a line such as
+  `2026,3,WAS,Marcus Mariota,Daniels out (hamstring)` — saving it starts a refresh. Rows only apply to their week.
 * **Run it now:** Actions tab → DST refresh → Run workflow.
 
 Files in this repo are written by the scripts in `~/ML/ff`; edit them there, not here.

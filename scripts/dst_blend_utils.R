@@ -39,3 +39,35 @@ outcome_dist <- function(proj, unc_proj, unc_resid, bw, n_sim, seed) {
   od
 }
 boot_summary <- function(boot) tibble::tibble(proj_se = apply(boot, 1, sd), ci_lo = apply(boot, 1, quantile, 0.05), ci_hi = apply(boot, 1, quantile, 0.95))
+
+# Swap in new starting QBs (see 40_dst_model.R, 9d). starters = tibble(team = offense, qb_id, qb_name); NA / missing
+# teams keep the weekly QB. Rebuilds the swapped rows' opponent-offense (o_) and opposing-QB (qb_) features from the
+# bundle's scenario tables, re-centres the week exactly as build_frame() does and recomputes the interactions.
+# force = TRUE rebuilds every row from the scenario tables (self-check in 40). Bundles without $qb are returned as is.
+swap_qbs <- function(b, starters, force = FALSE) {
+  te <- b$te; Q <- b$qb
+  if (is.null(Q)) return(list(te = te, info = NULL))
+  raw <- Q$raw[match(paste(te$game_id, te$team), paste(Q$raw$game_id, Q$raw$team)), ]
+  new_id <- if (is.null(starters)) rep(NA_character_, nrow(raw)) else starters$qb_id[match(raw$opp, starters$team)]
+  new_nm <- if (is.null(starters)) rep(NA_character_, nrow(raw)) else starters$qb_name[match(raw$opp, starters$team)]
+  changed <- !is.na(new_id) & (is.na(raw$opp_qb_id) | new_id != raw$opp_qb_id)
+  id <- ifelse(changed, new_id, raw$opp_qb_id)
+  for (i in which(if (force) !is.na(id) else changed)) {
+    a <- Q$alt[Q$alt$team == raw$opp[i] & Q$alt$qb_id == id[i], ]
+    if (!nrow(a)) a <- Q$alt[Q$alt$team == raw$opp[i] & Q$alt$qb_id == "NEW", ]
+    p <- Q$pool[Q$pool$qb_id == id[i], ]
+    for (v in Q$swap_o)  raw[[v]][i] <- a[[v]][1]
+    for (v in Q$swap_qb) raw[[v]][i] <- if (nrow(p)) p[[v]][1] else Q$fill[[v]][1]
+  }
+  val <- function(v) if (Q$center && v %in% Q$centred) raw[[v]] - mean(raw[[v]], na.rm = TRUE) else raw[[v]]
+  for (v in intersect(c(Q$swap_o, Q$swap_qb), names(te))) te[[v]] <- val(v)
+  dv <- function(v) raw[[paste0("cen_", v)]]
+  if ("press_x" %in% names(te)) te$press_x <- dv("d_press_rate") * val("o_press_rate")
+  if ("sack_x"  %in% names(te)) te$sack_x  <- dv("d_sack_rate") * val("o_sack_rate")
+  if ("to_x"    %in% names(te)) te$to_x    <- (dv("d_int_rate") + dv("d_fuml_rate")) * (val("o_int_rate") + val("o_fuml_rate"))
+  pool_nm <- Q$pool$qb_name[match(id, Q$pool$qb_id)]
+  list(te = te, info = tibble::tibble(team = te$team, opp = raw$opp, opp_qb_id = id,
+                                      opp_qb_name = ifelse(changed, dplyr::coalesce(new_nm, pool_nm, id), raw$opp_qb_name),
+                                      base_qb_name = raw$opp_qb_name, qb_changed = changed, o_qb_cont = raw$o_qb_cont,
+                                      qb_new = changed & !(paste(raw$opp, id) %in% paste(Q$alt$team, Q$alt$qb_id))))
+}

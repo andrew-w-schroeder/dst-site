@@ -14,6 +14,10 @@
 #      bootstrap 90% CI. Also keeps the weekly-run values as the "since Tuesday" baseline.
 #   4. Write re-scored report parts to work/ (the published weekly parts are never modified), run
 #      44_dst_report.R on them and copy the HTML to site/index.html (+ weekly archive).
+#   Starting QBs (starters.R): each refresh re-checks every offense's starter (injury report, Sleeper + Ourlads depth
+#   charts, nflverse schedule, data/lines/qb_override.csv) and re-scores a changed starter exactly with the bundle's
+#   QB scenarios (40_dst_model.R 9d); games that have kicked off keep their last pre-kickoff starter.
+#   Choices are logged to data/lines/starter_history.csv.
 #   Also (site_utils.R): Open-Meteo forecasts incl. gusts / rain for this week's outdoor games (display only for
 #   D/ST; logged to data/lines/weather_history.csv and reused by the kicker refresh), the projection history
 #   behind the trend sparklines (data/lines/proj_history.csv) and the per-team "drivers" hover text.
@@ -33,6 +37,8 @@ SYSTEMS  <- c("espn", "yahoo", "ffpc")
 NOW      <- as.POSIXct(Sys.getenv("REFRESH_NOW", format(Sys.time(), tz = "UTC")), tz = "UTC")   # REFRESH_NOW for testing
 source(file.path(PROJ_DIR, "scripts/dst_blend_utils.R"))
 source(file.path(PROJ_DIR, "scripts/site_utils.R"))
+source(file.path(PROJ_DIR, "scripts/starters.R"))
+QBO_CSV <- file.path(PROJ_DIR, "data/lines/qb_override.csv"); ST_CSV <- file.path(PROJ_DIR, "data/lines/starter_history.csv")
 WX_CSV <- file.path(PROJ_DIR, "data/lines/weather_history.csv"); PH_CSV <- file.path(PROJ_DIR, "data/lines/proj_history.csv")
 
 ## ---- 1. Which week? newest bundle across systems ----
@@ -120,6 +126,43 @@ message(sprintf("lines: %d games · %d from sportsbooks · %d locked", nrow(line
 wk_games <- tryCatch(week_games(SEASON, WEEK), error = function(e) NULL)
 wx <- tryCatch(wx_latest(wx_update(WX_CSV, wk_games, NOW)), error = function(e) { message("weather: ", conditionMessage(e)); wx_latest(read_wx_hist(WX_CSV)) })
 
+## ---- 3c. Projected starting QBs ----
+b1 <- bundles[[1]]
+p1 <- readRDS(file.path(DST_DIR, names(bundles)[1], sprintf("report_parts_%d_wk%02d.rds", SEASON, WEEK)))$pred
+weekly_qb <- p1 %>% distinct(team = opp, qb_name = opp_qb_name) %>%
+  mutate(qb_id = if (!is.null(b1$qb)) b1$qb$raw$opp_qb_id[match(team, b1$qb$raw$opp)] else NA_character_)
+can_swap <- all(map_lgl(bundles, ~ !is.null(.x$qb) && isTRUE(.x$qb$max_diff < 1e-6)))
+if (!can_swap) message("starters: this week's bundles have no QB scenarios (weekly model predates them) — starters shown, not re-scored")
+starters <- tryCatch({
+  S <- starter_sources(SEASON, WEEK, weekly_qb$team, cache = file.path(WORK_DIR, "starter_sources.rds"), now = NOW,
+                       snap_dir = file.path(PROJ_DIR, "data/lines/sources"))
+  st <- pick_qbs(S, weekly_qb, wk_games, if (!is.null(b1$qb)) b1$qb$pool else NULL, QBO_CSV, SEASON, WEEK)
+  # games that have kicked off keep the last starter chosen before kickoff (else the weekly QB)
+  ko <- if (!is.null(wk_games)) c(setNames(wk_games$kickoff, wk_games$home_team), setNames(wk_games$kickoff, wk_games$away_team)) else NULL
+  started <- if (is.null(ko)) character() else st$team[!is.na(ko[st$team]) & NOW >= ko[st$team]]
+  if (length(started)) {
+    prev <- last_pre_kickoff(ST_CSV, SEASON, WEEK, ko)
+    for (tm in started) {
+      i <- which(st$team == tm); h <- if (!is.null(prev)) prev[prev$team == tm, ] else NULL
+      if (!is.null(h) && nrow(h)) { st$qb_id[i] <- h$player_id; st$qb_name[i] <- h$player; st$status[i] <- na_if(h$status, ""); st$rule[i] <- paste("locked at kickoff:", h$rule) }
+      else { w <- weekly_qb[weekly_qb$team == tm, ]; st$qb_id[i] <- w$qb_id; st$qb_name[i] <- w$qb_name; st$rule[i] <- "locked at kickoff: weekly run" }
+    }
+  }
+  log_starters(ST_CSV, NOW, SEASON, WEEK, st %>% filter(!team %in% started) %>%
+                 transmute(team, pos = "QB", player = qb_name, player_id = qb_id, status = coalesce(status, ""), rule, note = disagree))
+  attr(st, "sources") <- list(ok = S$ok, fail = S$fail, stale = S$stale)
+  st
+}, error = function(e) { message("starters: failed — ", conditionMessage(e), " (weekly QBs kept)"); NULL })
+if (!is.null(starters)) {
+  chg <- starters %>% left_join(weekly_qb %>% select(team, w_name = qb_name), by = "team") %>% filter(st_norm(qb_name) != st_norm(w_name))
+  message(sprintf("starters: %d offenses · sources OK: %s%s · changed since weekly run: %s", nrow(starters), paste(attr(starters, "sources")$ok, collapse = ", "),
+                  if (length(attr(starters, "sources")$fail)) paste0(" · FAILED: ", paste(attr(starters, "sources")$fail, collapse = ", ")) else "",
+                  if (nrow(chg)) paste(sprintf("%s %s → %s", chg$team, chg$w_name, chg$qb_name), collapse = "; ") else "none"))
+  flag <- starters %>% filter(!is.na(status) | nzchar(disagree) | rule != "nflverse schedule")
+  if (nrow(flag)) for (i in seq_len(nrow(flag))) message(sprintf("  %-3s %-22s %-12s %s%s", flag$team[i], flag$qb_name[i], coalesce(flag$status[i], ""), flag$rule[i],
+                                                           if (nzchar(flag$disagree[i])) paste0(" | other sources: ", flag$disagree[i]) else ""))
+}
+
 ## ---- 4. Re-score each system ----
 apply_lines <- function(te, lines) {
   l <- bind_rows(lines %>% transmute(game_id, team = home, sp = home_spread, tot = total),
@@ -147,7 +190,8 @@ for (s in names(bundles)) {
   parts <- readRDS(pf)
   base <- score(b, b$te) %>% transmute(team, spread_base = spread, total_base = total_line, implied_opp_base = implied_opp, proj_base = proj,
               rank_base = rank(-proj, ties.method = "first"))
-  te_now <- apply_lines(b$te, lines)
+  sw <- swap_qbs(b, if (can_swap && !is.null(starters)) starters %>% select(team, qb_id, qb_name) else NULL)
+  te_now <- apply_lines(sw$te, lines)
   now  <- score(b, te_now)
   # what drives each team's projection (vs an average team this week, Vegas excluded)
   dr <- drivers(te_now, function(t) blend_pred(b$main, t, b$SC, b$specs, b$final_models), dst_groups(setdiff(names(b$te), c("game_id", "team", "opp", "gameday"))))
@@ -157,8 +201,20 @@ for (s in names(bundles)) {
     left_join(now, by = "team") %>% left_join(base, by = "team") %>% left_join(info, by = "team") %>%
     left_join(wx %>% select(game_id, wx_temp = temp, wx_wind = wind, wx_gust = gust, wx_precip_prob = precip_prob, wx_precip_in = precip_in), by = "game_id") %>%
     arrange(desc(proj)) %>% mutate(rank = row_number(), .before = 1)
+  if (!is.null(starters)) {                                 # opponent QB shown on the page + hover text
+    pq <- starters[match(parts$pred$opp, starters$team), ]
+    w_name <- parts$pred$opp_qb_name
+    changed <- !is.na(pq$qb_name) & st_norm(pq$qb_name) != st_norm(w_name)
+    rescored <- changed & can_swap
+    if (!is.null(sw$info)) parts$pred$o_qb_cont <- sw$info$o_qb_cont[match(parts$pred$team, sw$info$team)]
+    parts$pred <- parts$pred %>% mutate(opp_qb_weekly = w_name, opp_qb_name = coalesce(pq$qb_name, w_name), opp_qb_status = pq$status,
+                                        opp_qb_changed = changed, opp_qb_rescored = rescored, opp_qb_disagree = coalesce(pq$disagree, "") != "",
+                                        opp_qb_tip = ifelse(is.na(pq$qb_name), NA_character_, paste0(qb_tip(pq, w_name, rescored),
+                                          ifelse(changed & !rescored, "\n\u26A0 Changed since the weekly run but NOT re-scored: rerun the weekly model (this week's bundle predates QB scenarios)", ""))))
+  }
   parts$refresh <- list(time = NOW, n_priced = sum(lines$src == "sportsbooks"), n_locked = sum(lines$locked),
-                        books = if (any(!is.na(lines$n_books))) median(lines$n_books, na.rm = TRUE) else NA, model_fit = b$created)
+                        books = if (any(!is.na(lines$n_books))) median(lines$n_books, na.rm = TRUE) else NA, model_fit = b$created,
+                        qb_sources = if (!is.null(starters)) attr(starters, "sources") else NULL, qb_rescore = can_swap)
   dir.create(file.path(WORK_DIR, "output/dst", s), recursive = TRUE, showWarnings = FALSE)
   out_parts[[s]] <- list(parts = parts, file = file.path(WORK_DIR, "output/dst", s, basename(pf)), fit = b$created)
   message(sprintf("%s: re-scored · biggest move %s", b$SC$label,

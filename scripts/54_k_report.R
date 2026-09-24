@@ -61,9 +61,17 @@ wind_lab <- ifelse(pred$indoor == 1, "indoor", paste0(round(pred$wind), ifelse(p
 gust_lab <- if ("wx_gust" %in% names(pred)) ifelse(pred$indoor == 1 | is.na(pred$wx_gust), "", as.character(round(pred$wx_gust))) else rep("", nrow(pred))
 rain_lab <- if ("wx_precip_prob" %in% names(pred)) ifelse(pred$indoor == 1 | is.na(pred$wx_precip_prob), "",
                 paste0(round(pred$wx_precip_prob), "%", if ("wx_precip_in" %in% names(pred)) ifelse(is.na(pred$wx_precip_in), "", paste0(" · ", rain_in(pred$wx_precip_in))) else "")) else rep("", nrow(pred))
-why_tip <- function(p, sy) { w <- p[[paste0("why_", sy)]]; if (is.null(w)) return(esc(p$kicker))
-  tip_span(esc(p$kicker), paste0("<b>", esc(p$kicker), " (", p$team, ") — ", SC[[sy]]$label, " ", sprintf("%.2f", p[[paste0("proj_", sy)]]),
-                                 "</b>\nWhat moves this projection vs an average kicker this week (points):\n", esc(w),
+# injury status from the refresh (starters.R): (Q) / (D) / (O) after the name; Out → ⚠ + likely replacement in the hover
+K_ABBR <- c(Out = "O", Doubtful = "D", Questionable = "Q", Suspended = "SUS", IR = "IR", PUP = "PUP", NFI = "NFI")
+k_badge <- function(p) if (!"k_status" %in% names(p)) "" else
+  paste0(ifelse(is.na(p$k_status), "", paste0(" (", dplyr::coalesce(unname(K_ABBR[p$k_status]), p$k_status), ")")), ifelse(p$k_out %in% TRUE, " \u26A0", ""))
+k_note <- function(p) if (!"k_status" %in% names(p)) "" else
+  paste0(ifelse(is.na(p$k_status), "", paste0("\n<b>Status: ", p$k_status, "</b> (", esc(p$k_status_detail), ")")),
+         ifelse(p$k_out %in% TRUE, paste0("\n\u26A0 Listed kicker ruled out", ifelse(is.na(p$k_alt), "", paste0("; likely replacement: ", esc(p$k_alt))),
+                                          ". The projection still uses the listed kicker's skill (team, Vegas and weather terms carry over)."), ""))
+why_tip <- function(p, sy) { w <- p[[paste0("why_", sy)]]; if (is.null(w)) return(paste0(esc(p$kicker), k_badge(p)))
+  tip_span(paste0(esc(p$kicker), k_badge(p)), paste0("<b>", esc(p$kicker), " (", p$team, ") — ", SC[[sy]]$label, " ", sprintf("%.2f", p[[paste0("proj_", sy)]]),
+                                 "</b>", k_note(p), "\nWhat moves this projection vs an average kicker this week (points):\n", esc(w),
                                  "\n<i>Vegas lines excluded; each group set to this week's league average in turn.</i>")) }
 rank_cls <- function(r) ifelse(r <= 8, "top", ifelse(r >= 25, "bot", ""))
 opp_lab <- paste0(ifelse(pred$home == 1, "vs ", "@ "), pred$opp)
@@ -100,7 +108,7 @@ tip[c("ESPN proj", "Dec proj", "Avg rank", "Rank spread", "Kickoff", DLAB, DLAB_
   "Projection over time: open dot = weekly model run, filled dots = one per day the page was refreshed (last value that day). Green = up since the weekly run, red = down. Hover a dot for date and value.",
   "Forecast wind gust (mph, max over kickoff + 2 h; Open-Meteo). Display only: the model uses sustained wind.",
   "Forecast chance of rain (%, max hourly over kickoff + 2 h) and expected rain (inches, total over those 3 hours); Open-Meteo. Display only: not a model input.",
-  "Hover or tap a kicker for what moves his projection vs an average kicker this week (Vegas lines excluded). Green = top 8, red = bottom 8.")
+  "Hover or tap a kicker for what moves his projection vs an average kicker this week (Vegas lines excluded). Green = top 8, red = bottom 8. (Q) / (D) / (O) = injury status checked at each refresh (official report, Sleeper, Ourlads); \u26A0 = ruled out, hover for the likely replacement.")
 cmp <- pred %>% mutate(avg_rank = (rank_espn + rank_dec) / 2, opp_lab = opp_lab, ko_lab = kickoff(pred), wl = wind_lab) %>% arrange(avg_rank)
 oc <- match(cmp$team, pred$team)
 cmp_tbl <- cmp %>% transmute(Kicker = vapply(seq_len(nrow(cmp)), function(i) why_tip(cmp[i, ], "espn"), ""), Team = team, Opp = opp_lab, Kickoff = ko_lab, Wind = wl,

@@ -39,6 +39,17 @@ esc <- function(x) { x <- gsub("&", "&amp;", as.character(x), fixed = TRUE); x <
 why_tip <- function(team, proj, why, label) ifelse(is.na(why), esc(team), tip_span(esc(team),
   paste0("<b>", esc(team), " D/ST — ", label, " ", sprintf("%.2f", proj), "</b>\nWhat moves this projection vs an average D/ST this week (points):\n",
          esc(why), "\n<i>Vegas lines excluded; each group set to this week's league average in turn.</i>")))
+# Opp QB cell after a refresh re-checked the starters (45_dst_refresh.R + starters.R): status (O/D/Q), ↻ = changed since
+# the weekly run, ⚠ = a source disagrees or the change could not be re-scored; hover for sources and depth charts
+QB_ABBR <- c(Out = "O", Doubtful = "D", Questionable = "Q", Suspended = "SUS", IR = "IR", PUP = "PUP", NFI = "NFI")
+qb_cell <- function(pred, html) {
+  if (!"opp_qb_tip" %in% names(pred)) return(if (html) esc(pred$opp_qb_name) else pred$opp_qb_name)
+  badge <- paste0(ifelse(is.na(pred$opp_qb_status), "", paste0(" (", coalesce(unname(QB_ABBR[pred$opp_qb_status]), pred$opp_qb_status), ")")),
+                  ifelse(pred$opp_qb_changed %in% TRUE, " \u21BB", ""),
+                  ifelse(pred$opp_qb_disagree %in% TRUE | (pred$opp_qb_changed %in% TRUE & !(pred$opp_qb_rescored %in% TRUE)), " \u26A0", ""))
+  if (!html) return(paste0(pred$opp_qb_name, badge))
+  tip_span(paste0(esc(pred$opp_qb_name), badge), pred$opp_qb_tip)
+}
 et <- function(x, f) ifelse(is.na(x), NA_character_, sub(" 0", " ", format(x, f, tz = "America/New_York")))
 kickoff <- function(p) ifelse(is.na(p$ko), "", paste0(ifelse(p$locked, "\U0001F512 ", ""), et(p$ko, "%a %I:%M %p")))
 signed <- function(x, d = 1) ifelse(is.na(x) | abs(x) < 0.5 * 10^-d, "0", sprintf(paste0("%+.", d, "f"), x))
@@ -57,6 +68,7 @@ make_proj_tbl <- function(pred, html = FALSE, label = "") {       # same columns
   if ("wx_wind" %in% names(pred)) t <- t %>% mutate(Weather = wx_label(pred$indoor, pred$wx_temp, pred$wx_wind, pred$wx_gust, pred$wx_precip_prob, pred$wx_precip_in), .after = Venue)
   t <- t %>% mutate(Tier = tiers(pred$proj)$tier, .after = Rank)
   if (html && "why" %in% names(pred)) t$Team <- why_tip(pred$team, pred$proj, pred$why, label)
+  t$`Opp QB` <- qb_cell(pred, html)
   t
 }
 base <- parts[[1]]$pred %>% transmute(team, Opp = paste0(ifelse(home == 1, "vs ", "@ "), opp), `Opp QB` = opp_qb_name,
@@ -76,7 +88,8 @@ cmp <- cmp %>% mutate(`Avg rank` = round(rowMeans(across(all_of(rank_cols))), 1)
   arrange(`Avg rank`) %>% rename(Team = team)
 cmp_cls <- ifelse(seq_len(nrow(cmp)) <= 8, "top", ifelse(seq_len(nrow(cmp)) > nrow(cmp) - 8, "bot", ""))     # by average rank
 p1 <- parts[[1]]$pred[match(cmp$Team, parts[[1]]$pred$team), ]
-cmp_html <- cmp %>% mutate(Team = if ("why" %in% names(p1)) why_tip(Team, p1$proj, p1$why, parts[[1]]$SC$label) else esc(Team))
+cmp_html <- cmp %>% mutate(Team = if ("why" %in% names(p1)) why_tip(Team, p1$proj, p1$why, parts[[1]]$SC$label) else esc(Team),
+                           `Opp QB` = qb_cell(p1, TRUE))
 
 ## ---- 3. Glossary (shared) ----
 g0 <- parts[[1]]
@@ -91,6 +104,7 @@ compare_gloss <- tribble(~term, ~definition,
   "<System> tier", "tier of that system's projection (see Tier)",
   "Trend", "the projection over time: open dot = the weekly model run, filled dots = one per day the page was refreshed (that day's last value); green = up since the weekly run, red = down. Hover a dot for date and value",
   "Weather", "Open-Meteo forecast for kickoff + 2 h: temperature, sustained wind (max gust), chance of rain (max hourly) and expected rain in inches (total over the 3 hours). Display only: the D/ST model's weather inputs come from the weekly run",
+  "Opp QB", "the opponent's projected starting QB. Each refresh re-checks it: override file > Sleeper + Ourlads depth charts when both differ from the schedule > nflverse schedule QB unless ruled out > Sleeper, then Ourlads depth chart (QB1 unless Out / Doubtful / IR, else the first healthy backup). A changed starter is re-scored exactly (his career rates + the offense's rates weighted to his snaps). (O) / (D) / (Q) = injury status, \u21BB = changed since the weekly run, \u26A0 = a source disagrees; hover for the sources and depth charts. Started games keep their pre-kickoff QB",
   "Team (hover)", "hover or tap a team to see what moves its projection vs an average D/ST this week (Vegas lines excluded)",
   "Δ Opp implied", "change in the opponent's Vegas implied points since the weekly (Tuesday) model run (negative = good for this D/ST)",
   "Δ Proj", "change in the projection since the weekly (Tuesday) model run — not since the previous refresh — driven only by Vegas line moves",
@@ -99,6 +113,7 @@ compare_gloss <- tribble(~term, ~definition,
 col_gloss <- g0$col_glossary %>% mutate(definition = case_when(
   term == "Proj"   ~ "projected fantasy points for the tab's scoring system: average of elastic net + component model + ridge",
   term == "PA pts" ~ "expected points from the tab's points-allowed tiers",
+  term == "Opp QB" ~ compare_gloss$definition[compare_gloss$term == "Opp QB"],
   term == "YA pts" ~ "expected points from the yards-allowed tiers (ESPN only; 0 for Yahoo and FFPC)",
   TRUE ~ definition))
 gloss_lookup <- c(setNames(compare_gloss$definition, compare_gloss$term), setNames(col_gloss$definition, col_gloss$term),
@@ -149,7 +164,7 @@ sys_tab <- function(p) {
          sprintf("<p class='note'>Feature families in this model: %s.</p>", esc(paste(p$families, collapse = ", "))),
          "<p class='note'>Range bar: light = where the actual score lands 8 times in 10, dark = 5 times in 10, tick = projection, thin line = 0 points (axis −5 to 25). 90% CI = uncertainty of the projection itself.</p>",
          "<p class='note'>Tiers: natural breaks in the projections. A solid line = a clear drop (bigger than the model's typical ±), dashed = a softer break. Hover or tap a team for what drives its projection.</p>",
-         html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, rank_cols = "Rank", raw_cols = c("Range", "Trend", "Team"),
+         html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, rank_cols = "Rank", raw_cols = c("Range", "Trend", "Team", "Opp QB"),
                     row_cls = row_cls, cell_cls = list(Team = team_cls)),
          sprintf("<h3>Back-test: %s (trained on 2018–%d)</h3><p class='note'>The same season is used to choose features and settings, so these numbers are somewhat optimistic.</p>",
                  paste(p$cv_season, collapse = ", "), min(p$cv_season) - 1),
@@ -159,7 +174,7 @@ sys_tab <- function(p) {
 tabs <- c(list(Compare = paste0(
   "<p class='note'>One model per scoring system (same data, features and method; each tuned and feature-selected on its own 2025 back-test). ",
   "Click a column header to sort. Green = top 8 in that system (Team column: top 8 by average rank), red = bottom 8. Hover or tap a team for what drives its projection. P(top 8) = chance of actually finishing top 8 this week; see each format's tab for score ranges.</p>",
-  html_table(cmp_html, id = "t_compare", sortable = TRUE, left = if (refreshed) 4 else 3, rank_cols = rank_cols, raw_cols = "Team", cell_cls = list(Team = cmp_cls)),
+  html_table(cmp_html, id = "t_compare", sortable = TRUE, left = if (refreshed) 4 else 3, rank_cols = rank_cols, raw_cols = c("Team", "Opp QB"), cell_cls = list(Team = cmp_cls)),
   "<h3>Scoring rules</h3>", paste0(map_chr(parts, ~ sprintf("<p class='rules'><b>%s:</b> %s</p>", esc(.x$SC$label), esc(.x$SC$rules))), collapse = ""))),
   set_names(map(parts, sys_tab), map_chr(parts, ~ .x$SC$label)),
   list(Glossary = paste0(
@@ -206,6 +221,14 @@ status_line <- if (!refreshed) sprintf("model run %s", et(fit_time, "%a %b %d, %
           et(fit_time, "%a %b %d"))
 }
 if (refreshed) status_line <- paste0(status_line, sprintf(" · Δ columns = change since the weekly model run (%s)", et(parts[[1]]$refresh$model_fit, "%a %b %d")))
+if (refreshed && !is.null(parts[[1]]$refresh$qb_sources)) {
+  qs <- parts[[1]]$refresh$qb_sources
+  nm <- c(sleeper = "Sleeper", report = "injury report", ourlads = "Ourlads")
+  status_line <- paste0(status_line, sprintf(" · starting QBs checked: %s%s%s", paste(nm[qs$ok], collapse = ", "),
+                                             if (length(qs$stale)) sprintf(" (last good pull: %s)", paste(qs$stale, collapse = ", ")) else "",
+                                             if (length(qs$fail)) sprintf(" (<b>unavailable: %s</b>)", paste(nm[qs$fail], collapse = ", ")) else "",
+                                             if (!isTRUE(parts[[1]]$refresh$qb_rescore)) " — QB changes shown but not re-scored until the next weekly model run" else ""))
+}
 html <- paste0('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
   sprintf("<title>D/ST projections %d wk %d</title><style>%s</style></head><body>", SEASON, WEEK, css),
   if (refreshed) sprintf("<div class='sub'><b>D/ST</b> · <a href='%sk/'>Kickers</a> · <a href='%sarchive/'>past weeks</a></div>",
