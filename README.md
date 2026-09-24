@@ -13,6 +13,8 @@ How it works
   lines to `data/lines/line_history.csv` and publishes `site/` to GitHub Pages. Started games are locked at their
   last pre-kickoff line. Then `scripts/55_k_refresh.R` re-scores the kickers with the same lines plus Open-Meteo
   forecasts (`data/lines/weather_history.csv`; no key, no extra Odds API credits) and writes `site/k/`.
+  Both pages get tiers, forecast gusts / rain, a dotted trend line per team (`data/lines/proj_history.csv`)
+  and hover text with what drives each projection (`scripts/site_utils.R`).
 * **Run it now:** Actions tab → DST refresh → Run workflow.
 
 Files in this repo are written by the scripts in `~/ML/ff`; edit them there, not here.

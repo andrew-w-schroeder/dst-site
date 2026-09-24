@@ -14,6 +14,9 @@
 #      bootstrap 90% CI. Also keeps the weekly-run values as the "since Tuesday" baseline.
 #   4. Write re-scored report parts to work/ (the published weekly parts are never modified), run
 #      44_dst_report.R on them and copy the HTML to site/index.html (+ weekly archive).
+#   Also (site_utils.R): Open-Meteo forecasts incl. gusts / rain for this week's outdoor games (display only for
+#   D/ST; logged to data/lines/weather_history.csv and reused by the kicker refresh), the projection history
+#   behind the trend sparklines (data/lines/proj_history.csv) and the per-team "drivers" hover text.
 #
 # Usage:  Rscript scripts/45_dst_refresh.R            (newest bundle week)
 #         ODDS_JSON_FILE=odds.json Rscript …          (test with a saved API response, no credits used)
@@ -29,6 +32,8 @@ WORK_DIR <- file.path(PROJ_DIR, "work")               # re-scored report parts +
 SYSTEMS  <- c("espn", "yahoo", "ffpc")
 NOW      <- as.POSIXct(Sys.getenv("REFRESH_NOW", format(Sys.time(), tz = "UTC")), tz = "UTC")   # REFRESH_NOW for testing
 source(file.path(PROJ_DIR, "scripts/dst_blend_utils.R"))
+source(file.path(PROJ_DIR, "scripts/site_utils.R"))
+WX_CSV <- file.path(PROJ_DIR, "data/lines/weather_history.csv"); PH_CSV <- file.path(PROJ_DIR, "data/lines/proj_history.csv")
 
 ## ---- 1. Which week? newest bundle across systems ----
 bf <- list.files(file.path(DST_DIR, SYSTEMS), pattern = "^bundle_\\d{4}_wk\\d{2}\\.rds$", full.names = TRUE)
@@ -111,6 +116,10 @@ lines <- games %>% left_join(latest, by = "game_id") %>%
   mutate(locked = !is.na(ko) & NOW >= ko, src = ifelse(is.na(home_spread), "weekly run", "sportsbooks"))
 message(sprintf("lines: %d games · %d from sportsbooks · %d locked", nrow(lines), sum(lines$src == "sportsbooks"), sum(lines$locked)))
 
+## ---- 3b. Weather forecasts (display only for D/ST; shared with the kicker refresh) ----
+wk_games <- tryCatch(week_games(SEASON, WEEK), error = function(e) NULL)
+wx <- tryCatch(wx_latest(wx_update(WX_CSV, wk_games, NOW)), error = function(e) { message("weather: ", conditionMessage(e)); wx_latest(read_wx_hist(WX_CSV)) })
+
 ## ---- 4. Re-score each system ----
 apply_lines <- function(te, lines) {
   l <- bind_rows(lines %>% transmute(game_id, team = home, sp = home_spread, tot = total),
@@ -130,6 +139,7 @@ score <- function(b, te) {
 }
 dyn_cols <- c("spread", "total_line", "implied_opp", "enet", "ridge", "components", "proj", "e_sacks", "e_to", "e_pa", "e_ya", "p_td",
               "q10", "q25", "q75", "q90", "p_boom", "p_bust", "p_top8", "proj_se", "ci_lo", "ci_hi")
+out_parts <- list()
 for (s in names(bundles)) {
   b <- bundles[[s]]
   pf <- file.path(DST_DIR, s, sprintf("report_parts_%d_wk%02d.rds", SEASON, WEEK))
@@ -137,17 +147,32 @@ for (s in names(bundles)) {
   parts <- readRDS(pf)
   base <- score(b, b$te) %>% transmute(team, spread_base = spread, total_base = total_line, implied_opp_base = implied_opp, proj_base = proj,
               rank_base = rank(-proj, ties.method = "first"))
-  now  <- score(b, apply_lines(b$te, lines))
+  te_now <- apply_lines(b$te, lines)
+  now  <- score(b, te_now)
+  # what drives each team's projection (vs an average team this week, Vegas excluded)
+  dr <- drivers(te_now, function(t) blend_pred(b$main, t, b$SC, b$specs, b$final_models), dst_groups(setdiff(names(b$te), c("game_id", "team", "opp", "gameday"))))
+  now$why <- dr$text[match(now$team, te_now$team)]
   info <- bind_rows(lines %>% transmute(team = home, ko, line_time, n_books, locked, src), lines %>% transmute(team = away, ko, line_time, n_books, locked, src))
   parts$pred <- parts$pred %>% select(-any_of(c(dyn_cols, names(base)[-1], names(info)[-1], "rank"))) %>%
     left_join(now, by = "team") %>% left_join(base, by = "team") %>% left_join(info, by = "team") %>%
+    left_join(wx %>% select(game_id, wx_temp = temp, wx_wind = wind, wx_gust = gust, wx_precip_prob = precip_prob, wx_precip_in = precip_in), by = "game_id") %>%
     arrange(desc(proj)) %>% mutate(rank = row_number(), .before = 1)
   parts$refresh <- list(time = NOW, n_priced = sum(lines$src == "sportsbooks"), n_locked = sum(lines$locked),
                         books = if (any(!is.na(lines$n_books))) median(lines$n_books, na.rm = TRUE) else NA, model_fit = b$created)
   dir.create(file.path(WORK_DIR, "output/dst", s), recursive = TRUE, showWarnings = FALSE)
-  saveRDS(parts, file.path(WORK_DIR, "output/dst", s, basename(pf)))       # the published weekly parts stay untouched
+  out_parts[[s]] <- list(parts = parts, file = file.path(WORK_DIR, "output/dst", s, basename(pf)), fit = b$created)
   message(sprintf("%s: re-scored · biggest move %s", b$SC$label,
                   with(parts$pred[which.max(abs(parts$pred$proj - parts$pred$proj_base)), ], sprintf("%s %+.2f", team, proj - proj_base))))
+}
+
+## ---- 4b. Projection history → dotted trend line per team (weekly run + one point per refresh day) ----
+ph <- ph_update(PH_CSV, "dst", SEASON, WEEK, fit_time = out_parts[[1]]$fit,
+                base = bind_rows(imap(out_parts, ~ tibble(system = .y, team = .x$parts$pred$team, proj = .x$parts$pred$proj_base))),
+                cur  = bind_rows(imap(out_parts, ~ tibble(system = .y, team = .x$parts$pred$team, proj = .x$parts$pred$proj))), now = NOW)
+for (s in names(out_parts)) {
+  p <- out_parts[[s]]$parts
+  p$pred$trend_svg <- map_chr(p$pred$team, ~ sparkline(trend_points(ph[ph$system == s & ph$team == .x, ])))
+  saveRDS(p, out_parts[[s]]$file)                                          # the published weekly parts stay untouched
 }
 
 ## ---- 5. Report + site ----

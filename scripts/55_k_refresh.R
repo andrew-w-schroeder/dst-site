@@ -26,6 +26,8 @@ SITE_DIR <- file.path(PROJ_DIR, "site")
 WORK_DIR <- file.path(PROJ_DIR, "work")
 SITE_BASE <- Sys.getenv("SITE_BASE", "/dst-site/")        # GitHub Pages project path (for the D/ST ↔ kicker links)
 source(file.path(PROJ_DIR, "scripts/k_blend_utils.R"))
+source(file.path(PROJ_DIR, "scripts/site_utils.R"))
+PH_CSV <- file.path(PROJ_DIR, "data/lines/proj_history.csv")
 utc <- function(x) as.POSIXct(sub("Z$", "", x), format = "%Y-%m-%dT%H:%M:%S", tz = "UTC")
 NOW <- if (nzchar(Sys.getenv("REFRESH_NOW"))) utc(Sys.getenv("REFRESH_NOW")) else as.POSIXct(format(Sys.time(), tz = "UTC"), tz = "UTC")
 
@@ -64,29 +66,11 @@ if (nrow(hist)) {
 lines <- games %>% left_join(latest, by = "game_id") %>% mutate(ko = coalesce(ko, ko_sched), locked = NOW >= ko, src = ifelse(is.na(home_spread), "weekly run", "sportsbooks"))
 message(sprintf("kickers: lines %d games · %d from sportsbooks · %d started", nrow(lines), sum(lines$src == "sportsbooks"), sum(lines$locked)))
 
-## ---- 3. Weather forecasts (Open-Meteo), outdoor / retractable venues not yet started ----
-wx_hist <- if (file.exists(WX_CSV)) read.csv(WX_CSV, stringsAsFactors = FALSE) %>% as_tibble() else
-  tibble(pulled_at = character(), game_id = character(), kickoff = character(), temp = numeric(), wind = numeric())
-todo <- lines %>% filter(indoor == 0, !locked) %>% inner_join(B$stadiums, by = "stadium_id")
-new_wx <- if (nzchar(Sys.getenv("NO_WEATHER")) || !nrow(todo)) NULL else map_dfr(seq_len(nrow(todo)), function(i) {
-  g <- todo[i, ]; d <- format(g$ko, "%Y-%m-%d", tz = "America/New_York")
-  url <- sprintf(paste0("https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&hourly=temperature_2m,wind_speed_10m",
-                        "&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=America%%2FNew_York&start_date=%s&end_date=%s"), g$lat, g$lon, d, d)
-  js <- tryCatch(jsonlite::fromJSON(url), error = function(e) NULL)
-  if (is.null(js)) return(NULL)
-  hr <- as.integer(format(g$ko, "%H", tz = "America/New_York"))
-  idx <- which(as.integer(substr(js$hourly$time, 12, 13)) %in% hr:(hr + 2))
-  if (!length(idx)) return(NULL)
-  tibble(pulled_at = format(NOW, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"), game_id = g$game_id, kickoff = format(g$ko, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
-         temp = round(mean(js$hourly$temperature_2m[idx])), wind = round(mean(js$hourly$wind_speed_10m[idx])))
-})
-if (!is.null(new_wx) && nrow(new_wx)) {
-  wx_hist <- bind_rows(wx_hist, new_wx); dir.create(dirname(WX_CSV), recursive = TRUE, showWarnings = FALSE)
-  write.csv(wx_hist, WX_CSV, row.names = FALSE); message("kickers: weather forecasts for ", nrow(new_wx), " games")
-} else if (nrow(todo)) message("kickers: no new weather forecasts (fetch failed or skipped) — using stored / weekly values")
-wx_use <- if (nrow(wx_hist)) wx_hist %>% mutate(t = utc(pulled_at), ko = utc(kickoff)) %>% filter(t < ko, game_id %in% games$game_id) %>%
-  group_by(game_id) %>% slice_max(t, n = 1, with_ties = FALSE) %>% ungroup() %>% select(game_id, temp_new = temp, wind_new = wind) else
-  tibble(game_id = character(), temp_new = numeric(), wind_new = numeric())
+## ---- 3. Weather forecasts (site_utils.R; the D/ST refresh usually fetched them minutes ago → reused) ----
+wk_games <- tryCatch(week_games(SEASON, WEEK), error = function(e) NULL)
+wx_hist <- tryCatch(wx_update(WX_CSV, wk_games, NOW), error = function(e) { message("kickers: weather ", conditionMessage(e)); read_wx_hist(WX_CSV) })
+wx_all <- wx_latest(wx_hist) %>% filter(game_id %in% games$game_id)
+wx_use <- wx_all %>% select(game_id, temp_new = temp, wind_new = wind)
 
 ## ---- 4. Re-score ----
 l2 <- bind_rows(lines %>% transmute(game_id, team = home_team, sp = home_spread, tot = total),
@@ -97,18 +81,28 @@ te_now <- B$te %>% left_join(l2, by = c("game_id", "team")) %>% left_join(wx_use
          temp = coalesce(temp_new, temp), wind = coalesce(wind_new, wind)) %>%
   select(-sp, -tot, -temp_new, -wind_new) %>% derive_vegas() %>% derive_env()
 base <- score_bundle(B, B$te); now <- score_bundle(B, te_now)
+# what drives each kicker's projection vs an average kicker this week (Vegas + league-level terms excluded)
+grp <- k_groups(setdiff(names(te_now), c("game_id", "team", "opp", "gameday", "gametime", "stadium_id", "k_long_share_raw", "wind", "wind_known")))
+for (sy in names(B$SCORING)) now[[paste0("why_", sy)]] <- drivers(te_now, function(t) blend_score(B, t, sy), grp)$text
 dyn <- setdiff(names(now), c("game_id", "team"))
 base_cols <- base %>% select(team, starts_with("proj_")) %>% rename_with(~ sub("^proj_", "proj_base_", .x), starts_with("proj_"))
 info <- bind_rows(lines %>% transmute(team = home_team, ko, locked, src), lines %>% transmute(team = away_team, ko, locked, src))
 P$pred <- P$pred %>% select(-any_of(c(dyn, "spread", "total_line", "implied_own", "implied_opp", "wind", "temp", "wind_known", "ko", "locked", "src",
-                                      names(base_cols)[-1], "implied_own_base"))) %>%
+                                      names(base_cols)[-1], "implied_own_base", "wx_gust", "wx_precip_prob", "wx_precip_in"))) %>%
   left_join(now %>% select(-game_id), by = "team") %>%
   left_join(te_now %>% select(team, spread, total_line, implied_own, implied_opp, wind, temp, wind_known), by = "team") %>%
   left_join(base_cols, by = "team") %>% left_join(B$te %>% transmute(team, implied_own_base = (total_line + spread) / 2), by = "team") %>%
-  left_join(info, by = "team")
+  left_join(info, by = "team") %>%
+  left_join(wx_all %>% select(game_id, wx_gust = gust, wx_precip_prob = precip_prob, wx_precip_in = precip_in), by = "game_id")
+# projection history → dotted trend line (weekly run + one point per refresh day)
+ph <- ph_update(PH_CSV, "k", SEASON, WEEK, fit_time = B$created,
+                base = bind_rows(map(names(B$SCORING), ~ tibble(system = .x, team = P$pred$team, proj = P$pred[[paste0("proj_base_", .x)]]))),
+                cur  = bind_rows(map(names(B$SCORING), ~ tibble(system = .x, team = P$pred$team, proj = P$pred[[paste0("proj_", .x)]]))), now = NOW)
+for (sy in names(B$SCORING)) P$pred[[paste0("trend_svg_", sy)]] <- map_chr(P$pred$team, ~ sparkline(trend_points(ph[ph$system == sy & ph$team == .x, ])))
 P$refresh <- list(time = NOW, n_priced = sum(lines$src == "sportsbooks"), n_locked = sum(lines$locked), n_games = nrow(lines),
                   books = if (any(!is.na(lines$n_books))) median(lines$n_books, na.rm = TRUE) else NA,
-                  weather = if (nrow(wx_use)) sprintf("Open-Meteo forecasts for %d outdoor games", nrow(wx_use)) else "weekly-run values")
+                  weather = if (nrow(wx_use)) sprintf("Open-Meteo forecasts for %d outdoor games", nrow(wx_use)) else "weekly-run values",
+                  model_fit = B$created)
 P$nav <- sprintf("<p class='s'><a href='%s'>D/ST projections</a> · <b>Kickers</b> · <a href='%sk/archive/'>past weeks</a></p>", SITE_BASE, SITE_BASE)
 mv <- P$pred[which.max(abs(P$pred$proj_espn - P$pred$proj_base_espn)), ]
 message(sprintf("kickers: re-scored · biggest ESPN move %s %+.2f", mv$team, mv$proj_espn - mv$proj_base_espn))
