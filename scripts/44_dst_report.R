@@ -167,8 +167,9 @@ sys_tab <- function(p) {
          "<p class='note'>Tiers: natural breaks in the projections. A solid line = a clear drop (bigger than the model's typical ±), dashed = a softer break. Hover or tap a team for what drives its projection.</p>",
          html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, rank_cols = "Rank", raw_cols = c("Range", "Trend", "Team", "Opp QB"),
                     row_cls = row_cls, cell_cls = list(Team = team_cls)),
-         if (is.null(p$holdout)) sprintf("<h3>Back-test: %s (trained on 2018–%d)</h3><p class='note'>The same season is used to choose features and settings, so these numbers are somewhat optimistic.</p>",
-                                         paste(p$cv_season, collapse = ", "), min(p$cv_season) - 1) else
+         if (is.null(p$holdout)) sprintf("<h3>Back-test: %s</h3><p class='note'>Each season predicted by models trained only on earlier seasons (from 2018). Every tuning, feature and blend choice maximizes the weekly top-8 edge over Vegas-only on these seasons, so these numbers are optimistic. %s %d is the clean test.</p>",
+                                         paste(unique(range(p$cv_season)), collapse = "–"), esc(if (is.null(p$validation_note) || is.na(p$validation_note)) "" else p$validation_note),
+                                         SEASON) else
            sprintf("<h3>Back-test: selection %s · clean hold-out %d</h3><p class='note'>Each season is predicted by models trained only on earlier seasons (from 2018). Every tuning and feature choice was made on %s. hold_* columns = %d: never used for any choice, scored once with the frozen configuration (trained 2018–%d).</p>",
                    paste(range(p$cv_season), collapse = "–"), p$holdout, paste(range(p$cv_season), collapse = "–"), p$holdout, p$holdout - 1),
          html_table(cvt, left = 1),
