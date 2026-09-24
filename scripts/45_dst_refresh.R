@@ -50,14 +50,23 @@ TEAM_ABBR <- c(
   "Seattle Seahawks" = "SEA", "Tampa Bay Buccaneers" = "TB", "Tennessee Titans" = "TEN", "Washington Commanders" = "WAS")
 
 fetch_odds <- function() {
-  f <- Sys.getenv("ODDS_JSON_FILE"); key <- Sys.getenv("ODDS_API_KEY")
+  f <- Sys.getenv("ODDS_JSON_FILE")
+  key <- gsub("[[:space:]\"']", "", Sys.getenv("ODDS_API_KEY"))     # strip stray spaces / line breaks / quotes from the pasted secret
   if (nzchar(f)) { message("odds: reading ", f); return(jsonlite::fromJSON(f, simplifyVector = FALSE)) }
   if (!nzchar(key)) { message("odds: ODDS_API_KEY not set — using stored lines only"); return(NULL) }
+  redact <- function(x) gsub(key, "<key>", x, fixed = TRUE)                  # never print the key
+  message(sprintf("odds: key found (%d characters)", nchar(key)))
   url <- paste0("https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds/?regions=us&markets=spreads,totals",
-                "&oddsFormat=american&dateFormat=iso&apiKey=", key)
-  r <- tryCatch(curl::curl_fetch_memory(url), error = function(e) NULL)          # never print `url`: it holds the key
-  if (is.null(r) || r$status_code != 200) {
-    warning("odds: request failed (HTTP ", if (is.null(r)) "no response" else r$status_code, ") — using stored lines only"); return(NULL) }
+                "&oddsFormat=american&dateFormat=iso&apiKey=", utils::URLencode(key, reserved = TRUE))
+  r <- NULL
+  for (k in 1:3) {                                                           # retry transient network errors
+    r <- tryCatch(curl::curl_fetch_memory(url), error = function(e) { message("odds: attempt ", k, " error: ", redact(conditionMessage(e))); NULL })
+    if (!is.null(r)) break; Sys.sleep(5 * k)
+  }
+  if (is.null(r)) { warning("odds: no response from The Odds API — using stored lines only"); return(NULL) }
+  if (r$status_code != 200) {
+    warning(sprintf("odds: HTTP %d from The Odds API: %s — using stored lines only", r$status_code,
+                    redact(substr(rawToChar(r$content), 1, 300)))); return(NULL) }
   h <- curl::parse_headers_list(r$headers)
   message(sprintf("odds: OK · credits used this call %s · remaining this month %s", h[["x-requests-last"]], h[["x-requests-remaining"]]))
   jsonlite::fromJSON(rawToChar(r$content), simplifyVector = FALSE)
