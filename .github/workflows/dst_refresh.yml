@@ -13,7 +13,7 @@ on:
     - cron: "35 16 * * 0"    # Sun 16:35 UTC = 12:35 pm EDT / 11:35 am EST, last look before 1 pm kickoffs
   push:                      # a new weekly model was published from RStudio
     branches: [main]
-    paths: ["output/dst/**"]
+    paths: ["output/dst/**", "output/k/**"]
   workflow_dispatch:         # "Run workflow" button on the Actions tab
 
 permissions:
@@ -47,6 +47,13 @@ jobs:
           FF_PROJ_DIR: ${{ github.workspace }}
           LANG: C.UTF-8
         run: Rscript scripts/45_dst_refresh.R
+
+      - name: Re-score kickers (same lines + weather forecasts)
+        continue-on-error: true   # a kicker problem never blocks the D/ST page
+        env:
+          FF_PROJ_DIR: ${{ github.workspace }}
+          LANG: C.UTF-8
+        run: Rscript scripts/55_k_refresh.R
 
       - name: Save line history and archive
         run: |

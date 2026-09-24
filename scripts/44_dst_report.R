@@ -171,6 +171,8 @@ status_line <- if (!refreshed) sprintf("model run %s", et(fit_time, "%a %b %d, %
 }
 html <- paste0('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
   sprintf("<title>D/ST projections %d wk %d</title><style>%s</style></head><body>", SEASON, WEEK, css),
+  if (refreshed) sprintf("<div class='sub'><b>D/ST</b> · <a href='%sk/'>Kickers</a> · <a href='%sarchive/'>past weeks</a></div>",
+                         Sys.getenv("SITE_BASE", "/dst-site/"), Sys.getenv("SITE_BASE", "/dst-site/")) else "",
   sprintf("<h1>D/ST projections — %d week %d</h1><div class='sub'>%s · %s · hover a column header (<sup>?</sup>) for its definition</div>",
           SEASON, WEEK, paste(map_chr(parts, ~ .x$SC$label), collapse = " · "), status_line),
   "<div class='tabs'>", paste0(sprintf('<button data-t="%s" onclick="show(\'%s\')">%s</button>', ids, ids, esc(names(tabs))), collapse = ""), "</div>",
