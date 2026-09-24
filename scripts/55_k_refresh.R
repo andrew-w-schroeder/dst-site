@@ -31,7 +31,15 @@ NOW <- if (nzchar(Sys.getenv("REFRESH_NOW"))) utc(Sys.getenv("REFRESH_NOW")) els
 
 ## ---- 1. Newest bundle ----
 bf <- list.files(K_DIR, pattern = "^bundle_\\d{4}_wk\\d{2}\\.rds$")
-if (!length(bf)) { message("no kicker bundle under ", K_DIR, ": nothing to do"); quit(save = "no") }
+if (!length(bf)) {                                  # no kicker model published yet: placeholder page instead of a 404
+  dir.create(file.path(SITE_DIR, "k"), recursive = TRUE, showWarnings = FALSE)
+  if (!file.exists(file.path(SITE_DIR, "k", "index.html")))
+    writeLines(c('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kicker projections</title>',
+                 '<style>body{font-family:system-ui,sans-serif;max-width:700px;margin:2rem auto;padding:0 16px}</style></head><body>',
+                 '<h1>Kicker projections</h1><p>Not published yet: run 50_k_model.R and 46_dst_publish.R (or 43_dst_run_all.R).</p>',
+                 sprintf('<p><a href="%s">D/ST projections</a></p></body></html>', SITE_BASE)), file.path(SITE_DIR, "k", "index.html"))
+  message("no kicker bundle under ", K_DIR, ": placeholder page only"); quit(save = "no")
+}
 key <- max(sub("bundle_(\\d{4})_wk(\\d{2}).*", "\\1\\2", bf)); SEASON <- as.integer(substr(key, 1, 4)); WEEK <- as.integer(substr(key, 5, 6))
 B <- readRDS(file.path(K_DIR, sprintf("bundle_%d_wk%02d.rds", SEASON, WEEK)))
 parts_file <- file.path(K_DIR, sprintf("report_parts_%d_wk%02d.rds", SEASON, WEEK))

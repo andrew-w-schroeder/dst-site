@@ -158,7 +158,7 @@ if (!identical(as.integer(st), 0L)) stop("44_dst_report.R failed")
 html <- file.path(WORK_DIR, "output/dst", sprintf("dst_proj_%d_wk%02d_all.html", SEASON, WEEK))
 dir.create(file.path(SITE_DIR, "archive"), recursive = TRUE, showWarnings = FALSE)
 invisible(file.copy(html, file.path(SITE_DIR, c("index.html", file.path("archive", basename(html)))), overwrite = TRUE))
-arch <- sort(list.files(file.path(SITE_DIR, "archive"), pattern = "\\.html$"), decreasing = TRUE)
+arch <- sort(list.files(file.path(SITE_DIR, "archive"), pattern = "^dst_proj_.*\\.html$"), decreasing = TRUE)   # not the archive index itself
 writeLines(c('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>D/ST archive</title>',
              '<style>body{font-family:system-ui,sans-serif;max-width:700px;margin:2rem auto;padding:0 16px}</style></head><body><h1>Past weeks</h1><ul>',
              sprintf('<li><a href="%s">%s</a></li>', arch, sub("dst_proj_(\\d{4})_wk(\\d{2})_all\\.html", "\\1 week \\2", arch)),
