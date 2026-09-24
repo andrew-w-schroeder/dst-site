@@ -159,20 +159,23 @@ sys_tab <- function(p) {
   row_cls <- trimws(paste(ifelse(tt %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tt] %in% TRUE, "tb-clear", "tb-soft"), "")))
   team_cls <- ifelse(p$pred$rank <= 8, "top", ifelse(p$pred$rank >= 25, "bot", ""))
   if (all(c("q10", "q90") %in% names(p$pred))) pt <- pt %>% mutate(Range = pmap_chr(p$pred[c("proj", "q10", "q25", "q75", "q90", "ci_lo", "ci_hi")], range_bar), .after = all_of(ac))
-  cvt <- p$cv_tbl %>% select(any_of(c("model", "rmse", "mae", "spearman", "top8_avg", "bot8_avg", "edge_top8", "vs_vegas_top8", "t_stat", "what")))
+  cvt <- p$cv_tbl %>% select(any_of(c("model", "rmse", "mae", "spearman", "top8_avg", "bot8_avg", "edge_top8", "vs_vegas_top8", "t_stat",
+                                      "hold_rmse", "hold_spearman", "hold_top8", "hold_vs_vegas_top8", "hold_t", "what")))
   paste0(sprintf("<p class='rules'><b>%s scoring:</b> %s</p>", esc(p$SC$label), esc(p$SC$rules)),
          sprintf("<p class='note'>Feature families in this model: %s.</p>", esc(paste(p$families, collapse = ", "))),
          "<p class='note'>Range bar: light = where the actual score lands 8 times in 10, dark = 5 times in 10, tick = projection, thin line = 0 points (axis −5 to 25). 90% CI = uncertainty of the projection itself.</p>",
          "<p class='note'>Tiers: natural breaks in the projections. A solid line = a clear drop (bigger than the model's typical ±), dashed = a softer break. Hover or tap a team for what drives its projection.</p>",
          html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, rank_cols = "Rank", raw_cols = c("Range", "Trend", "Team", "Opp QB"),
                     row_cls = row_cls, cell_cls = list(Team = team_cls)),
-         sprintf("<h3>Back-test: %s (trained on 2018–%d)</h3><p class='note'>The same season is used to choose features and settings, so these numbers are somewhat optimistic.</p>",
-                 paste(p$cv_season, collapse = ", "), min(p$cv_season) - 1),
+         if (is.null(p$holdout)) sprintf("<h3>Back-test: %s (trained on 2018–%d)</h3><p class='note'>The same season is used to choose features and settings, so these numbers are somewhat optimistic.</p>",
+                                         paste(p$cv_season, collapse = ", "), min(p$cv_season) - 1) else
+           sprintf("<h3>Back-test: selection %s · clean hold-out %d</h3><p class='note'>Each season is predicted by models trained only on earlier seasons (from 2018). Every tuning and feature choice was made on %s. hold_* columns = %d: never used for any choice, scored once with the frozen configuration (trained 2018–%d).</p>",
+                   paste(range(p$cv_season), collapse = "–"), p$holdout, paste(range(p$cv_season), collapse = "–"), p$holdout, p$holdout - 1),
          html_table(cvt, left = 1),
          "<h3>Top 25 GBM features</h3>", html_table(p$imp_tbl %>% select(feature, rel_inf, meaning), left = 1))
 }
 tabs <- c(list(Compare = paste0(
-  "<p class='note'>One model per scoring system (same data, features and method; each tuned and feature-selected on its own 2025 back-test). ",
+  "<p class='note'>One model per scoring system (same data, features and method; each tuned and feature-selected on its own 2023–24 back-test; 2025 = clean hold-out). ",
   "Click a column header to sort. Green = top 8 in that system (Team column: top 8 by average rank), red = bottom 8. Hover or tap a team for what drives its projection. P(top 8) = chance of actually finishing top 8 this week; see each format's tab for score ranges.</p>",
   html_table(cmp_html, id = "t_compare", sortable = TRUE, left = if (refreshed) 4 else 3, rank_cols = rank_cols, raw_cols = c("Team", "Opp QB"), cell_cls = list(Team = cmp_cls)),
   "<h3>Scoring rules</h3>", paste0(map_chr(parts, ~ sprintf("<p class='rules'><b>%s:</b> %s</p>", esc(.x$SC$label), esc(.x$SC$rules))), collapse = ""))),
