@@ -1,0 +1,66 @@
+# Re-scores this week's D/ST projections with the latest sportsbook lines and publishes the page.
+# Times are UTC (GitHub cron has no time zones). EDT = UTC-4 until Nov 1 2026, then EST = UTC-5.
+# GitHub may start a scheduled run 5-30 min late; games that have kicked off are locked at their
+# last pre-kickoff line, so a late run never uses in-game odds.
+name: DST refresh
+
+on:
+  schedule:
+    - cron: "0 14 * * 2-6"   # Tue-Sat 14:00 UTC = 10:00 am EDT / 9:00 am EST
+    - cron: "30 22 * * 4"    # Thu 22:30 UTC = 6:30 pm EDT, before Thursday Night Football
+    - cron: "0 13 * * 0"     # Sun 13:00 UTC = 9:00 am EDT (before London games)
+    - cron: "45 15 * * 0"    # Sun 15:45 UTC = 11:45 am EDT, after inactives
+    - cron: "35 16 * * 0"    # Sun 16:35 UTC = 12:35 pm EDT / 11:35 am EST, last look before 1 pm kickoffs
+  push:                      # a new weekly model was published from RStudio
+    branches: [main]
+    paths: ["output/dst/**"]
+  workflow_dispatch:         # "Run workflow" button on the Actions tab
+
+permissions:
+  contents: write            # commit line history + archive
+  pages: write               # publish the site
+  id-token: write
+
+concurrency:
+  group: dst-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true   # prebuilt Linux binaries: packages install in seconds
+
+      - name: Install R packages
+        run: Rscript -e 'install.packages(c("dplyr", "tidyr", "purrr", "stringr", "tibble", "jsonlite", "curl"))'
+
+      - name: Re-score with the latest lines
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          FF_PROJ_DIR: ${{ github.workspace }}
+          LANG: C.UTF-8
+        run: Rscript scripts/45_dst_refresh.R
+
+      - name: Save line history and archive
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/lines site
+          if ! git diff --cached --quiet; then
+            git commit -m "Line refresh $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git pull --rebase origin main && git push origin HEAD:main
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

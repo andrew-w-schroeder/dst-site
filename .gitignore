@@ -1,0 +1,11 @@
+.Rhistory
+.RData
+.Rproj.user/
+*.log
+# never publish credentials or raw data
+*token*
+*.env
+.Renviron
+work/
+data/nflpro/
+data/dst/
