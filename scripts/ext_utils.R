@@ -17,8 +17,9 @@ ext_get <- function(url, headers = NULL, tries = 2) {
   for (k in seq_len(tries)) {
     h <- curl::new_handle(timeout = 45, useragent = "Mozilla/5.0 (personal projections track record)")
     if (length(headers)) curl::handle_setheaders(h, .list = headers)
-    r <- tryCatch(curl::curl_fetch_memory(url, handle = h), error = function(e) NULL)
+    r <- tryCatch(curl::curl_fetch_memory(url, handle = h), error = function(e) { message("  ", sub("\\?.*", "", url), ": ", conditionMessage(e)); NULL })
     if (!is.null(r) && r$status_code == 200) { txt <- rawToChar(r$content); Encoding(txt) <- "UTF-8"; return(txt) }
+    if (!is.null(r)) message(sprintf("  %s: HTTP %d %s", sub("\\?.*", "", url), r$status_code, substr(rawToChar(r$content), 1, 200)))
     if (!is.null(r) && r$status_code >= 400 && r$status_code < 500) return(NULL)
     Sys.sleep(2 * k)
   }
@@ -58,25 +59,34 @@ ESPN_TEAM_ID <- c(`1` = "ATL", `2` = "BUF", `3` = "CHI", `4` = "CIN", `5` = "CLE
                   `33` = "BAL", `34` = "HOU")
 # ESPN → one row per player: pos, team, ESPN-standard projected points (stat ids: 74/77/80 FG made 50+/40–49/<40, 201 = 60+, 85 missed, 86 PAT)
 ext_espn <- function(season, week) {
-  flt <- list(filterSlotIds = list(value = c(16L, 17L)), filterStatsForSourceIds = list(value = c(1L)),
+  # Same request as the 2025 pull that worked (60_ext_proj_pull.R): first ask for this week's projection split
+  # explicitly (needed for past weeks), then the plain request. I(1L) keeps the split filter a JSON array.
+  flt <- list(filterSlotIds = list(value = c(16L, 17L)), filterStatsForSourceIds = list(value = c(0L, 1L)),
               filterStatsForSplitTypeIds = list(value = I(1L)), limit = 400L, sortPercOwned = list(sortPriority = 1L, sortAsc = FALSE))
-  hdr <- c(`X-Fantasy-Filter` = as.character(jsonlite::toJSON(list(players = flt), auto_unbox = TRUE)), Accept = "application/json")
-  txt <- ext_get(sprintf("https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/%d/segments/0/leaguedefaults/3?scoringPeriodId=%d&view=kona_player_info", season, week), hdr)
-  if (is.null(txt)) return(NULL)
-  js <- jsonlite::fromJSON(txt, simplifyVector = FALSE)
-  purrr::map_dfr(js$players, function(pe) {
-    p <- if (!is.null(pe$player)) pe$player else pe; slot <- .num(p$defaultPositionId)
-    pos <- if (identical(slot, 16)) "DEF" else if (identical(slot, 5)) "K" else return(NULL)
-    for (s in p$stats) if (identical(.num(s$seasonId), as.numeric(season)) && identical(.num(s$scoringPeriodId), as.numeric(week)) &&
-                           identical(.num(s$statSourceId), 1) && identical(.num(s$statSplitTypeId), 1)) {
-      tm <- unname(ESPN_TEAM_ID[as.character(.num(s$proTeamId))]); if (is.na(tm)) tm <- unname(ESPN_TEAM_ID[as.character(.num(p$proTeamId))])
-      g <- function(k) .num(s$stats[[k]])
-      pts <- if (pos == "K" && !all(is.na(c(g("80"), g("77"), g("74"))))) 3 * .z0(g("80")) + 4 * .z0(g("77")) + 5 * (.z0(g("74")) - .z0(g("201"))) +
-        6 * .z0(g("201")) - .z0(g("85")) + .z0(g("86")) else .num(s$appliedTotal)
-      return(tibble::tibble(source = "ESPN", pos = pos, team = tm, pts = pts))
-    }
-    NULL
-  })
+  url <- sprintf("https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/%d/segments/0/leaguedefaults/3?scoringPeriodId=%d&view=kona_player_info", season, week)
+  for (variant in 1:2) {
+    f <- if (variant == 1) c(flt, list(filterStatsForTopScoringPeriodIds = list(value = 25L,
+                                         additionalValue = list(sprintf("11%d%d", season, week), sprintf("01%d%d", season, week))))) else flt
+    hdr <- c(`X-Fantasy-Filter` = as.character(jsonlite::toJSON(list(players = f), auto_unbox = TRUE)), Accept = "application/json")
+    txt <- ext_get(url, hdr); if (is.null(txt)) next
+    js <- tryCatch(jsonlite::fromJSON(txt, simplifyVector = FALSE), error = function(e) NULL); if (is.null(js)) next
+    x <- purrr::map_dfr(js$players, function(pe) {
+      p <- if (!is.null(pe$player)) pe$player else pe; slot <- .num(p$defaultPositionId)
+      pos <- if (identical(slot, 16)) "DEF" else if (identical(slot, 5)) "K" else return(NULL)
+      for (s in p$stats) if (identical(.num(s$seasonId), as.numeric(season)) && identical(.num(s$scoringPeriodId), as.numeric(week)) &&
+                             identical(.num(s$statSourceId), 1) && identical(.num(s$statSplitTypeId), 1)) {
+        tm <- unname(ESPN_TEAM_ID[as.character(.num(s$proTeamId))]); if (is.na(tm)) tm <- unname(ESPN_TEAM_ID[as.character(.num(p$proTeamId))])
+        g <- function(k) .num(s$stats[[k]])
+        pts <- if (pos == "K" && !all(is.na(c(g("80"), g("77"), g("74"))))) 3 * .z0(g("80")) + 4 * .z0(g("77")) + 5 * (.z0(g("74")) - .z0(g("201"))) +
+          6 * .z0(g("201")) - .z0(g("85")) + .z0(g("86")) else .num(s$appliedTotal)
+        return(tibble::tibble(source = "ESPN", pos = pos, team = tm, pts = pts))
+      }
+      NULL
+    })
+    if (nrow(x)) return(x)
+    message(sprintf("  ESPN week %d (request %d): %d players returned but no week-%d projections in them", week, variant, length(js$players), week))
+  }
+  NULL
 }
 # both sources → rank per source × position (a team's top-projected kicker = that source's kicker; 1 = best)
 ext_ranks <- function(season, week, sources = c("Sleeper", "ESPN")) {
