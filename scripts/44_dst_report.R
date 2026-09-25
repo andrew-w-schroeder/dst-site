@@ -68,7 +68,8 @@ make_proj_tbl <- function(pred, html = FALSE, label = "") {       # same columns
     mutate(Kickoff = kickoff(pred), .after = Opp)
   if (html && "trend_svg" %in% names(pred)) t <- t %>% mutate(Trend = pred$trend_svg, .after = all_of(DLAB))
   if ("wx_wind" %in% names(pred)) t <- t %>% mutate(Weather = wx_label(pred$indoor, pred$wx_temp, pred$wx_wind, pred$wx_gust, pred$wx_precip_prob,
-                                                                       if ("wx_precip_max" %in% names(pred)) pred$wx_precip_max else pred$wx_precip_in / 3, html = html), .after = Venue)
+                                                                       if ("wx_precip_max" %in% names(pred)) pred$wx_precip_max else pred$wx_precip_in / 3, html = html), .after = Venue) %>%
+    select(-Venue)                                                   # Weather already says "indoor"
   t <- t %>% mutate(Tier = tiers(pred$proj)$tier, .after = Rank)
   if (html && "why" %in% names(pred)) t$Team <- why_tip(pred$team, pred$proj, pred$why, label)
   t$`Opp QB` <- qb_cell(pred, html)

@@ -253,15 +253,22 @@ td.t1{background:var(--t1);font-weight:700}td.t2{background:var(--t2);font-weigh
 span.wx1,span.wx2{border-radius:3px;padding:0 3px}span.wx1{background:var(--wx1)}span.wx2{background:var(--wx2);font-weight:600}
 td.wx1{background:var(--wx1)}td.wx2{background:var(--wx2);font-weight:600}
 td.stk,th.stk{position:sticky;z-index:2}td.stk{background:var(--bg,#fff)}th.stk{z-index:4}
+td.stk:hover,td.stk:focus-within{z-index:6}
 tr.tier-odd td.stk.stk:not(.top):not(.bot):not(.t1):not(.t2):not(.t5):not(.t6){background:linear-gradient(rgba(127,127,127,.08),rgba(127,127,127,.08)),var(--bg,#fff)}
 td.stk.t1{background:var(--t1)}td.stk.t2{background:var(--t2)}td.stk.t5{background:var(--t5)}td.stk.t6{background:var(--t6)}
-td.stk-last,th.stk-last{box-shadow:2px 0 3px -1px rgba(0,0,0,.25)}'
+td.stk-last,th.stk-last{box-shadow:2px 0 3px -1px rgba(0,0,0,.25)}
+td.stk:hover,td.stk:focus-within,td:hover,td:focus-within{z-index:30}td:hover,td:focus-within{position:relative}td.stk:hover,td.stk:focus-within{position:sticky}
+.tt .tip{position:fixed}'
 # Sticky first columns: tables with data-stick="n" keep their first n columns in view when scrolled sideways.
 # Offsets are measured in the browser (column widths vary), and again when a tab is shown or the window resized.
 SITE_JS <- 'function stickCols(){document.querySelectorAll("table[data-stick]").forEach(t=>{if(!t.offsetParent)return;
 const n=+t.dataset.stick,hr=t.tHead.rows[0];let left=0;for(let c=0;c<n&&c<hr.cells.length;c++){const w=hr.cells[c].getBoundingClientRect().width;
 [...t.rows].forEach(r=>{const x=r.cells[c];if(!x)return;x.classList.add("stk");x.classList.toggle("stk-last",c==n-1);x.style.left=left+"px"});left+=w}})}
-window.addEventListener("load",stickCols);window.addEventListener("resize",stickCols);'
+window.addEventListener("load",stickCols);window.addEventListener("resize",stickCols);
+function placeTip(t){const tip=t.querySelector(".tip");if(!tip)return;requestAnimationFrame(()=>{const r=t.getBoundingClientRect(),w=tip.offsetWidth||300,h=tip.offsetHeight||120;
+let x=Math.max(8,Math.min(r.left,window.innerWidth-w-8)),y=r.bottom+4;if(y+h>window.innerHeight-8)y=Math.max(8,r.top-h-4);tip.style.left=x+"px";tip.style.top=y+"px"})}
+document.addEventListener("mouseover",e=>{const t=e.target.closest&&e.target.closest(".tt");if(t)placeTip(t)});
+document.addEventListener("focusin",e=>{const t=e.target.closest&&e.target.closest(".tt");if(t)placeTip(t)});'
 
 ## ---- Track record tabs (62_track_record.R → output/track/track_<season>.rds; rendered by 44 and 54) ----
 track_file <- function(proj_dir, season) file.path(Sys.getenv("TRACK_DIR", file.path(proj_dir, "output/track")), sprintf("track_%d.rds", season))
