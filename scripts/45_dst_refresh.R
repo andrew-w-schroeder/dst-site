@@ -138,7 +138,7 @@ if (!nzchar(Sys.getenv("NO_EXT")) && file.exists(file.path(PROJ_DIR, "scripts/ex
 ext_now <- tryCatch({ kt2 <- if (exists("kt")) kt else NULL
   if (is.null(kt2) || !file.exists(EXT_CSV)) NULL else
     ext_latest(read_ext_hist(EXT_CSV) %>% filter(season == SEASON, week == WEEK), kt2 %>% mutate(season = as.integer(SEASON), week = as.integer(WEEK))) %>%
-      filter(pos == "DEF") %>% select(team, source, rank) %>% tidyr::pivot_wider(names_from = source, values_from = rank) },
+      filter(pos == "DEF") %>% select(team, source, rank, pts) },
   error = function(e) NULL)
 
 ## ---- 3c. Projected starting QBs ----
@@ -227,9 +227,10 @@ for (s in names(bundles)) {
                                         opp_qb_tip = ifelse(is.na(pq$qb_name), NA_character_, paste0(qb_tip(pq, w_name, rescored),
                                           ifelse(changed & !rescored, "\n\u26A0 Changed since the weekly run but NOT re-scored: rerun the weekly model (this week's bundle predates QB scenarios)", ""))))
   }
-  if (s == "espn" && !is.null(ext_now) && nrow(ext_now)) {
-    parts$pred$espn_rank <- if ("ESPN" %in% names(ext_now)) ext_now$ESPN[match(parts$pred$team, ext_now$team)] else NA_integer_
-    parts$pred$sleeper_rank <- if ("Sleeper" %in% names(ext_now)) ext_now$Sleeper[match(parts$pred$team, ext_now$team)] else NA_integer_
+  if (!is.null(b$vegas)) parts$pred$vegas_proj <- vegas_proj(b$vegas, te_now)[match(parts$pred$team, te_now$team)]   # Vegas-only, same lines
+  if (s == "espn" && !is.null(ext_now) && nrow(ext_now)) for (src in c("ESPN", "Sleeper")) {
+    e <- ext_now[ext_now$source == src, ]; i <- match(parts$pred$team, e$team)
+    parts$pred[[paste0(tolower(src), "_rank")]] <- e$rank[i]; parts$pred[[paste0(tolower(src), "_pts")]] <- e$pts[i]
   }
   parts$refresh <- list(time = NOW, n_priced = sum(lines$src == "sportsbooks"), n_locked = sum(lines$locked),
                         books = if (any(!is.na(lines$n_books))) median(lines$n_books, na.rm = TRUE) else NA, model_fit = b$created,

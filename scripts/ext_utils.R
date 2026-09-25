@@ -105,22 +105,25 @@ read_ext_hist <- function(file) {
   if (!"pts" %in% names(h)) h$pts <- NA_real_                    # rows from before 2026-09-25 stored the rank only
   h
 }
-# snapshot this week's ranks for teams whose game hasn't kicked off (ko: tibble team, ko [POSIXct UTC])
+# snapshot this week's ranks + projected points for ALL teams (ranks stay comparable across teams). Scoring and display
+# use the last pull before each kickoff (ext_latest); games already started keep that pre-kickoff pull.
 ext_snapshot <- function(file, season, week, now, ko) {
   r <- ext_ranks(season, week); if (is.null(r) || !nrow(r)) { message("Sleeper / ESPN ranks: nothing pulled"); return(invisible(read_ext_hist(file))) }
-  open <- ko$team[is.na(ko$ko) | ko$ko > now]
-  r <- r[r$team %in% open, ]
   h <- dplyr::bind_rows(read_ext_hist(file), dplyr::mutate(r, pulled_at = format(now, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"), season = as.integer(season), week = as.integer(week))[EXT_COLS])
   dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE); utils::write.csv(h, file, row.names = FALSE)
   tb <- table(paste(r$source, r$pos))
-  message("Sleeper / ESPN ranks snapshotted (teams not yet kicked off): ", paste(names(tb), tb, collapse = ", "))
+  message("Sleeper / ESPN ranks snapshotted: ", paste(names(tb), tb, collapse = ", "))
   invisible(h)
 }
-# the last snapshot before each team's kickoff (ko: tibble season, week, team, ko)
+# per team: the last snapshot before its kickoff; if none exists (e.g. the site's first pull came after a Thursday game),
+# the first pull after kickoff (after_ko = TRUE) — both sites keep a game's pre-game projection once it is played.
 ext_latest <- function(h, ko) {
   if (!nrow(h)) return(h)
   h$t <- as.POSIXct(sub("Z$", "", h$pulled_at), format = "%Y-%m-%dT%H:%M:%S", tz = "UTC")
   h <- dplyr::inner_join(h, ko, by = c("season", "week", "team"))
-  h <- h[is.na(h$ko) | h$t < h$ko, ]
-  dplyr::ungroup(dplyr::slice_max(dplyr::group_by(h, season, week, source, pos, team), t, n = 1, with_ties = FALSE))
+  pre  <- dplyr::ungroup(dplyr::slice_max(dplyr::group_by(h[is.na(h$ko) | h$t < h$ko, ], season, week, source, pos, team), t, n = 1, with_ties = FALSE))
+  post <- h[!is.na(h$ko) & h$t >= h$ko, ]
+  post <- dplyr::anti_join(post, pre, by = c("season", "week", "source", "pos", "team"))
+  post <- dplyr::ungroup(dplyr::slice_min(dplyr::group_by(post, season, week, source, pos, team), t, n = 1, with_ties = FALSE))
+  dplyr::bind_rows(dplyr::mutate(pre, after_ko = FALSE), dplyr::mutate(post, after_ko = TRUE))
 }

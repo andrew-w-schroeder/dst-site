@@ -122,13 +122,16 @@ for (sy in names(B$SCORING)) {
   if (sy == names(B$SCORING)[1]) P$pred$implied_own_base <- coalesce(f$implied_first[i], P$pred$implied_own_base)
   P$pred[[paste0("trend_svg_", sy)]] <- map_chr(P$pred$team, ~ sparkline(trend_points(ph[ph$system == sy & ph$team == .x, ])))
 }
+# Vegas-only projection re-scored with the refreshed lines (coefficients from the weekly bundle)
+if (!is.null(B$vegas)) for (sy in names(B$SCORING)) P$pred[[paste0("vegas_proj_", sy)]] <- vegas_proj(B$vegas[[sy]], te_now)[match(P$pred$team, te_now$team)]
 # this week's latest Sleeper / ESPN kicker rank per team (snapshot taken by the D/ST refresh; frozen at kickoff)
 ext_f <- file.path(PROJ_DIR, "data/lines/ext_rank_history.csv")
 if (file.exists(ext_f) && file.exists(file.path(PROJ_DIR, "scripts/ext_utils.R"))) tryCatch({
   source(file.path(PROJ_DIR, "scripts/ext_utils.R"))
   kt <- bind_rows(lines %>% transmute(team = home_team, ko), lines %>% transmute(team = away_team, ko)) %>% mutate(season = as.integer(SEASON), week = as.integer(WEEK))
-  en <- ext_latest(read_ext_hist(ext_f) %>% filter(season == SEASON, week == WEEK), kt) %>% filter(pos == "K") %>% select(team, source, rank)
-  for (src in c("ESPN", "Sleeper")) P$pred[[paste0(tolower(src), "_rank")]] <- en$rank[en$source == src][match(P$pred$team, en$team[en$source == src])]
+  en <- ext_latest(read_ext_hist(ext_f) %>% filter(season == SEASON, week == WEEK), kt) %>% filter(pos == "K") %>% select(team, source, rank, pts)
+  for (src in c("ESPN", "Sleeper")) { e <- en[en$source == src, ]; i <- match(P$pred$team, e$team)
+    P$pred[[paste0(tolower(src), "_rank")]] <- e$rank[i]; P$pred[[paste0(tolower(src), "_pts")]] <- e$pts[i] }
 }, error = function(e) message("kickers: Sleeper / ESPN ranks — ", conditionMessage(e)))
 P$refresh <- list(time = NOW, n_priced = sum(lines$src == "sportsbooks"), n_locked = sum(lines$locked), n_games = nrow(lines),
                   books = if (any(!is.na(lines$n_books))) median(lines$n_books, na.rm = TRUE) else NA,

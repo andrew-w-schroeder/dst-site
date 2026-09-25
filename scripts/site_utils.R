@@ -259,6 +259,11 @@ td.stk.t1{background:var(--t1)}td.stk.t2{background:var(--t2)}td.stk.t5{backgrou
 td.stk-last,th.stk-last{box-shadow:2px 0 3px -1px rgba(0,0,0,.25)}
 :root{--fl1:#fcecc8;--fl2:#f6c86a}@media (prefers-color-scheme: dark){:root{--fl1:#4a3a14;--fl2:#7a5b12}}
 td.fl1{background:var(--fl1)}td.fl2{background:var(--fl2);font-weight:700}
+.dragx{cursor:grab}.dragx.dragging{cursor:grabbing;user-select:none}.dragx .tt{cursor:help}
+.scrollbtns{display:flex;justify-content:flex-end;align-items:center;gap:6px;margin:.4rem 0 -.2rem;font-size:12px;color:var(--muted,var(--mut,#666))}
+.scrollbtns button{border:1px solid var(--line,var(--bd,#ccc));background:var(--head,var(--th,#f3f3f3));color:var(--fg,#222);border-radius:6px;
+  min-width:44px;height:30px;font-size:14px;cursor:pointer;touch-action:none;user-select:none}
+.scrollbtns button:active{filter:brightness(.92)}
 td.stk:hover,td.stk:focus-within,td:hover,td:focus-within{z-index:30}td:hover,td:focus-within{position:relative}td.stk:hover,td.stk:focus-within{position:sticky}
 .tt .tip{position:fixed}'
 # Sticky first columns: tables with data-stick="n" keep their first n columns in view when scrolled sideways.
@@ -267,6 +272,19 @@ SITE_JS <- 'function stickCols(){document.querySelectorAll("table[data-stick]").
 const n=+t.dataset.stick,hr=t.tHead.rows[0];let left=0;for(let c=0;c<n&&c<hr.cells.length;c++){const w=hr.cells[c].getBoundingClientRect().width;
 [...t.rows].forEach(r=>{const x=r.cells[c];if(!x)return;x.classList.add("stk");x.classList.toggle("stk-last",c==n-1);x.style.left=left+"px"});left+=w}})}
 window.addEventListener("load",stickCols);window.addEventListener("resize",stickCols);
+function dragScroll(){document.querySelectorAll("table[data-stick]").forEach(t=>{const sc=t.closest(".tw")||t;if(sc.dataset.drag)return;sc.dataset.drag="1";sc.classList.add("dragx");
+let down=false,x0=0,s0=0,moved=false;
+sc.addEventListener("mousedown",e=>{if(e.button!==0)return;down=true;moved=false;x0=e.pageX;s0=sc.scrollLeft});
+window.addEventListener("mousemove",e=>{if(!down)return;const dx=e.pageX-x0;if(Math.abs(dx)>5){moved=true;sc.classList.add("dragging")}if(moved){sc.scrollLeft=s0-dx;e.preventDefault()}});
+window.addEventListener("mouseup",()=>{down=false;sc.classList.remove("dragging")});
+sc.addEventListener("click",e=>{if(moved){e.stopPropagation();e.preventDefault();moved=false}},true);
+const bar=document.createElement("div");bar.className="scrollbtns";bar.innerHTML=`<span>drag the table or hold</span><button type="button" data-d="-1" aria-label="scroll left">\u25C0</button><button type="button" data-d="1" aria-label="scroll right">\u25B6</button>`;
+sc.parentNode.insertBefore(bar,sc);
+bar.querySelectorAll("button").forEach(b=>{let iv=null;const go=()=>{sc.scrollLeft+=(+b.dataset.d)*14};
+const start=e=>{e.preventDefault();go();clearInterval(iv);iv=setInterval(go,16)},stop=()=>{clearInterval(iv);iv=null};
+b.addEventListener("mousedown",start);b.addEventListener("touchstart",start,{passive:false});
+["mouseup","mouseleave","touchend","touchcancel"].forEach(ev=>b.addEventListener(ev,stop))})})}
+window.addEventListener("load",dragScroll);
 function placeTip(t){const tip=t.querySelector(".tip");if(!tip)return;requestAnimationFrame(()=>{const r=t.getBoundingClientRect(),w=tip.offsetWidth||300,h=tip.offsetHeight||120;
 let x=Math.max(8,Math.min(r.left,window.innerWidth-w-8)),y=r.bottom+4;if(y+h>window.innerHeight-8)y=Math.max(8,r.top-h-4);tip.style.left=x+"px";tip.style.top=y+"px"})}
 document.addEventListener("mouseover",e=>{const t=e.target.closest&&e.target.closest(".tt");if(t)placeTip(t)});
@@ -276,6 +294,10 @@ document.addEventListener("focusin",e=>{const t=e.target.closest&&e.target.close
 # flag = we have the team in our top 12 but that site has it as a sit (13–18: "fl1") or not rosterable (19+: "fl2")
 rank_flag <- function(ours, theirs) ifelse(is.na(theirs) | ours > 12, "", ifelse(theirs > 18, "fl2", ifelse(theirs > 12, "fl1", "")))
 RANKCOL_TIP <- "this week's rank on that site in ESPN standard scoring (their projection re-scored; the last update before kickoff). Highlighted when we have the team in our top 12 but they have it as a sit (13–18, light) or not rosterable (19+, dark)"
+# Vegas-only projection from lm coefficients stored in the weekly bundle (re-scored with the refreshed lines)
+vegas_proj <- function(cf, df) { if (is.null(cf)) return(rep(NA_real_, nrow(df))); v <- setdiff(names(cf), "(Intercept)")
+  as.numeric(cf["(Intercept)"] + as.matrix(df[v]) %*% cf[v]) }
+rank_pts <- function(rk, pts) ifelse(is.na(rk), "", ifelse(is.na(pts), as.character(rk), sprintf("%d (%.1f)", as.integer(rk), pts)))
 ## ---- Track record tab (62_track_record.R → output/track/track_<season>.rds; rendered by 44 and 54) ----
 track_file <- function(proj_dir, season) file.path(Sys.getenv("TRACK_DIR", file.path(proj_dir, "output/track")), sprintf("track_%d.rds", season))
 `%||%` <- function(a, b) if (is.null(a)) b else a

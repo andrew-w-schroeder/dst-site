@@ -67,10 +67,13 @@ make_proj_tbl <- function(pred, html = FALSE, label = "") {       # same columns
   if ("proj_base" %in% names(pred)) t <- t %>% mutate(!!DLAB := signed(pred$proj - pred$proj_base, 2), .after = Proj) %>%
     mutate(Kickoff = kickoff(pred), .after = Opp)
   if (html && "trend_svg" %in% names(pred)) t <- t %>% mutate(Trend = pred$trend_svg, .after = all_of(DLAB))
+  # other rankings this week, "rank (projected points)": Vegas-only in every format; ESPN / Sleeper in ESPN scoring
   if (label == "ESPN" && any(!is.na(pred$espn_rank %||% NA) | !is.na(pred$sleeper_rank %||% NA)))
-    t <- t %>% mutate(`ESPN rank` = pred$espn_rank, `Sleeper rank` = pred$sleeper_rank, .after = Proj)
+    t <- t %>% mutate(`ESPN rank` = rank_pts(pred$espn_rank, pred$espn_pts %||% NA), `Sleeper rank` = rank_pts(pred$sleeper_rank, pred$sleeper_pts %||% NA), .after = Proj)
+  if ("vegas_proj" %in% names(pred)) t <- t %>% mutate(`Vegas-only rank` = rank_pts(rank(-pred$vegas_proj, ties.method = "first"), pred$vegas_proj), .after = Proj)
   if ("wx_wind" %in% names(pred)) t <- t %>% mutate(Weather = wx_label(pred$indoor, pred$wx_temp, pred$wx_wind, pred$wx_gust, pred$wx_precip_prob,
-                                                                       if ("wx_precip_max" %in% names(pred)) pred$wx_precip_max else pred$wx_precip_in / 3, html = html), .after = Venue) %>%
+                                                                       if ("wx_precip_max" %in% names(pred)) pred$wx_precip_max else pred$wx_precip_in / 3, html = html),
+                                                    .after = all_of(if ("Kickoff" %in% names(t)) "Kickoff" else "Venue")) %>%
     select(-Venue)                                                   # Weather already says "indoor"
   t <- t %>% mutate(Tier = tiers(pred$proj)$tier, .after = Rank)
   if (html && "why" %in% names(pred)) t$Team <- why_tip(pred$team, pred$proj, pred$why, label)
@@ -121,6 +124,7 @@ compare_gloss <- tribble(~term, ~definition,
   "Δ Proj", "change in the projection since the week's first weekly model run, normally Tuesday — not since the previous refresh, and not reset by a mid-week model rerun",
   "Avg rank", "average of the three ranks; the table is sorted by it",
   "ESPN rank", RANKCOL_TIP, "Sleeper rank", RANKCOL_TIP,
+  "Vegas-only rank", "rank and projection of the Vegas-only baseline (a regression on the betting lines alone: spread, total, implied points, home), with the same lines as our projection. Amber as for ESPN / Sleeper rank",
   "Rank spread", "largest minus smallest rank across systems; big spreads mean the scoring rules change the pick (usually shutout / points-allowed upside vs yards allowed or sacks)")
 col_gloss <- g0$col_glossary %>% mutate(definition = case_when(
   term == "Proj"   ~ "projected fantasy points for the tab's scoring system: average of elastic net + component model + ridge",
@@ -170,7 +174,8 @@ sys_tab <- function(p) {
   brk <- c(FALSE, tt[-1] != tt[-length(tt)])
   row_cls <- trimws(paste(ifelse(tt %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tt] %in% TRUE, "tb-clear", "tb-soft"), "")))
   team_cls <- tier_cls(tt, k = max(tt))                                    # tier 1 dark green, 2 light green, 5 light red, 6 dark red
-  ext_cls <- if ("ESPN rank" %in% names(pt)) list(`ESPN rank` = rank_flag(p$pred$rank, p$pred$espn_rank), `Sleeper rank` = rank_flag(p$pred$rank, p$pred$sleeper_rank)) else list()
+  ext_cls <- c(if ("ESPN rank" %in% names(pt)) list(`ESPN rank` = rank_flag(p$pred$rank, p$pred$espn_rank), `Sleeper rank` = rank_flag(p$pred$rank, p$pred$sleeper_rank)),
+               if ("vegas_proj" %in% names(p$pred)) list(`Vegas-only rank` = rank_flag(p$pred$rank, rank(-p$pred$vegas_proj, ties.method = "first"))))
   if (all(c("q10", "q90") %in% names(p$pred))) pt <- pt %>% mutate(Range = pmap_chr(p$pred[c("proj", "q10", "q25", "q75", "q90", "ci_lo", "ci_hi")], range_bar), .after = all_of(ac))
   cvt <- p$cv_tbl %>% select(any_of(c("model", "rmse", "mae", "spearman", "top8_avg", "bot8_avg", "edge_top8", "vs_vegas_top8", "t_stat",
                                       "hold_rmse", "hold_spearman", "hold_top8", "hold_vs_vegas_top8", "hold_t", "what")))
@@ -179,7 +184,7 @@ sys_tab <- function(p) {
          "<p class='note'>Tiers: natural breaks in the projections. A solid line = a clear drop (bigger than the model's typical ±), dashed = a softer break. Tier 1 dark green, tier 2 light green, the bottom two tiers light / dark red. Hover or tap a team for what drives its projection.</p>",
          html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, raw_cols = c("Range", "Trend", "Team", "Opp QB", "Weather"),
                     row_cls = row_cls, cell_cls = c(list(Team = team_cls, Rank = team_cls), ext_cls), stick = 4),
-         if ("ESPN rank" %in% names(pt)) "<p class='note'>ESPN rank / Sleeper rank: that site's rank this week in ESPN standard scoring. Light amber = we have the D/ST in our top 12 but they have it as a sit (13–18); dark amber = not rosterable (19+).</p>" else "",
+         if (any(c("ESPN rank", "Vegas-only rank") %in% names(pt))) "<p class='note'>Vegas-only / ESPN / Sleeper rank: that source's rank this week, with its projected points in parentheses (ESPN and Sleeper in ESPN standard scoring). Light amber = we have the D/ST in our top 12 but that source has it as a sit (13–18); dark amber = not rosterable (19+).</p>" else "",
          sprintf("<p class='rules'><b>%s scoring:</b> %s</p>", esc(p$SC$label), esc(p$SC$rules)),
          if (is.null(p$holdout)) sprintf("<h3>Back-test: %s</h3><p class='note'>Each season predicted by models trained only on earlier seasons (from 2018). Every tuning, feature and blend choice maximizes the weekly top-8 edge over Vegas-only on these seasons, so these numbers are optimistic. %s %d is the clean test.</p>",
                                          paste(unique(range(p$cv_season)), collapse = "–"), esc(if (is.null(p$validation_note) || is.na(p$validation_note)) "" else p$validation_note),
@@ -211,7 +216,7 @@ if (file.exists(TR_F)) { tt <- tryCatch(track_tab(readRDS(TR_F), "DEF", setNames
   if (!is.null(tt)) tabs <- append(tabs, list(`Track record` = tt), after = length(tabs) - 1) }
 css <- ':root{--bg:#fff;--fg:#1d1d1f;--muted:#666;--line:#ddd;--head:#f3f3f3;--top:#e3f4e8;--bot:#fbe6e6;--accent:#1f5fbf;--rng80:#c9dcf5;--rng50:#6f9ee0}
 @media (prefers-color-scheme: dark){:root{--bg:#141414;--fg:#e8e8e8;--muted:#9a9a9a;--line:#333;--head:#222;--top:#17351f;--bot:#3a1a1a;--accent:#7fb0ff;--rng80:#26395a;--rng50:#4f7fc4}}
-body{font-family:system-ui,sans-serif;max-width:1250px;margin:1.5rem auto;padding:0 16px;color:var(--fg);background:var(--bg)}
+body{font-family:system-ui,sans-serif;max-width:1800px;margin:1.5rem auto;padding:0 16px;color:var(--fg);background:var(--bg)}
 h1{margin:.2rem 0}.sub{color:var(--muted);font-size:14px}
 .tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:2px solid var(--line);margin:1rem 0}
 .tabs button{border:0;background:none;padding:8px 14px;font-size:15px;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-2px}

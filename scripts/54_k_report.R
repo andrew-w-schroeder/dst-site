@@ -92,10 +92,13 @@ sys_table <- function(sy) {
               Wind = wind_lab[o], Gust = gust_lab[o], Rain = rain_lab[o], Imp = f1(p$implied_own), Proj = f1(p[[paste0("proj_", sy)]], 2))
   if (refreshed) t[[DLAB]] <- signed(p[[paste0("proj_", sy)]] - p[[paste0("proj_base_", sy)]])
   if (paste0("trend_svg_", sy) %in% names(p)) t$Trend <- p[[paste0("trend_svg_", sy)]]
-  ext_c <- list()
-  if (sy == "espn" && any(!is.na(c(p$espn_rank, p$sleeper_rank)))) {       # this week's ESPN / Sleeper ranks (ESPN standard)
-    t <- t %>% mutate(`ESPN rank` = p$espn_rank, `Sleeper rank` = p$sleeper_rank, .after = Proj)
+  ext_c <- list()                                                        # other rankings this week: "rank (projected points)"
+  if (sy == "espn" && any(!is.na(c(p$espn_rank, p$sleeper_rank)))) {       # ESPN / Sleeper (ESPN standard)
+    t <- t %>% mutate(`ESPN rank` = rank_pts(p$espn_rank, p$espn_pts %||% NA), `Sleeper rank` = rank_pts(p$sleeper_rank, p$sleeper_pts %||% NA), .after = Proj)
     ext_c <- list(`ESPN rank` = rank_flag(t$Rank, p$espn_rank), `Sleeper rank` = rank_flag(t$Rank, p$sleeper_rank)) }
+  vp <- p[[paste0("vegas_proj_", sy)]]
+  if (!is.null(vp) && any(!is.na(vp))) { vr <- rank(-vp, ties.method = "first")
+    t <- t %>% mutate(`Vegas-only rank` = rank_pts(vr, vp), .after = Proj); ext_c$`Vegas-only rank` <- rank_flag(t$Rank, vr) }
   brk <- c(FALSE, tr$tier[-1] != tr$tier[-length(tr$tier)])
   attr(t, "row_cls") <- trimws(paste(ifelse(tr$tier %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tr$tier] %in% TRUE, "tb-clear", "tb-soft"), "")))
   tc <- tier_cls(tr$tier, k = max(tr$tier))
@@ -110,6 +113,7 @@ sys_table <- function(sy) {
     `Coach GROE` = if ("c_groe" %in% names(p)) sprintf("%+.1f%%", 100 * p$c_groe) else sprintf("%+.1f%%", 100 * p$c_go_oe), Inj = coalesce(p$injury, ""))
 }
 tip[c("ESPN rank", "Sleeper rank")] <- RANKCOL_TIP
+tip["Vegas-only rank"] <- "rank and projection of the Vegas-only baseline (a regression on the betting lines alone: implied points, spread, total, home), with the same lines as our projection. Amber as for ESPN / Sleeper rank"
 tip["FG% OE"] <- paste0("FG% over expected: decayed field-goal makes above the league's expected make rate for each kick's distance, roof and weather, per attempt (recent seasons count more), shrunk toward 0 for kickers with few attempts. +2% = makes 2 more of every 100 kicks than an average kicker would in the same spots.",
   if ("k_fgoe_ver" %in% names(pred)) paste0(" Version shown: ", c(kicker_fgoe = "original", kicker_fgoe2 = "v2 (recency-weighted league baseline, wind bands, rain, snow)", kicker_fgoe2r = "v2 with faster decay")[pred$k_fgoe_ver[1]], " — the one the model uses.") else "")
 tip[c("Career FG%", "Career 50+%", "Career XP%", "Career FGA", "Coach GROE")] <- c(tip["k_fg_pct"], tip["k_fg50_pct"], tip["k_xp_pct"],
@@ -164,7 +168,7 @@ html <- paste0('<!doctype html><html><head><meta charset="utf-8"><meta name="vie
   sprintf("<title>Kicker projections %d wk %d</title>", SEASON, WEEK),
   '<style>:root{--bg:#fff;--fg:#1d1d1f;--mut:#666;--bd:#ddd;--th:#f3f3f5;--acc:#2b6cb0;--r80:#c9dcf2;--r50:#6f9fd8}
 @media (prefers-color-scheme:dark){:root{--bg:#141416;--fg:#e8e8ea;--mut:#9a9aa0;--bd:#333;--th:#1f1f23;--acc:#7fb0ef;--r80:#2a3f5c;--r50:#4f78ad}}
-body{background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;max-width:1400px;margin:1.5rem auto;padding:0 16px}
+body{background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;max-width:1800px;margin:1.5rem auto;padding:0 16px}
 h1{font-size:1.4rem;margin:.2rem 0}.s{color:var(--mut);font-size:13px}.tw{overflow-x:auto}a{color:var(--acc)}
 table{border-collapse:collapse;font-size:13px;margin:.6rem 0;white-space:nowrap}th,td{border:1px solid var(--bd);padding:3px 7px;text-align:right}
 th{background:var(--th);cursor:pointer;position:sticky;top:0}td.l{text-align:left}
