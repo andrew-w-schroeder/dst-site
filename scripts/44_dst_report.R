@@ -68,8 +68,8 @@ make_proj_tbl <- function(pred, html = FALSE, label = "") {       # same columns
     mutate(Kickoff = kickoff(pred), .after = Opp)
   if (html && "trend_svg" %in% names(pred)) t <- t %>% mutate(Trend = pred$trend_svg, .after = all_of(DLAB))
   # other rankings this week, "rank (projected points)": Vegas-only in every format; ESPN / Sleeper in ESPN scoring
-  if (label == "ESPN" && any(!is.na(pred$espn_rank %||% NA) | !is.na(pred$sleeper_rank %||% NA)))
-    t <- t %>% mutate(`ESPN rank` = rank_pts(pred$espn_rank, pred$espn_pts %||% NA), `Sleeper rank` = rank_pts(pred$sleeper_rank, pred$sleeper_pts %||% NA), .after = Proj)
+  if (label == "ESPN" && any(!is.na(pred[["espn_rank"]] %||% NA) | !is.na(pred[["sleeper_rank"]] %||% NA)))
+    t <- t %>% mutate(`ESPN rank` = rank_pts(pred[["espn_rank"]], pred[["espn_pts"]] %||% NA), `Sleeper rank` = rank_pts(pred[["sleeper_rank"]], pred[["sleeper_pts"]] %||% NA), .after = Proj)
   if ("vegas_proj" %in% names(pred)) t <- t %>% mutate(`Vegas-only rank` = rank_pts(rank(-pred$vegas_proj, ties.method = "first"), pred$vegas_proj), .after = Proj)
   if ("wx_wind" %in% names(pred)) t <- t %>% mutate(Weather = wx_label(pred$indoor, pred$wx_temp, pred$wx_wind, pred$wx_gust, pred$wx_precip_prob,
                                                                        if ("wx_precip_max" %in% names(pred)) pred$wx_precip_max else pred$wx_precip_in / 3, html = html),
@@ -174,7 +174,7 @@ sys_tab <- function(p) {
   brk <- c(FALSE, tt[-1] != tt[-length(tt)])
   row_cls <- trimws(paste(ifelse(tt %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tt] %in% TRUE, "tb-clear", "tb-soft"), "")))
   team_cls <- tier_cls(tt, k = max(tt))                                    # tier 1 dark green, 2 light green, 5 light red, 6 dark red
-  ext_cls <- c(if ("ESPN rank" %in% names(pt)) list(`ESPN rank` = rank_flag(p$pred$rank, p$pred$espn_rank), `Sleeper rank` = rank_flag(p$pred$rank, p$pred$sleeper_rank)),
+  ext_cls <- c(if ("ESPN rank" %in% names(pt)) list(`ESPN rank` = rank_flag(p$pred$rank, p$pred[["espn_rank"]]), `Sleeper rank` = rank_flag(p$pred$rank, p$pred[["sleeper_rank"]])),
                if ("vegas_proj" %in% names(p$pred)) list(`Vegas-only rank` = rank_flag(p$pred$rank, rank(-p$pred$vegas_proj, ties.method = "first"))))
   if (all(c("q10", "q90") %in% names(p$pred))) pt <- pt %>% mutate(Range = pmap_chr(p$pred[c("proj", "q10", "q25", "q75", "q90", "ci_lo", "ci_hi")], range_bar), .after = all_of(ac))
   cvt <- p$cv_tbl %>% select(any_of(c("model", "rmse", "mae", "spearman", "top8_avg", "bot8_avg", "edge_top8", "vs_vegas_top8", "t_stat",

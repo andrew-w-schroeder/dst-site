@@ -93,9 +93,9 @@ sys_table <- function(sy) {
   if (refreshed) t[[DLAB]] <- signed(p[[paste0("proj_", sy)]] - p[[paste0("proj_base_", sy)]])
   if (paste0("trend_svg_", sy) %in% names(p)) t$Trend <- p[[paste0("trend_svg_", sy)]]
   ext_c <- list()                                                        # other rankings this week: "rank (projected points)"
-  if (sy == "espn" && any(!is.na(c(p$espn_rank, p$sleeper_rank)))) {       # ESPN / Sleeper (ESPN standard)
-    t <- t %>% mutate(`ESPN rank` = rank_pts(p$espn_rank, p$espn_pts %||% NA), `Sleeper rank` = rank_pts(p$sleeper_rank, p$sleeper_pts %||% NA), .after = Proj)
-    ext_c <- list(`ESPN rank` = rank_flag(t$Rank, p$espn_rank), `Sleeper rank` = rank_flag(t$Rank, p$sleeper_rank)) }
+  if (sy == "espn" && any(!is.na(c(p[["espn_rank"]], p[["sleeper_rank"]])))) {       # ESPN / Sleeper (ESPN standard)
+    t <- t %>% mutate(`ESPN rank` = rank_pts(p[["espn_rank"]], p[["espn_pts"]] %||% NA), `Sleeper rank` = rank_pts(p[["sleeper_rank"]], p[["sleeper_pts"]] %||% NA), .after = Proj)
+    ext_c <- list(`ESPN rank` = rank_flag(t$Rank, p[["espn_rank"]]), `Sleeper rank` = rank_flag(t$Rank, p[["sleeper_rank"]])) }
   vp <- p[[paste0("vegas_proj_", sy)]]
   if (!is.null(vp) && any(!is.na(vp))) { vr <- rank(-vp, ties.method = "first")
     t <- t %>% mutate(`Vegas-only rank` = rank_pts(vr, vp), .after = Proj); ext_c$`Vegas-only rank` <- rank_flag(t$Rank, vr) }

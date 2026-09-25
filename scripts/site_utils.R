@@ -295,7 +295,7 @@ document.addEventListener("focusin",e=>{const t=e.target.closest&&e.target.close
 rank_flag <- function(ours, theirs) ifelse(is.na(theirs) | ours > 12, "", ifelse(theirs > 18, "fl2", ifelse(theirs > 12, "fl1", "")))
 RANKCOL_TIP <- "this week's rank on that site in ESPN standard scoring (their projection re-scored; the last update before kickoff). Highlighted when we have the team in our top 12 but they have it as a sit (13–18, light) or not rosterable (19+, dark)"
 # Vegas-only projection from lm coefficients stored in the weekly bundle (re-scored with the refreshed lines)
-vegas_proj <- function(cf, df) { if (is.null(cf)) return(rep(NA_real_, nrow(df))); v <- setdiff(names(cf), "(Intercept)")
+vegas_proj <- function(cf, df) { if (is.null(cf)) return(rep(NA_real_, nrow(df))); cf[is.na(cf)] <- 0; v <- setdiff(names(cf), "(Intercept)")   # NA = aliased term (implied points = total/2 ± spread/2), as predict.lm treats it
   as.numeric(cf["(Intercept)"] + as.matrix(df[v]) %*% cf[v]) }
 rank_pts <- function(rk, pts) ifelse(is.na(rk), "", ifelse(is.na(pts), as.character(rk), sprintf("%d (%.1f)", as.integer(rk), pts)))
 ## ---- Track record tab (62_track_record.R → output/track/track_<season>.rds; rendered by 44 and 54) ----
