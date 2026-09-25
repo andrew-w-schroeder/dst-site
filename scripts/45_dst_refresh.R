@@ -126,6 +126,15 @@ message(sprintf("lines: %d games · %d from sportsbooks · %d locked", nrow(line
 wk_games <- tryCatch(week_games(SEASON, WEEK), error = function(e) NULL)
 wx <- tryCatch(wx_latest(wx_update(WX_CSV, wk_games, NOW)), error = function(e) { message("weather: ", conditionMessage(e)); wx_latest(read_wx_hist(WX_CSV)) })
 
+## ---- 3b2. Sleeper / ESPN weekly ranks for the track record (rank only; teams not yet kicked off; ext_utils.R) ----
+EXT_CSV <- file.path(PROJ_DIR, "data/lines/ext_rank_history.csv")
+if (!nzchar(Sys.getenv("NO_EXT")) && file.exists(file.path(PROJ_DIR, "scripts/ext_utils.R"))) tryCatch({
+  source(file.path(PROJ_DIR, "scripts/ext_utils.R"))
+  kt <- if (!is.null(wk_games)) bind_rows(wk_games %>% transmute(team = home_team, ko = kickoff), wk_games %>% transmute(team = away_team, ko = kickoff)) else
+    bind_rows(lines %>% transmute(team = home, ko), lines %>% transmute(team = away, ko))
+  ext_snapshot(EXT_CSV, SEASON, WEEK, NOW, kt)
+}, error = function(e) message("Sleeper / ESPN ranks: ", conditionMessage(e)))
+
 ## ---- 3c. Projected starting QBs ----
 b1 <- bundles[[1]]
 p1 <- readRDS(file.path(DST_DIR, names(bundles)[1], sprintf("report_parts_%d_wk%02d.rds", SEASON, WEEK)))$pred
@@ -238,7 +247,7 @@ for (s in names(out_parts)) {
 }
 
 ## ---- 5. Report + site ----
-Sys.setenv(FF_PROJ_DIR = WORK_DIR)
+Sys.setenv(FF_PROJ_DIR = WORK_DIR, TRACK_DIR = file.path(PROJ_DIR, "output/track"))       # track record = the published file
 st <- system2(file.path(R.home("bin"), "Rscript"), c(shQuote(file.path(PROJ_DIR, "scripts/44_dst_report.R")), SEASON, WEEK))
 Sys.setenv(FF_PROJ_DIR = PROJ_DIR)
 if (!identical(as.integer(st), 0L)) stop("44_dst_report.R failed")

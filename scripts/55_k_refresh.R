@@ -133,7 +133,7 @@ message(sprintf("kickers: re-scored · biggest ESPN move %s %+.2f", mv$team, mv$
 ## ---- 5. Report + site ----
 dir.create(file.path(WORK_DIR, "output/k"), recursive = TRUE, showWarnings = FALSE)
 saveRDS(P, file.path(WORK_DIR, "output/k", basename(parts_file)))
-Sys.setenv(FF_PROJ_DIR = WORK_DIR)
+Sys.setenv(FF_PROJ_DIR = WORK_DIR, TRACK_DIR = file.path(PROJ_DIR, "output/track"))       # track record = the published file
 st <- system2(file.path(R.home("bin"), "Rscript"), c(shQuote(file.path(PROJ_DIR, "scripts/54_k_report.R")), SEASON, WEEK))
 Sys.setenv(FF_PROJ_DIR = PROJ_DIR)
 if (!identical(as.integer(st), 0L)) stop("54_k_report.R failed")

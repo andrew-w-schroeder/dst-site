@@ -204,6 +204,7 @@ dst_groups <- function(vars) {
     b %in% c("neg_rate", "runloss_rate") ~ "negative plays",
     b %in% c("pass_rate", "pass_oe", "plays_g", "punt_drive") ~ "play volume & pass rate",
     b %in% c("sec_play", "sec_play_neu") ~ "pace (sec / play)",
+    b %in% c("sr_succ", "sr_fail") ~ "success / failure rate (PFR)",
     b %in% c("pen_play", "penyds_g") ~ "penalties",
     startsWith(b, "dst_") | b %in% c("fp_g", "fpc_g") ~ "D/ST points history",
     b %in% c("ngs_press", "ngs_ttp", "ngs_p2s", "ngs_blitz", "ngs_getoff") ~ "pass rush (NGS)",
@@ -223,7 +224,7 @@ k_groups <- function(vars) {
   lab <- dplyr::case_when(
     vars %in% c("indoor", "wind_o", "wind_hi", "temp", "cold", "altitude", "grass", "wind_x_long") ~ "Weather & venue",
     vars %in% c("k_fg_pct", "k_fg50_pct", "k_xp_pct") ~ "Kicker career accuracy",
-    vars %in% c("k_fgoe", "k_xpoe", "k_log_fga", "k_new", "k_drafted") ~ "Kicker recent skill & experience",
+    vars %in% c("k_fgoe", "k_fgoe2", "k_fgoe2r", "k_xpoe", "k_log_fga", "k_new", "k_drafted") ~ "Kicker recent skill & experience",
     vars %in% c("k_long_share", "k_avg_dist") ~ "Kicker range (long attempts)",
     startsWith(vars, "c_") ~ "Coach 4th-down tendency",
     grepl("sec_play", vars) ~ "Game pace (sec / play)",
@@ -261,3 +262,134 @@ SITE_JS <- 'function stickCols(){document.querySelectorAll("table[data-stick]").
 const n=+t.dataset.stick,hr=t.tHead.rows[0];let left=0;for(let c=0;c<n&&c<hr.cells.length;c++){const w=hr.cells[c].getBoundingClientRect().width;
 [...t.rows].forEach(r=>{const x=r.cells[c];if(!x)return;x.classList.add("stk");x.classList.toggle("stk-last",c==n-1);x.style.left=left+"px"});left+=w}})}
 window.addEventListener("load",stickCols);window.addEventListener("resize",stickCols);'
+
+## ---- Track record tabs (62_track_record.R → output/track/track_<season>.rds; rendered by 44 and 54) ----
+track_file <- function(proj_dir, season) file.path(Sys.getenv("TRACK_DIR", file.path(proj_dir, "output/track")), sprintf("track_%d.rds", season))
+.tr_esc <- function(x) { x <- as.character(x); x[is.na(x)] <- ""; x <- gsub("&", "&amp;", x); x <- gsub("<", "&lt;", x); gsub(">", "&gt;", x) }
+.f  <- function(x, d = 2) ifelse(is.na(x), "—", formatC(x, format = "f", digits = d))
+.sg <- function(x, d = 2) ifelse(is.na(x), "—", sprintf(paste0("%+.", d, "f"), x))
+.pc <- function(x) ifelse(is.na(x), "—", paste0(round(100 * x), "%"))
+.cls <- function(x) ifelse(is.na(x) | abs(x) < 0.005, "", ifelse(x > 0, "gain", "loss"))
+# plain table: cols = list of (header, values, tooltip, class vector or NULL); first `left` columns left-aligned
+tr_table <- function(cols, left = 1, foot = NULL) {
+  th <- vapply(cols, function(c) sprintf('<th title="%s">%s</th>', .tr_esc(c$tip %||% ""), .tr_esc(c$h)), "")
+  n <- length(cols[[1]]$v)
+  rows <- vapply(seq_len(n), function(i) paste0(if (!is.null(foot) && foot[i]) '<tr class="tr-season">' else "<tr>",
+    paste0(vapply(seq_along(cols), function(k) { cl <- c(if (k <= left) "ltxt", if (!is.null(cols[[k]]$cls)) cols[[k]]$cls[i])
+      cl <- cl[nzchar(cl)]; sprintf("<td%s>%s</td>", if (length(cl)) sprintf(' class="%s"', paste(cl, collapse = " ")) else "", .tr_esc(cols[[k]]$v[i])) }, ""), collapse = ""), "</tr>"), "")
+  sprintf('<div class="tw"><table class="track"><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>', paste(th, collapse = ""), paste(rows, collapse = ""))
+}
+`%||%` <- function(a, b) if (is.null(a)) b else a
+# cumulative "points gained per starting slot" line chart: one line per comparison (palette slots 1-3; direct labels + legend)
+TRACK_SERIES <- c(vegas = "vs Vegas-only", sleeper = "vs Sleeper", espn = "vs ESPN")
+track_chart <- function(d) {                     # d: week, key (vegas / sleeper / espn), cum
+  d <- d[!is.na(d$cum), ]; if (!nrow(d)) return("")
+  W <- 620; H <- 210; L <- 48; R <- 170; T <- 14; B <- 30
+  wks <- sort(unique(d$week)); xr <- if (length(wks) > 1) range(wks) else wks + c(-0.5, 0.5)
+  yr <- range(c(0, d$cum)); pad <- max(0.5, diff(yr) * 0.12); yr <- yr + c(-pad, pad)
+  X <- function(w) L + (w - xr[1]) / diff(xr) * (W - L - R); Y <- function(v) T + (yr[2] - v) / diff(yr) * (H - T - B)
+  ticks <- pretty(yr, 4); ticks <- ticks[ticks >= yr[1] & ticks <= yr[2]]
+  grid <- paste0(sprintf('<line x1="%d" x2="%d" y1="%.1f" y2="%.1f" class="tc-grid%s"/><text x="%d" y="%.1f" class="tc-ax" text-anchor="end">%s</text>',
+                         L, W - R, Y(ticks), Y(ticks), ifelse(ticks == 0, " tc-zero", ""), L - 6, Y(ticks) + 4, sprintf("%+g", ticks)), collapse = "")
+  xl <- paste0(sprintf('<text x="%.1f" y="%d" class="tc-ax" text-anchor="middle">Wk %d</text>', X(wks), H - 10, wks), collapse = "")
+  keys <- intersect(names(TRACK_SERIES), unique(d$key)); slot <- setNames(paste0("tc-s", seq_along(names(TRACK_SERIES))), names(TRACK_SERIES))
+  # end labels: nudge apart so they never overlap (>= 14 px between them)
+  ends <- do.call(rbind, lapply(keys, function(k) { e <- d[d$key == k, ]; e <- e[order(e$week), ]; data.frame(k = k, y = Y(e$cum[nrow(e)])) }))
+  ends <- ends[order(ends$y), ]; if (nrow(ends) > 1) for (i in 2:nrow(ends)) ends$y[i] <- max(ends$y[i], ends$y[i - 1] + 14)
+  lab_y <- setNames(ends$y, ends$k)
+  lines <- paste0(vapply(keys, function(k) { e <- d[d$key == k, ]; e <- e[order(e$week), ]
+    pl <- if (nrow(e) > 1) sprintf('<polyline class="tc-line %s" points="%s"/>', slot[k], paste(sprintf("%.1f,%.1f", X(e$week), Y(e$cum)), collapse = " ")) else ""
+    dots <- paste0(sprintf('<circle class="tc-dot %s" cx="%.1f" cy="%.1f" r="4"><title>Through week %d: %+.2f pts per starting slot %s (season total)</title></circle>',
+                           slot[k], X(e$week), Y(e$cum), e$week, e$cum, TRACK_SERIES[k]), collapse = "")
+    lab <- sprintf('<text x="%.1f" y="%.1f" class="tc-lab">%s %+.1f</text>', X(max(e$week)) + 8, lab_y[k] + 4, TRACK_SERIES[k], e$cum[nrow(e)])
+    paste0(pl, dots, lab) }, ""), collapse = "")
+  legend <- paste0(vapply(keys, function(k) sprintf('<span class="tc-key"><i class="%s"></i>%s</span>', slot[k], TRACK_SERIES[k]), ""), collapse = "")
+  sprintf('<div class="tc"><div class="tc-legend">%s</div><svg viewBox="0 0 %d %d" width="%d" height="%d" role="img" aria-label="Cumulative points gained per starting slot">%s%s%s</svg></div>',
+          legend, W, H, W, H, grid, xl, lines)
+}
+# HTML for the two tabs of one position ("DEF" / "K"); systems = named labels in page order; ext_system = format the
+# Sleeper / ESPN comparison uses (ESPN standard)
+track_tabs <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
+  wk <- TR$weekly[TR$weekly$pos == pos, ]; tot <- TR$total[TR$total$pos == pos, ]
+  if (!nrow(wk)) return(NULL)
+  wlab <- function(w) if (length(w) > 1) sprintf("weeks %d–%d", min(w), max(w)) else sprintf("week %d", w)
+  bf <- sort(unique(wk$week[wk$kind == "backfilled"]))
+  bf_note <- if (length(bf)) sprintf(" %s %s backfilled: the current model re-run as of that week, trained only on earlier games, with the closing lines (the site started in week %d).",
+                                     tools::toTitleCase(wlab(bf)), if (length(bf) > 1) "are" else "is", max(bf) + 1) else ""
+  ## Track record (vs Vegas-only), one section per scoring format
+  sec <- vapply(names(systems), function(sy) {
+    w <- wk[wk$system == sy, ]; t <- tot[tot$system == sy, ]; if (!nrow(w)) return("")
+    w <- w[order(w$week), ]
+    rows <- dplyr::bind_rows(w, dplyr::mutate(t, week = NA_integer_, kind = "season"))
+    lab <- c(ifelse(is.na(rows$week[-nrow(rows)]), "", paste("Week", rows$week[-nrow(rows)])), "Season")
+    kind_lab <- ifelse(rows$kind == "season", "", rows$kind)
+    d12 <- rows$top12_ours - rows$top12_vegas
+    cols <- list(list(h = "Week", v = lab), list(h = "Type", v = kind_lab, tip = "live = the Tuesday projection the site showed; backfilled = re-run afterwards as of that week"),
+                 list(h = "Our top 12", v = .f(rows$top12_ours), tip = "average actual points of our weekly top 12 (Tuesday projection)"),
+                 list(h = "Vegas-only top 12", v = .f(rows$top12_vegas), tip = "average actual points of the top 12 by the Vegas-only baseline (same lines)"),
+                 list(h = "Δ per start", v = .sg(d12), cls = .cls(d12), tip = "points per starting slot gained by using our top 12 instead of Vegas-only's"),
+                 list(h = "Start/sit calls", v = ifelse(is.na(rows$ss_vegas_calls), "—", rows$ss_vegas_calls), tip = "pairs of teams we and Vegas-only ranked in opposite order"),
+                 list(h = "Ours right", v = .pc(rows$ss_vegas_right), tip = "share of those calls where our pick scored more"),
+                 list(h = "Pts per call", v = .sg(rows$ss_vegas_gain), cls = .cls(rows$ss_vegas_gain), tip = "average points gained per call by following ours"),
+                 list(h = "RMSE ours / Vegas", v = paste(.f(rows$rmse_ours), "/", .f(rows$rmse_vegas)), tip = "projection error (lower = better)"),
+                 list(h = "In our 80% range", v = .pc(rows$cov80), tip = "share of actual scores inside our 80% range (should be about 80%)"),
+                 list(h = "P(boom): said / happened", v = paste(.pc(rows$p_boom), "/", .pc(rows$boom)), tip = "our average chance of a boom week vs how often it happened"),
+                 list(h = "P(bust): said / happened", v = paste(.pc(rows$p_bust), "/", .pc(rows$bust)), tip = "our average chance of a bust week vs how often it happened"))
+    if ("top12_ours_pk" %in% names(rows) && any(!is.na(rows$top12_ours_pk)))
+      cols <- append(cols, list(list(h = "Our top 12 at kickoff", v = .f(rows$top12_ours_pk), tip = "same, with the site's last projection before each kickoff (live weeks only)")), after = 2)
+    head <- sprintf("<p class='s'><b>%s, %s:</b> our top 12 averaged <b>%s</b> points vs <b>%s</b> for Vegas-only (<b>%s per start</b>). In %s start/sit calls where we disagreed with Vegas-only, our pick scored more %s of the time (%s pts per call).</p>",
+                    systems[sy], wlab(sort(w$week)), .f(t$top12_ours), .f(t$top12_vegas), .sg(t$top12_ours - t$top12_vegas),
+                    format(t$ss_vegas_calls, big.mark = ","), .pc(t$ss_vegas_right), .sg(t$ss_vegas_gain))
+    paste0(sprintf("<h3>%s</h3>", systems[sy]), head, tr_table(cols, left = 2, foot = rows$kind == "season"))
+  }, "")
+  th <- TR$thresholds[[pos]]
+  track <- paste0("<p class='s'>How our projections did once the games were played, week by week and season to date, against the Vegas-only baseline (a regression on the betting lines alone, refit each week on earlier games and scored on the same lines). ",
+                  sprintf("Boom = %s, bust = under %s points.", if (pos == "DEF") paste0(th["boom"], "+") else paste("over", th["boom"]), th["bust"]),
+                  bf_note, " One season is a small sample: the long-run edge is in the Back-test tab.</p>", paste(sec, collapse = ""))
+  ## vs Sleeper / ESPN (ranks, ESPN standard)
+  w <- wk[wk$system == ext_system, ]; t <- tot[tot$system == ext_system, ]
+  srcs <- c(sleeper = "Sleeper", espn = "ESPN")[c("top12_sleeper", "top12_espn") %in% names(w)]
+  ext <- if (!length(srcs) || !nrow(w)) "<p class='s'>No Sleeper / ESPN rankings stored yet: the daily refresh saves them before each kickoff from this week on.</p>" else {
+    w <- w[order(w$week), ]; rows <- dplyr::bind_rows(w, dplyr::mutate(t, week = NA_integer_, kind = "season"))
+    lab <- c(paste("Week", rows$week[-nrow(rows)]), "Season")
+    how <- TR$ext_how[TR$ext_how$pos == pos, ]
+    how_lab <- vapply(rows$week, function(x) if (is.na(x)) "" else { h <- how[how$week == x, ]; if (!nrow(h)) "—" else
+      if (all(h$how == "pre-kickoff snapshot")) "before kickoff" else if (all(h$how != "pre-kickoff snapshot")) "pulled after" else "mixed" }, "")
+    cols <- list(list(h = "Week", v = lab), list(h = "Their ranks", v = how_lab, tip = "before kickoff = the last snapshot before each game; pulled after = their final pre-game projections downloaded after the week (backfilled weeks)"),
+                 list(h = "Our top 12", v = .f(rows$top12_ours)))
+    for (s in names(srcs)) {
+      d <- rows[[paste0("top12_ours_vs_", s)]] - rows[[paste0("top12_", s)]]
+      cols <- c(cols, list(list(h = paste(srcs[s], "top 12"), v = .f(rows[[paste0("top12_", s)]]), tip = paste("average actual points of", srcs[s], "'s top 12")),
+                           list(h = paste("Δ per start vs", srcs[s]), v = .sg(d), cls = .cls(d), tip = paste("points per starting slot gained by using our top 12 instead of", srcs[s], "'s (same teams)")),
+                           list(h = "Calls", v = ifelse(is.na(rows[[paste0("ss_", s, "_calls")]]), "—", rows[[paste0("ss_", s, "_calls")]]), tip = paste("pairs of teams we and", srcs[s], "ranked in opposite order")),
+                           list(h = "Ours right", v = .pc(rows[[paste0("ss_", s, "_right")]])),
+                           list(h = "Pts per call", v = .sg(rows[[paste0("ss_", s, "_gain")]]), cls = .cls(rows[[paste0("ss_", s, "_gain")]]))))
+    }
+    cols <- c(cols, list(list(h = "Vegas-only top 12", v = .f(rows$top12_vegas))))
+    heads <- vapply(names(srcs), function(s) sprintf("Using our rankings instead of <b>%s</b>'s gained <b>%s points per starting slot per week</b>; when the two disagreed on which of two %s to start (%s calls), our pick scored more <b>%s</b> of the time (%s pts per call).",
+                                                     srcs[s], .sg(t[[paste0("top12_ours_vs_", s)]] - t[[paste0("top12_", s)]]), if (pos == "DEF") "D/STs" else "kickers",
+                                                     format(t[[paste0("ss_", s, "_calls")]], big.mark = ","), .pc(t[[paste0("ss_", s, "_right")]]), .sg(t[[paste0("ss_", s, "_gain")]])), "")
+    cd <- dplyr::bind_rows(lapply(c(vegas = "vegas", names(srcs)), function(s) {
+      o <- if (s == "vegas") w$top12_ours else w[[paste0("top12_ours_vs_", s)]]
+      g <- o - w[[paste0("top12_", s)]]; k <- !is.na(g)                    # a source's line starts at its first week with data
+      tibble::tibble(week = w$week[k], key = rep(s, sum(k)), cum = cumsum(g[k])) }))
+    paste0(sprintf("<p class='s'>Most players set their lineups from Sleeper's or ESPN's rankings. This compares <b>rankings</b> (who to start), in ESPN standard scoring, %s: their projections re-scored into ESPN standard (Sleeper's %s from its projected stats), ranked, and only the rank kept.%s</p>",
+                   wlab(sort(w$week)), if (pos == "DEF") "D/STs" else "kickers", bf_note),
+           "<p class='s'>", paste(heads, collapse = "<br>"), "</p>",
+           "<h3>Points gained per starting slot, season total</h3>", track_chart(cd),
+           tr_table(cols, left = 2, foot = rows$kind == "season"))
+  }
+  list(track = track, ext = ext)
+}
+TRACK_CSS <- '
+.track td.ltxt{text-align:left}.track tr.tr-season td{font-weight:700;border-top:2px solid var(--fg,#222)}
+.track td.gain{background:var(--t2,#e0f3e6)}.track td.loss{background:var(--t5,#fbe3e3)}
+.tc{margin:.4rem 0 1rem;max-width:100%;overflow-x:auto}.tc-legend{display:flex;gap:14px;font-size:12.5px;margin:0 0 4px;color:var(--fg,#222)}
+.tc-key i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
+:root{--tc1:#2a78d6;--tc2:#eb6834;--tc3:#1baf7a}
+@media (prefers-color-scheme: dark){:root{--tc1:#3987e5;--tc2:#d95926;--tc3:#199e70}}
+.tc-s1{stroke:var(--tc1);fill:var(--tc1);background:var(--tc1)}.tc-s2{stroke:var(--tc2);fill:var(--tc2);background:var(--tc2)}.tc-s3{stroke:var(--tc3);fill:var(--tc3);background:var(--tc3)}
+.tc-line{fill:none;stroke-width:2;stroke-linejoin:round}.tc-dot{stroke:var(--bg,#fff);stroke-width:2}
+.tc-grid{stroke:var(--line,#ddd);stroke-width:1}.tc-zero{stroke:var(--muted,#888)}.tc-ax{font-size:11px;fill:var(--muted,#666)}
+.tc-lab{font-size:12px;fill:var(--fg,#222)}'
+SITE_CSS <- paste0(SITE_CSS, TRACK_CSS)

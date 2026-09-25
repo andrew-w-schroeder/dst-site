@@ -198,6 +198,11 @@ tabs <- c(list(Compare = paste0(
     paste0(imap_chr(split(feature_gloss, feature_gloss$section), ~ sprintf("<details><summary>%s</summary>%s</details>", esc(.y),
       html_table(.x %>% transmute(Feature = term, Definition = definition, `In model for` = ifelse(nzchar(used_in), used_in, "—")), left = 99, tips = FALSE))), collapse = ""))))
 
+# Track record + vs Sleeper / ESPN tabs (62_track_record.R), before the Glossary
+TR_F <- track_file(PROJ_DIR, SEASON)
+if (file.exists(TR_F)) { tt <- tryCatch(track_tabs(readRDS(TR_F), "DEF", setNames(map_chr(parts, ~ .x$SC$label), names(parts)), unit = "D/ST"),
+                                        error = function(e) { message("track record tabs skipped: ", conditionMessage(e)); NULL })
+  if (!is.null(tt)) tabs <- append(tabs, list(`Track record` = tt$track, `vs Sleeper / ESPN` = tt$ext), after = length(tabs) - 1) }
 css <- ':root{--bg:#fff;--fg:#1d1d1f;--muted:#666;--line:#ddd;--head:#f3f3f3;--top:#e3f4e8;--bot:#fbe6e6;--accent:#1f5fbf;--rng80:#c9dcf5;--rng50:#6f9ee0}
 @media (prefers-color-scheme: dark){:root{--bg:#141414;--fg:#e8e8e8;--muted:#9a9a9a;--line:#333;--head:#222;--top:#17351f;--bot:#3a1a1a;--accent:#7fb0ff;--rng80:#26395a;--rng50:#4f7fc4}}
 body{font-family:system-ui,sans-serif;max-width:1250px;margin:1.5rem auto;padding:0 16px;color:var(--fg);background:var(--bg)}

@@ -101,10 +101,12 @@ sys_table <- function(sy) {
     `Range bar` = range_bar(p[[paste0("q10_", sy)]], p[[paste0("q25_", sy)]], p[[paste0("q75_", sy)]], p[[paste0("q90_", sy)]], p[[paste0("proj_", sy)]]),
     `P(boom)` = pct(p[[paste0("p_boom_", sy)]]), `P(bust)` = pct(p[[paste0("p_bust_", sy)]]), `P(top N)` = pct(p[[paste0("p_top_", sy)]]),
     `E[FGA]` = f1(p$e_fga, 2), `E[50+]` = f1(p$e_a_50p, 2), `E[XP]` = f1(p$e_xp, 2), `P(make) 40s / 50+` = paste0(pct(p$p_40s), " / ", pct(p$p_50p)),
-    `Career FG%` = pct(p$k_fg_pct), `FG% OE` = if ("k_fgoe" %in% names(p)) ifelse(is.na(p$k_fgoe), "", sprintf("%+.1f%%", 100 * p$k_fgoe)) else "", `Career 50+%` = pct(p$k_fg50_pct), `Career XP%` = pct(p$k_xp_pct), `Career FGA` = p$k_career_fga,
+    `Career FG%` = pct(p$k_fg_pct), `FG% OE` = { v <- if ("k_fgoe_disp" %in% names(p)) p$k_fgoe_disp else if ("k_fgoe" %in% names(p)) p$k_fgoe else rep(NA_real_, nrow(p))
+                ifelse(is.na(v), "", sprintf("%+.1f%%", 100 * v)) }, `Career 50+%` = pct(p$k_fg50_pct), `Career XP%` = pct(p$k_xp_pct), `Career FGA` = p$k_career_fga,
     `Coach GROE` = if ("c_groe" %in% names(p)) sprintf("%+.1f%%", 100 * p$c_groe) else sprintf("%+.1f%%", 100 * p$c_go_oe), Inj = coalesce(p$injury, ""))
 }
-tip["FG% OE"] <- "FG% over expected: decayed field-goal makes above the league's expected make rate for each kick's distance, roof and weather, per attempt (recent seasons count more), shrunk toward 0 for kickers with few attempts. +2% = makes 2 more of every 100 kicks than an average kicker would in the same spots."
+tip["FG% OE"] <- paste0("FG% over expected: decayed field-goal makes above the league's expected make rate for each kick's distance, roof and weather, per attempt (recent seasons count more), shrunk toward 0 for kickers with few attempts. +2% = makes 2 more of every 100 kicks than an average kicker would in the same spots.",
+  if ("k_fgoe_ver" %in% names(pred)) paste0(" Version shown: ", c(kicker_fgoe = "original", kicker_fgoe2 = "v2 (recency-weighted league baseline, wind bands, rain, snow)", kicker_fgoe2r = "v2 with faster decay")[pred$k_fgoe_ver[1]], " — the one the model uses.") else "")
 tip[c("Career FG%", "Career 50+%", "Career XP%", "Career FGA", "Coach GROE")] <- c(tip["k_fg_pct"], tip["k_fg50_pct"], tip["k_xp_pct"],
   "Career FG attempts before this game (nflverse pbp since 2004).", if (!is.na(tip["c_groe"])) tip["c_groe"] else tip["c_go_oe"])
 tip[c("ESPN proj", "Dec proj", "Avg rank", "Rank spread", "Kickoff", DLAB, DLAB_IMP, "Tier", "ESPN tier", "Dec tier", "Trend", "Gust", "Rain", "Kicker")] <- c(
@@ -128,6 +130,9 @@ cmp_tbl <- cmp_tbl %>% mutate(`ESPN proj` = f1(cmp$proj_espn, 2), `ESPN rank` = 
   `Avg rank` = f1(cmp$avg_rank), `Rank spread` = abs(cmp$rank_espn - cmp$rank_dec), `ESPN P(top N)` = pct(cmp$p_top_espn),
   `Dec P(top N)` = pct(cmp$p_top_dec), `E[50+]` = f1(cmp$e_a_50p, 2), Inj = coalesce(cmp$injury, ""))
 tabs <- c("Compare", SC$espn$label, SC$dec$label, "Back-test", "Glossary")
+TR_F <- track_file(PROJ_DIR, SEASON)
+tt <- if (file.exists(TR_F)) tryCatch(track_tabs(readRDS(TR_F), "K", c(espn = SC$espn$label, dec = SC$dec$label), unit = "kicker"),
+                                      error = function(e) { message("track record tabs skipped: ", conditionMessage(e)); NULL }) else NULL
 te_c <- tiers(cmp$proj_espn)$tier; td_c <- tiers(cmp$proj_dec)$tier
 pos_cls <- tier_cls(round((te_c + td_c) / 2), k = 6)                                                 # Kicker: average of the two tiers
 sys_html <- function(sy) { t <- sys_table(sy)
@@ -139,7 +144,8 @@ panes <- c(paste0("<p class='s'>Colours follow the tiers: dark green = tier 1, l
                              cell_cls = list(Kicker = pos_cls, `ESPN rank` = tier_cls(te_c, k = 6), `Dec rank` = tier_cls(td_c, k = 6),
                                              Wind = wind_c[oc], Gust = gust_c[oc], Rain = rain_c[oc]))),
            sys_html("espn"), sys_html("dec"),
-           P$backtest_html, html_table(glossary))
+           if (!is.null(tt)) c(tt$track, tt$ext), P$backtest_html, html_table(glossary))
+if (!is.null(tt)) tabs <- c("Compare", SC$espn$label, SC$dec$label, "Track record", "vs Sleeper / ESPN", "Back-test", "Glossary")
 
 ## ---- page ----
 status <- if (!refreshed) sprintf("Model run %s.", format(P$generated, "%a %b %d %H:%M")) else {

@@ -17,7 +17,7 @@ on:
     - cron: "0 23 * * 1"    # Mon 7:00 pm EDT: before Monday Night Football
   push:                      # a new weekly model was published from RStudio
     branches: [main]
-    paths: ["output/dst/**", "output/k/**", "data/lines/qb_override.csv"]   # new weekly model, or a QB override edited on GitHub
+    paths: ["output/dst/**", "output/k/**", "output/track/**", "data/lines/qb_override.csv"]   # new weekly model, or a QB override edited on GitHub
   workflow_dispatch:         # "Run workflow" button on the Actions tab
 
 permissions:
