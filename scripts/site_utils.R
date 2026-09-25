@@ -21,7 +21,7 @@ STADIUMS_SITE <- tibble::tribble(               # outdoor / retractable venues (
   "MAD01", 40.4531, -3.6883, "SAO00", -23.5453, -46.4742, "DUB00", 53.3607, -6.2512, "BER00", 52.5147, 13.2395)
 utc_time <- function(x) as.POSIXct(sub("Z$", "", x), format = "%Y-%m-%dT%H:%M:%S", tz = "UTC")
 iso_utc  <- function(t) format(t, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
-WX_COLS  <- c("pulled_at", "game_id", "kickoff", "temp", "wind", "gust", "precip_prob", "precip_in")
+WX_COLS  <- c("pulled_at", "game_id", "kickoff", "temp", "wind", "gust", "precip_prob", "precip_in", "precip_max")   # precip_max added 2026-09-25 (older rows NA)
 
 # this week's games from the nflverse schedule (roof, stadium, kickoff in UTC)
 week_games <- function(season, week) {
@@ -37,7 +37,7 @@ week_games <- function(season, week) {
                  home_qb_id = g$home_qb_id, home_qb_name = g$home_qb_name, away_qb_id = g$away_qb_id, away_qb_name = g$away_qb_name)
 }
 
-wx_fetch1 <- function(lat, lon, ko) {          # mean over kickoff hour + 2 h; max gust / rain chance; total rain
+wx_fetch1 <- function(lat, lon, ko) {          # temp / wind: mean over kickoff hour + 2 h; gust: max. Rain: 1 h before to 3 h after kickoff
   d <- format(ko, "%Y-%m-%d", tz = "America/New_York"); hr <- as.integer(format(ko, "%H", tz = "America/New_York"))
   url <- sprintf(paste0("https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f",
                         "&hourly=temperature_2m,wind_speed_10m,wind_gusts_10m,precipitation_probability,precipitation",
@@ -45,16 +45,18 @@ wx_fetch1 <- function(lat, lon, ko) {          # mean over kickoff hour + 2 h; m
                  lat, lon, d, d)
   js <- tryCatch(jsonlite::fromJSON(url), error = function(e) NULL)
   if (is.null(js)) return(NULL)
-  h <- js$hourly; idx <- which(as.integer(substr(h$time, 12, 13)) %in% hr:(hr + 2))
+  h <- js$hourly; hh <- as.integer(substr(h$time, 12, 13))
+  idx <- which(hh %in% hr:(hr + 2)); ir <- which(hh %in% (hr - 1):(hr + 3))     # game window / rain window (a wet field matters too)
   if (!length(idx)) return(NULL)
-  mx <- function(v) if (is.null(v) || all(is.na(v[idx]))) NA_real_ else max(v[idx], na.rm = TRUE)
+  mx <- function(v, i = idx) if (is.null(v) || all(is.na(v[i]))) NA_real_ else max(v[i], na.rm = TRUE)
   tibble::tibble(temp = round(mean(h$temperature_2m[idx])), wind = round(mean(h$wind_speed_10m[idx])), gust = round(mx(h$wind_gusts_10m)),
-                 precip_prob = round(mx(h$precipitation_probability)), precip_in = round(sum(h$precipitation[idx], na.rm = TRUE), 2))
+                 precip_prob = round(mx(h$precipitation_probability, ir)), precip_in = round(sum(h$precipitation[ir], na.rm = TRUE), 2),
+                 precip_max = round(mx(h$precipitation, ir), 3))
 }
 
 read_wx_hist <- function(file) {
   if (!file.exists(file)) return(tibble::tibble(pulled_at = character(), game_id = character(), kickoff = character(), temp = numeric(),
-                                                wind = numeric(), gust = numeric(), precip_prob = numeric(), precip_in = numeric()))
+                                                wind = numeric(), gust = numeric(), precip_prob = numeric(), precip_in = numeric(), precip_max = numeric()))
   h <- tibble::as_tibble(utils::read.csv(file, stringsAsFactors = FALSE, colClasses = c(pulled_at = "character", game_id = "character", kickoff = "character")))
   for (v in setdiff(WX_COLS, names(h))) h[[v]] <- NA_real_
   h[WX_COLS]
@@ -79,20 +81,27 @@ wx_update <- function(file, games, now, min_gap = 30, skip = nzchar(Sys.getenv("
 }
 # newest forecast pulled before kickoff, per game (started games stay frozen at their last pre-kickoff forecast)
 wx_latest <- function(hist) {
-  if (!nrow(hist)) return(tibble::tibble(game_id = character(), temp = numeric(), wind = numeric(), gust = numeric(), precip_prob = numeric(), precip_in = numeric(), wx_time = as.POSIXct(character())))
+  if (!nrow(hist)) return(tibble::tibble(game_id = character(), temp = numeric(), wind = numeric(), gust = numeric(), precip_prob = numeric(), precip_in = numeric(), precip_max = numeric(), wx_time = as.POSIXct(character())))
   h <- dplyr::mutate(hist, t = utc_time(pulled_at), ko = utc_time(kickoff))
   h <- h[!is.na(h$t) & h$t < h$ko, ]
   h <- dplyr::ungroup(dplyr::slice_max(dplyr::group_by(h, game_id), t, n = 1, with_ties = FALSE))
-  dplyr::transmute(h, game_id, temp, wind, gust, precip_prob, precip_in, wx_time = t)
+  dplyr::transmute(h, game_id, temp, wind, gust, precip_prob, precip_in, precip_max = dplyr::coalesce(precip_max, precip_in / 3), wx_time = t)   # old rows: 3-h total / 3
 }
-# compact label: "64° · 8 mph (g 17) · 20% rain, 0.05 in"
-rain_in <- function(x) ifelse(is.na(x), "", ifelse(x > 0 & x < 0.01, "<0.01 in", sprintf("%.2f in", x)))
-wx_label <- function(indoor, temp, wind, gust, precip_prob, precip_in = NA) {
+# Rain intensity from the peak hourly rate in the rain window (NWS: light < 0.10 in/h, moderate 0.10–0.30, heavy > 0.30).
+# The forecast amount is one best-guess run, so "60% chance, light" is common; the chance says whether it rains at all.
+rain_level <- function(mx) ifelse(is.na(mx), NA_character_, ifelse(mx < 0.01, "", ifelse(mx < 0.10, "light", ifelse(mx < 0.30, "moderate", "heavy"))))
+RAIN_HIGH <- 50                                   # % chance that counts as "likely"
+rain_cls <- function(prob, mx) { lv <- rain_level(mx)
+  ifelse(!is.na(prob) & prob >= RAIN_HIGH & lv %in% "heavy", "wx2", ifelse(!is.na(prob) & prob >= RAIN_HIGH & lv %in% "moderate", "wx1", "")) }
+wind_cls <- function(x) ifelse(is.na(x), "", ifelse(x > 25, "wx2", ifelse(x > 15, "wx1", "")))     # sustained wind or gust, mph
+rain_txt <- function(prob, mx) ifelse(is.na(prob), "", paste0(round(prob), "% rain", ifelse(is.na(rain_level(mx)) | !nzchar(coalesce(rain_level(mx), "")), "", paste0(" (", rain_level(mx), ")"))))
+wspan <- function(txt, cls) ifelse(nzchar(cls), sprintf('<span class="%s">%s</span>', cls, txt), txt)
+# compact label: "64° · 8 mph (g 17) · 60% rain (moderate)"; html = TRUE colours wind / gust > 15 / 25 mph and likely moderate / heavy rain
+wx_label <- function(indoor, temp, wind, gust, precip_prob, precip_max = NA, html = FALSE) {
+  w <- paste0(round(wind), " mph"); g <- ifelse(is.na(gust), "", paste0("(g ", round(gust), ")")); r <- rain_txt(precip_prob, precip_max)
+  if (html) { w <- wspan(w, wind_cls(wind)); g <- ifelse(nzchar(g), wspan(g, wind_cls(gust)), g); r <- ifelse(nzchar(r), wspan(r, rain_cls(precip_prob, precip_max)), r) }
   ifelse(indoor %in% 1, "indoor", ifelse(is.na(wind), "—",
-    paste0(ifelse(is.na(temp), "", paste0(round(temp), "° · ")), round(wind), " mph",
-           ifelse(is.na(gust), "", paste0(" (g ", round(gust), ")")),
-           ifelse(is.na(precip_prob), "", paste0(" · ", round(precip_prob), "% rain")),
-           ifelse(is.na(precip_in), "", paste0(ifelse(is.na(precip_prob), " · ", ", "), rain_in(precip_in))))))
+    paste0(ifelse(is.na(temp), "", paste0(round(temp), "° · ")), w, ifelse(nzchar(g), paste0(" ", g), ""), ifelse(nzchar(r), paste0(" · ", r), ""))))
 }
 
 ## ---- Tiers: optimal 1-D grouping (Jenks natural breaks by dynamic programming) ----
@@ -109,36 +118,48 @@ tiers <- function(x, k = 6, clear = NULL) {
   list(tier = tier, gap_in = gap_in, clear = if (is.null(clear)) rep(NA, k) else gap_in > clear)
 }
 
+# Cell colour by tier: 1 = dark green, 2 = light green, second-to-last = light red, last = dark red
+tier_cls <- function(tier, k = max(tier, na.rm = TRUE)) ifelse(tier == 1, "t1", ifelse(tier == 2, "t2", ifelse(tier == k, "t6", ifelse(tier == k - 1, "t5", ""))))
+
 ## ---- Projection history + dotted trend sparkline ----
-PH_COLS <- c("model", "season", "week", "system", "team", "time", "kind", "proj")
+PH_COLS <- c("model", "season", "week", "system", "team", "time", "kind", "proj", "implied")   # implied added 2026-09-25 (older rows NA)
 read_ph <- function(file) {
   if (!file.exists(file)) return(tibble::tibble(model = character(), season = integer(), week = integer(), system = character(), team = character(),
-                                                time = character(), kind = character(), proj = numeric()))
-  tibble::as_tibble(utils::read.csv(file, stringsAsFactors = FALSE, colClasses = c(model = "character", system = "character", team = "character", time = "character", kind = "character")))
+                                                time = character(), kind = character(), proj = numeric(), implied = numeric()))
+  h <- tibble::as_tibble(utils::read.csv(file, stringsAsFactors = FALSE, colClasses = c(model = "character", system = "character", team = "character", time = "character", kind = "character")))
+  if (!"implied" %in% names(h)) h$implied <- NA_real_
+  h
 }
-# base = weekly-run projections (added once per week at the model's fit time), cur = this refresh
-ph_update <- function(file, model, season, week, fit_time, base, cur, now) {
+# base = weekly-run projections (added ONCE per week, at the first weekly run's fit time: a mid-week rerun of the model
+# does not replace it, so Δ columns and the trend's open dot always refer to the first (Tuesday) run), cur = this refresh
+ph_update <- function(file, model, season, week, fit_time, base, cur, now) {   # base / cur: system, team, proj [, implied]
   ph <- read_ph(file)
   has_base <- any(ph$model == model & ph$season == season & ph$week == week & ph$kind == "weekly")
   add <- dplyr::bind_rows(if (!has_base) dplyr::mutate(base, model = model, season = season, week = week, time = iso_utc(fit_time), kind = "weekly"),
                           dplyr::mutate(cur, model = model, season = season, week = week, time = iso_utc(now), kind = "refresh"))
+  if (!"implied" %in% names(add)) add$implied <- NA_real_
   ph <- dplyr::bind_rows(ph, add[PH_COLS]); dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
   utils::write.csv(ph, file, row.names = FALSE)
   ph[ph$model == model & ph$season == season & ph$week == week, ]
 }
-# one point for the weekly run + one per (Eastern) day the page was refreshed (that day's last value)
+# the week's baseline = the first weekly run: proj / implied per system × team + its time (for "Δ since Tue")
+ph_base <- function(ph) {
+  w <- ph[ph$kind == "weekly", ]; w$t <- utc_time(w$time)
+  w <- dplyr::ungroup(dplyr::slice_min(dplyr::group_by(w, system, team), t, n = 1, with_ties = FALSE))
+  list(tbl = dplyr::transmute(w, system, team, proj_first = proj, implied_first = implied), time = if (nrow(w)) min(w$t) else as.POSIXct(NA))
+}
+# one point for the weekly run + one per refresh
 trend_points <- function(ph_team) {
   ph_team$t <- utc_time(ph_team$time); ph_team <- ph_team[order(ph_team$t), ]
   wk <- ph_team[ph_team$kind == "weekly", ][1, ]
   rf <- ph_team[ph_team$kind == "refresh", ]
-  rf$day <- format(rf$t, "%Y-%m-%d", tz = "America/New_York")
-  rf <- dplyr::ungroup(dplyr::slice_max(dplyr::group_by(rf, day), t, n = 1, with_ties = FALSE))
   dplyr::bind_rows(if (nrow(wk) && !is.na(wk$proj)) dplyr::mutate(wk, lab = paste0("weekly run ", format(wk$t, "%a %b %d", tz = "America/New_York"))),
-                   dplyr::mutate(rf, lab = format(t, "%a %b %d", tz = "America/New_York")))
+                   dplyr::mutate(rf, lab = sub(" 0", " ", format(t, "%a %b %d %I:%M %p", tz = "America/New_York"))))
 }
-sparkline <- function(pts, w = 96, h = 24, min_span = 1) {
+sparkline <- function(pts, w = NULL, h = 24, min_span = 1) {
   if (is.null(pts) || nrow(pts) < 1) return("")
   v <- pts$proj; n <- length(v); lo <- min(v); hi <- max(v)
+  if (is.null(w)) w <- max(96, min(180, 10 + 7 * (n - 1)))            # grows with the number of refreshes
   if (hi - lo < min_span) { mid <- (hi + lo) / 2; lo <- mid - min_span / 2; hi <- mid + min_span / 2 }
   xs <- if (n == 1) w / 2 else 5 + (seq_len(n) - 1) * (w - 10) / (n - 1)
   ys <- h - 4 - (v - lo) / (hi - lo) * (h - 8)
@@ -146,7 +167,7 @@ sparkline <- function(pts, w = 96, h = 24, min_span = 1) {
   line <- if (n > 1) sprintf('<polyline points="%s" fill="none" stroke="%s" stroke-width="1.5" stroke-dasharray="3,2"/>',
                              paste(sprintf("%.1f,%.1f", xs, ys), collapse = " "), col) else ""
   dots <- paste(sprintf('<circle cx="%.1f" cy="%.1f" r="%s" fill="%s"%s><title>%s: %.2f</title></circle>', xs, ys,
-                        ifelse(pts$kind == "weekly", "2.6", "2.2"), ifelse(pts$kind == "weekly", "var(--bg)", col),
+                        ifelse(pts$kind == "weekly", "2.6", if (n > 12) "1.7" else "2.2"), ifelse(pts$kind == "weekly", "var(--bg)", col),
                         ifelse(pts$kind == "weekly", sprintf(' stroke="%s" stroke-width="1.3"', col), ""), pts$lab, v), collapse = "")
   sprintf('<svg class="spark" width="%d" height="%d" viewBox="0 0 %d %d" role="img"><title>%s</title>%s%s</svg>', w, h, w, h,
           paste(sprintf("%s: %.2f", pts$lab, v), collapse = "; "), line, dots)
@@ -223,5 +244,20 @@ SITE_CSS <- '
   box-shadow:0 2px 10px rgba(0,0,0,.18);font-weight:400;line-height:1.35}
 .tt:hover .tip,.tt:focus .tip{display:block}
 tr.tb-clear td{border-top:3px solid var(--fg,#222)}tr.tb-soft td{border-top:2px dashed var(--muted,#888)}
-tr.tier-odd td:not(.top):not(.bot){background:rgba(127,127,127,.08)}
-svg.spark{vertical-align:middle;overflow:visible}'
+tr.tier-odd td:not(.top):not(.bot):not(.t1):not(.t2):not(.t5):not(.t6):not(.wx1):not(.wx2){background:rgba(127,127,127,.08)}
+svg.spark{vertical-align:middle;overflow:visible}
+:root{--t1:#9fd8b0;--t2:#e0f3e6;--t5:#fbe3e3;--t6:#f2b6b6;--wx1:#fbd5d5;--wx2:#f19a9a}
+@media (prefers-color-scheme: dark){:root{--t1:#1f6b3a;--t2:#173a24;--t5:#3d1c1c;--t6:#6e2727;--wx1:#5a2a2a;--wx2:#8f2f2f}}
+td.t1{background:var(--t1);font-weight:700}td.t2{background:var(--t2);font-weight:600}td.t5{background:var(--t5)}td.t6{background:var(--t6)}
+span.wx1,span.wx2{border-radius:3px;padding:0 3px}span.wx1{background:var(--wx1)}span.wx2{background:var(--wx2);font-weight:600}
+td.wx1{background:var(--wx1)}td.wx2{background:var(--wx2);font-weight:600}
+td.stk,th.stk{position:sticky;z-index:2}td.stk{background:var(--bg,#fff)}th.stk{z-index:4}
+tr.tier-odd td.stk.stk:not(.top):not(.bot):not(.t1):not(.t2):not(.t5):not(.t6){background:linear-gradient(rgba(127,127,127,.08),rgba(127,127,127,.08)),var(--bg,#fff)}
+td.stk.t1{background:var(--t1)}td.stk.t2{background:var(--t2)}td.stk.t5{background:var(--t5)}td.stk.t6{background:var(--t6)}
+td.stk-last,th.stk-last{box-shadow:2px 0 3px -1px rgba(0,0,0,.25)}'
+# Sticky first columns: tables with data-stick="n" keep their first n columns in view when scrolled sideways.
+# Offsets are measured in the browser (column widths vary), and again when a tab is shown or the window resized.
+SITE_JS <- 'function stickCols(){document.querySelectorAll("table[data-stick]").forEach(t=>{if(!t.offsetParent)return;
+const n=+t.dataset.stick,hr=t.tHead.rows[0];let left=0;for(let c=0;c<n&&c<hr.cells.length;c++){const w=hr.cells[c].getBoundingClientRect().width;
+[...t.rows].forEach(r=>{const x=r.cells[c];if(!x)return;x.classList.add("stk");x.classList.toggle("stk-last",c==n-1);x.style.left=left+"px"});left+=w}})}
+window.addEventListener("load",stickCols);window.addEventListener("resize",stickCols);'

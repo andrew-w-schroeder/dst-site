@@ -199,7 +199,7 @@ for (s in names(bundles)) {
   info <- bind_rows(lines %>% transmute(team = home, ko, line_time, n_books, locked, src), lines %>% transmute(team = away, ko, line_time, n_books, locked, src))
   parts$pred <- parts$pred %>% select(-any_of(c(dyn_cols, names(base)[-1], names(info)[-1], "rank"))) %>%
     left_join(now, by = "team") %>% left_join(base, by = "team") %>% left_join(info, by = "team") %>%
-    left_join(wx %>% select(game_id, wx_temp = temp, wx_wind = wind, wx_gust = gust, wx_precip_prob = precip_prob, wx_precip_in = precip_in), by = "game_id") %>%
+    left_join(wx %>% select(game_id, wx_temp = temp, wx_wind = wind, wx_gust = gust, wx_precip_prob = precip_prob, wx_precip_in = precip_in, wx_precip_max = precip_max), by = "game_id") %>%
     arrange(desc(proj)) %>% mutate(rank = row_number(), .before = 1)
   if (!is.null(starters)) {                                 # opponent QB shown on the page + hover text
     pq <- starters[match(parts$pred$opp, starters$team), ]
@@ -221,12 +221,18 @@ for (s in names(bundles)) {
                   with(parts$pred[which.max(abs(parts$pred$proj - parts$pred$proj_base)), ], sprintf("%s %+.2f", team, proj - proj_base))))
 }
 
-## ---- 4b. Projection history → dotted trend line per team (weekly run + one point per refresh day) ----
+## ---- 4b. Projection history → dotted trend line per team (weekly run + one point per refresh) ----
 ph <- ph_update(PH_CSV, "dst", SEASON, WEEK, fit_time = out_parts[[1]]$fit,
-                base = bind_rows(imap(out_parts, ~ tibble(system = .y, team = .x$parts$pred$team, proj = .x$parts$pred$proj_base))),
-                cur  = bind_rows(imap(out_parts, ~ tibble(system = .y, team = .x$parts$pred$team, proj = .x$parts$pred$proj))), now = NOW)
+                base = bind_rows(imap(out_parts, ~ tibble(system = .y, team = .x$parts$pred$team, proj = .x$parts$pred$proj_base, implied = .x$parts$pred$implied_opp_base))),
+                cur  = bind_rows(imap(out_parts, ~ tibble(system = .y, team = .x$parts$pred$team, proj = .x$parts$pred$proj, implied = .x$parts$pred$implied_opp))), now = NOW)
+# Δ columns: always vs the week's FIRST weekly run (normally Tuesday); a mid-week model rerun does not reset them
+fb <- ph_base(ph)
 for (s in names(out_parts)) {
   p <- out_parts[[s]]$parts
+  f <- fb$tbl[fb$tbl$system == s, ]; i <- match(p$pred$team, f$team)
+  p$pred$proj_base <- coalesce(f$proj_first[i], p$pred$proj_base)
+  p$pred$implied_opp_base <- coalesce(f$implied_first[i], p$pred$implied_opp_base)
+  p$refresh$base_time <- if (is.na(fb$time)) p$refresh$model_fit else fb$time
   p$pred$trend_svg <- map_chr(p$pred$team, ~ sparkline(trend_points(ph[ph$system == s & ph$team == .x, ])))
   saveRDS(p, out_parts[[s]]$file)                                          # the published weekly parts stay untouched
 }

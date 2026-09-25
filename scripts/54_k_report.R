@@ -24,8 +24,10 @@ refreshed <- !is.null(P$refresh)
 SCRIPT_DIR <- local({ f <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE)); if (length(f)) dirname(normalizePath(f[1])) else file.path(PROJ_DIR, "scripts") })
 source(file.path(SCRIPT_DIR, "site_utils.R"))
 fit_time <- if (refreshed && !is.null(P$refresh$model_fit)) P$refresh$model_fit else P$generated
-DLAB <- sprintf("Δ since %s run", format(fit_time, "%a", tz = "America/New_York"))       # always vs the weekly run
-DLAB_IMP <- sprintf("Δ Imp since %s run", format(fit_time, "%a", tz = "America/New_York"))
+# Δ columns: always vs the week's FIRST weekly model run (normally Tuesday); a mid-week rerun does not reset them
+base_time <- if (refreshed && !is.null(P$refresh$base_time)) P$refresh$base_time else fit_time
+DLAB <- sprintf("Δ since %s", format(base_time, "%a", tz = "America/New_York"))
+DLAB_IMP <- sprintf("Δ Imp since %s", format(base_time, "%a", tz = "America/New_York"))
 
 ## ---- helpers ----
 esc <- function(x) { x <- as.character(x); x[is.na(x)] <- ""; x <- gsub("&", "&amp;", x); x <- gsub("<", "&lt;", x); x <- gsub(">", "&gt;", x); gsub('"', "&quot;", x) }
@@ -39,7 +41,7 @@ range_bar <- function(q10, q25, q75, q90, pj, lo = -2, hi = 22) {
   sprintf('<div class="rb" title="80%%: %.1f to %.1f · 50%%: %.1f to %.1f · proj %.2f"><span class="r80" style="left:%s%%;width:%s%%"></span><span class="r50" style="left:%s%%;width:%s%%"></span><span class="pj" style="left:%s%%"></span></div>',
           q10, q90, q25, q75, pj, sc(q10), sc(q90) - sc(q10), sc(q25), sc(q75) - sc(q25), sc(pj))
 }
-html_table <- function(df, raw = character(), id = "", row_cls = NULL, cell_cls = list()) {
+html_table <- function(df, raw = character(), id = "", row_cls = NULL, cell_cls = list(), stick = 0) {
   hdr <- paste0("<tr>", paste0(sprintf('<th title="%s" onclick="srt(this)">%s</th>', esc(coalesce(tip[names(df)], "")), esc(names(df))), collapse = ""), "</tr>")
   M <- as.matrix(df)
   body <- vapply(seq_len(nrow(df)), function(i) { r <- M[i, ]
@@ -48,7 +50,8 @@ html_table <- function(df, raw = character(), id = "", row_cls = NULL, cell_cls 
     for (cn in intersect(names(cell_cls), names(df))) { k <- which(names(df) == cn); if (nzchar(cell_cls[[cn]][i])) cls[k] <- trimws(paste(cls[k], cell_cls[[cn]][i])) }
     paste0(if (!is.null(row_cls) && nzchar(row_cls[i])) sprintf('<tr class="%s">', row_cls[i]) else "<tr>",
            paste0(ifelse(nzchar(cls), sprintf('<td class="%s">', cls), "<td>"), ifelse(names(df) %in% raw, r, esc(r)), "</td>", collapse = ""), "</tr>") }, "")
-  sprintf('<div class="tw"><table id="%s"><thead>%s</thead><tbody>%s</tbody></table></div>', id, hdr, paste(body, collapse = ""))
+  sprintf('<div class="tw"><table id="%s"%s><thead>%s</thead><tbody>%s</tbody></table></div>', id, if (stick > 0) sprintf(' data-stick="%d"', stick) else "",
+          hdr, paste(body, collapse = ""))
 }
 kickoff <- function(p) {
   ko <- if ("ko" %in% names(p)) p$ko else as.POSIXct(NA)
@@ -59,8 +62,13 @@ kickoff <- function(p) {
 if (!"locked" %in% names(pred)) pred$locked <- FALSE
 wind_lab <- ifelse(pred$indoor == 1, "indoor", paste0(round(pred$wind), ifelse(pred$wind_known == 1, "", "*")))
 gust_lab <- if ("wx_gust" %in% names(pred)) ifelse(pred$indoor == 1 | is.na(pred$wx_gust), "", as.character(round(pred$wx_gust))) else rep("", nrow(pred))
+rain_max <- if ("wx_precip_max" %in% names(pred)) pred$wx_precip_max else if ("wx_precip_in" %in% names(pred)) pred$wx_precip_in / 3 else rep(NA_real_, nrow(pred))
 rain_lab <- if ("wx_precip_prob" %in% names(pred)) ifelse(pred$indoor == 1 | is.na(pred$wx_precip_prob), "",
-                paste0(round(pred$wx_precip_prob), "%", if ("wx_precip_in" %in% names(pred)) ifelse(is.na(pred$wx_precip_in), "", paste0(" · ", rain_in(pred$wx_precip_in))) else "")) else rep("", nrow(pred))
+                paste0(round(pred$wx_precip_prob), "%", ifelse(nzchar(coalesce(rain_level(rain_max), "")), paste0(" · ", rain_level(rain_max)), ""))) else rep("", nrow(pred))
+# weather highlights: wind / gust > 15 mph light red, > 25 dark red; likely (50%+) moderate rain light red, heavy dark red
+wind_c <- ifelse(pred$indoor == 1, "", wind_cls(pred$wind))
+gust_c <- if ("wx_gust" %in% names(pred)) ifelse(pred$indoor == 1, "", wind_cls(pred$wx_gust)) else rep("", nrow(pred))
+rain_c <- if ("wx_precip_prob" %in% names(pred)) ifelse(pred$indoor == 1, "", rain_cls(pred$wx_precip_prob, rain_max)) else rep("", nrow(pred))
 # injury status from the refresh (starters.R): (Q) / (D) / (O) after the name; Out → ⚠ + likely replacement in the hover
 K_ABBR <- c(Out = "O", Doubtful = "D", Questionable = "Q", Suspended = "SUS", IR = "IR", PUP = "PUP", NFI = "NFI")
 k_badge <- function(p) if (!"k_status" %in% names(p)) "" else
@@ -73,7 +81,7 @@ why_tip <- function(p, sy) { w <- p[[paste0("why_", sy)]]; if (is.null(w)) retur
   tip_span(paste0(esc(p$kicker), k_badge(p)), paste0("<b>", esc(p$kicker), " (", p$team, ") — ", SC[[sy]]$label, " ", sprintf("%.2f", p[[paste0("proj_", sy)]]),
                                  "</b>", k_note(p), "\nWhat moves this projection vs an average kicker this week (points):\n", esc(w),
                                  "\n<i>Vegas lines excluded; each group set to this week's league average in turn.</i>")) }
-rank_cls <- function(r) ifelse(r <= 8, "top", ifelse(r >= 25, "bot", ""))
+rank_cls <- function(r) ifelse(r <= 8, "top", ifelse(r >= 25, "bot", ""))   # (unused since 2026-09-25: colours follow the tiers)
 opp_lab <- paste0(ifelse(pred$home == 1, "vs ", "@ "), pred$opp)
 
 ## ---- tabs ----
@@ -86,29 +94,30 @@ sys_table <- function(sy) {
   if (paste0("trend_svg_", sy) %in% names(p)) t$Trend <- p[[paste0("trend_svg_", sy)]]
   brk <- c(FALSE, tr$tier[-1] != tr$tier[-length(tr$tier)])
   attr(t, "row_cls") <- trimws(paste(ifelse(tr$tier %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tr$tier] %in% TRUE, "tb-clear", "tb-soft"), "")))
-  attr(t, "cell_cls") <- list(Rank = rank_cls(t$Rank), Kicker = rank_cls(t$Rank))
+  tc <- tier_cls(tr$tier, k = max(tr$tier))
+  attr(t, "cell_cls") <- list(Rank = tc, Kicker = tc, Wind = wind_c[o], Gust = gust_c[o], Rain = rain_c[o])
   t %>% mutate(
     `±` = f1(p[[paste0("pm_", sy)]], 2), `90% CI` = paste0(f1(p[[paste0("ci_lo_", sy)]]), "–", f1(p[[paste0("ci_hi_", sy)]])),
     `Range bar` = range_bar(p[[paste0("q10_", sy)]], p[[paste0("q25_", sy)]], p[[paste0("q75_", sy)]], p[[paste0("q90_", sy)]], p[[paste0("proj_", sy)]]),
-    `80% range` = paste0(f1(p[[paste0("q10_", sy)]]), "–", f1(p[[paste0("q90_", sy)]])),
     `P(boom)` = pct(p[[paste0("p_boom_", sy)]]), `P(bust)` = pct(p[[paste0("p_bust_", sy)]]), `P(top N)` = pct(p[[paste0("p_top_", sy)]]),
     `E[FGA]` = f1(p$e_fga, 2), `E[50+]` = f1(p$e_a_50p, 2), `E[XP]` = f1(p$e_xp, 2), `P(make) 40s / 50+` = paste0(pct(p$p_40s), " / ", pct(p$p_50p)),
-    `Career FG%` = pct(p$k_fg_pct), `Career 50+%` = pct(p$k_fg50_pct), `Career XP%` = pct(p$k_xp_pct), `Career FGA` = p$k_career_fga,
+    `Career FG%` = pct(p$k_fg_pct), `FG% OE` = if ("k_fgoe" %in% names(p)) ifelse(is.na(p$k_fgoe), "", sprintf("%+.1f%%", 100 * p$k_fgoe)) else "", `Career 50+%` = pct(p$k_fg50_pct), `Career XP%` = pct(p$k_xp_pct), `Career FGA` = p$k_career_fga,
     `Coach GROE` = if ("c_groe" %in% names(p)) sprintf("%+.1f%%", 100 * p$c_groe) else sprintf("%+.1f%%", 100 * p$c_go_oe), Inj = coalesce(p$injury, ""))
 }
+tip["FG% OE"] <- "FG% over expected: decayed field-goal makes above the league's expected make rate for each kick's distance, roof and weather, per attempt (recent seasons count more), shrunk toward 0 for kickers with few attempts. +2% = makes 2 more of every 100 kicks than an average kicker would in the same spots."
 tip[c("Career FG%", "Career 50+%", "Career XP%", "Career FGA", "Coach GROE")] <- c(tip["k_fg_pct"], tip["k_fg50_pct"], tip["k_xp_pct"],
   "Career FG attempts before this game (nflverse pbp since 2004).", if (!is.na(tip["c_groe"])) tip["c_groe"] else tip["c_go_oe"])
 tip[c("ESPN proj", "Dec proj", "Avg rank", "Rank spread", "Kickoff", DLAB, DLAB_IMP, "Tier", "ESPN tier", "Dec tier", "Trend", "Gust", "Rain", "Kicker")] <- c(
   "ESPN projection.", "Decimal projection.", "Mean of the two ranks.",
   "|ESPN rank − Decimal rank|.", "Kickoff (Eastern). \U0001F512 = game started: frozen at the last pre-kickoff line.",
-  "Change in the projection since the weekly (Tuesday) model run — not since the previous refresh — from Vegas line and weather-forecast moves only.",
-  "Change in the team's implied points since the weekly model run.",
+  "Change in the projection since the week's first weekly model run (normally Tuesday) — not since the previous refresh, and not reset by a mid-week rerun — from Vegas line and weather-forecast moves only.",
+  "Change in the team's implied points since the week's first weekly model run (normally Tuesday).",
   "Natural-break tier (optimal 1-D grouping into 6 tiers; 1 = best). Solid line above a tier = the drop is bigger than the model's typical ± (clear break); dashed = softer break.",
   "ESPN tier (see Tier).", "Decimal tier (see Tier).",
-  "Projection over time: open dot = weekly model run, filled dots = one per day the page was refreshed (last value that day). Green = up since the weekly run, red = down. Hover a dot for date and value.",
-  "Forecast wind gust (mph, max over kickoff + 2 h; Open-Meteo). Display only: the model uses sustained wind.",
-  "Forecast chance of rain (%, max hourly over kickoff + 2 h) and expected rain (inches, total over those 3 hours); Open-Meteo. Display only: not a model input.",
-  "Hover or tap a kicker for what moves his projection vs an average kicker this week (Vegas lines excluded). Green = top 8, red = bottom 8. (Q) / (D) / (O) = injury status checked at each refresh (official report, Sleeper, Ourlads); \u26A0 = ruled out, hover for the likely replacement.")
+  "Projection over time: open dot = the week's first weekly model run (normally Tuesday), filled dots = one per page refresh. Green = up since then, red = down. Hover a dot for date, time and value.",
+  "Forecast wind gust (mph, max over kickoff + 2 h; Open-Meteo). Light red over 15 mph, dark red over 25. Display only: the model uses sustained wind.",
+  "Forecast chance of rain (max hourly) and intensity (peak hourly rate: light < 0.10 in/h, moderate 0.10–0.30, heavy > 0.30), from 1 h before to 3 h after kickoff; Open-Meteo. Light red = likely (50%+) moderate rain, dark red = likely heavy rain. Display only: not a model input.",
+  "Hover or tap a kicker for what moves his projection vs an average kicker this week (Vegas lines excluded). Colours follow the tiers: dark green = tier 1, light green = tier 2, light / dark red = the bottom two tiers. (Q) / (D) / (O) = injury status checked at each refresh (official report, Sleeper, Ourlads); \u26A0 = ruled out, hover for the likely replacement.")
 cmp <- pred %>% mutate(avg_rank = (rank_espn + rank_dec) / 2, opp_lab = opp_lab, ko_lab = kickoff(pred), wl = wind_lab) %>% arrange(avg_rank)
 oc <- match(cmp$team, pred$team)
 cmp_tbl <- cmp %>% transmute(Kicker = vapply(seq_len(nrow(cmp)), function(i) why_tip(cmp[i, ], "espn"), ""), Team = team, Opp = opp_lab, Kickoff = ko_lab, Wind = wl,
@@ -119,12 +128,16 @@ cmp_tbl <- cmp_tbl %>% mutate(`ESPN proj` = f1(cmp$proj_espn, 2), `ESPN rank` = 
   `Avg rank` = f1(cmp$avg_rank), `Rank spread` = abs(cmp$rank_espn - cmp$rank_dec), `ESPN P(top N)` = pct(cmp$p_top_espn),
   `Dec P(top N)` = pct(cmp$p_top_dec), `E[50+]` = f1(cmp$e_a_50p, 2), Inj = coalesce(cmp$injury, ""))
 tabs <- c("Compare", SC$espn$label, SC$dec$label, "Back-test", "Glossary")
-pos_cls <- rank_cls(ifelse(seq_len(nrow(cmp)) > nrow(cmp) - 8, 25, seq_len(nrow(cmp))))          # by average rank
+te_c <- tiers(cmp$proj_espn)$tier; td_c <- tiers(cmp$proj_dec)$tier
+pos_cls <- tier_cls(round((te_c + td_c) / 2), k = 6)                                                 # Kicker: average of the two tiers
 sys_html <- function(sy) { t <- sys_table(sy)
-  paste0("<p class='s'>", esc(SC[[sy]]$long), " · Tiers: natural breaks (solid line = clear drop, dashed = softer). Hover or tap a kicker for what drives the projection.</p>",
-         html_table(t, raw = c("Range bar", "Trend", "Kicker"), id = paste0("t_", sy), row_cls = attr(t, "row_cls"), cell_cls = attr(t, "cell_cls"))) }
-panes <- c(paste0("<p class='s'>Green = top 8 / red = bottom 8 (Kicker: by average rank). Hover or tap a kicker for what drives the ESPN projection.</p>",
-                  html_table(cmp_tbl, id = "t_cmp", raw = "Kicker", cell_cls = list(Kicker = pos_cls, `ESPN rank` = rank_cls(cmp$rank_espn), `Dec rank` = rank_cls(cmp$rank_dec)))),
+  paste0("<p class='s'>Tiers: natural breaks (solid line = clear drop, dashed = softer); dark green = tier 1, light green = tier 2, light / dark red = the bottom two tiers. Hover or tap a kicker for what drives the projection.</p>",
+         html_table(t, raw = c("Range bar", "Trend", "Kicker"), id = paste0("t_", sy), row_cls = attr(t, "row_cls"), cell_cls = attr(t, "cell_cls"), stick = 4),
+         "<p class='s'><b>Scoring:</b> ", esc(SC[[sy]]$long), "</p>") }
+panes <- c(paste0("<p class='s'>Colours follow the tiers: dark green = tier 1, light green = tier 2, light / dark red = the bottom two tiers (rank columns: that format's tier; Kicker: the average). Hover or tap a kicker for what drives the ESPN projection.</p>",
+                  html_table(cmp_tbl, id = "t_cmp", raw = "Kicker", stick = 4,
+                             cell_cls = list(Kicker = pos_cls, `ESPN rank` = tier_cls(te_c, k = 6), `Dec rank` = tier_cls(td_c, k = 6),
+                                             Wind = wind_c[oc], Gust = gust_c[oc], Rain = rain_c[oc]))),
            sys_html("espn"), sys_html("dec"),
            P$backtest_html, html_table(glossary))
 
@@ -155,7 +168,7 @@ td.top{background:#e3f4e8;font-weight:600}td.bot{background:#fbe6e6}
           SEASON, WEEK, status),
   '<div class="tabs">', paste0(sprintf('<button onclick="tab(%d)"%s>%s</button>', seq_along(tabs) - 1, ifelse(seq_along(tabs) == 1, ' class="on"', ""), tabs), collapse = ""), "</div>",
   paste0(sprintf('<div class="pane%s">%s</div>', ifelse(seq_along(panes) == 1, " on", ""), panes), collapse = ""),
-  '<script>function tab(i){document.querySelectorAll(".pane").forEach((p,j)=>p.classList.toggle("on",i==j));document.querySelectorAll(".tabs button").forEach((b,j)=>b.classList.toggle("on",i==j))}
+  '<script>', SITE_JS, 'function tab(i){document.querySelectorAll(".pane").forEach((p,j)=>p.classList.toggle("on",i==j));document.querySelectorAll(".tabs button").forEach((b,j)=>b.classList.toggle("on",i==j));stickCols()}
 function srt(th){const t=th.closest("table"),b=t.tBodies[0],i=[...th.parentNode.children].indexOf(th),d=th.dataset.d=th.dataset.d=="a"?"d":"a";
 const v=r=>{const s=r.children[i].innerText.replace(/[%+±*\\u{1F512}]/gu,"").trim();const n=parseFloat(s);return isNaN(n)?s:n};
 [...b.rows].sort((x,y)=>{const a=v(x),c=v(y);return (a>c?1:a<c?-1:0)*(d=="a"?1:-1)}).forEach(r=>b.appendChild(r))}</script></body></html>')

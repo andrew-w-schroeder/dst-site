@@ -1,16 +1,20 @@
 # Re-scores this week's D/ST projections with the latest sportsbook lines and publishes the page.
-# Times are UTC (GitHub cron has no time zones). EDT = UTC-4 until Nov 1 2026, then EST = UTC-5.
+# GitHub cron is UTC only. 46_dst_publish.R writes these lines each week from Eastern times (ET_SCHEDULE),
+# using the UTC offset of that week's Sunday, so the runs follow EDT / EST automatically.
 # GitHub may start a scheduled run 5-30 min late; games that have kicked off are locked at their
 # last pre-kickoff line, so a late run never uses in-game odds.
 name: DST refresh
 
 on:
   schedule:
-    - cron: "0 14 * * 2-6"   # Tue-Sat 14:00 UTC = 10:00 am EDT / 9:00 am EST
-    - cron: "30 22 * * 4"    # Thu 22:30 UTC = 6:30 pm EDT, before Thursday Night Football
-    - cron: "0 13 * * 0"     # Sun 13:00 UTC = 9:00 am EDT (before London games)
-    - cron: "45 15 * * 0"    # Sun 15:45 UTC = 11:45 am EDT, after inactives
-    - cron: "35 16 * * 0"    # Sun 16:35 UTC = 12:35 pm EDT / 11:35 am EST, last look before 1 pm kickoffs
+    - cron: "0 14 * * 2-6"  # Tue-Sat 10:00 am EDT: daily line movement
+    - cron: "30 22 * * 4"   # Thu 6:30 pm EDT: before Thursday Night Football
+    - cron: "0 13 * * 0"    # Sun 9:00 am EDT: before London games
+    - cron: "45 15 * * 0"   # Sun 11:45 am EDT: after inactives for the 1 pm games
+    - cron: "35 16 * * 0"   # Sun 12:35 pm EDT: last look before 1 pm kickoffs
+    - cron: "5 19 * * 0"    # Sun 3:05 pm EDT: after inactives for the 4:05 / 4:25 games
+    - cron: "15 23 * * 0"   # Sun 7:15 pm EDT: before Sunday Night Football
+    - cron: "0 23 * * 1"    # Mon 7:00 pm EDT: before Monday Night Football
   push:                      # a new weekly model was published from RStudio
     branches: [main]
     paths: ["output/dst/**", "output/k/**", "data/lines/qb_override.csv"]   # new weekly model, or a QB override edited on GitHub

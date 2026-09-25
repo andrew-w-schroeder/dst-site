@@ -50,9 +50,11 @@ swap_qbs <- function(b, starters, force = FALSE) {
   raw <- Q$raw[match(paste(te$game_id, te$team), paste(Q$raw$game_id, Q$raw$team)), ]
   new_id <- if (is.null(starters)) rep(NA_character_, nrow(raw)) else starters$qb_id[match(raw$opp, starters$team)]
   new_nm <- if (is.null(starters)) rep(NA_character_, nrow(raw)) else starters$qb_name[match(raw$opp, starters$team)]
-  changed <- !is.na(new_id) & (is.na(raw$opp_qb_id) | new_id != raw$opp_qb_id)
+  # games already played at the weekly run keep their rows exactly (their QB is known and the projection is locked)
+  locked <- if (is.null(Q$locked)) rep(FALSE, nrow(raw)) else raw$game_id %in% Q$locked
+  changed <- !locked & !is.na(new_id) & (is.na(raw$opp_qb_id) | new_id != raw$opp_qb_id)
   id <- ifelse(changed, new_id, raw$opp_qb_id)
-  for (i in which(if (force) !is.na(id) else changed)) {
+  for (i in which(if (force) !is.na(id) & !locked else changed)) {
     a <- Q$alt[Q$alt$team == raw$opp[i] & Q$alt$qb_id == id[i], ]
     if (!nrow(a)) a <- Q$alt[Q$alt$team == raw$opp[i] & Q$alt$qb_id == "NEW", ]
     p <- Q$pool[Q$pool$qb_id == id[i], ]

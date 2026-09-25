@@ -32,9 +32,11 @@ message("building combined report for ", SEASON, " week ", WEEK, ": ", paste(map
 ## ---- 2. Comparison table ----
 # Refreshed weeks (45_dst_refresh.R) carry kickoff times, lock flags and the weekly-run baseline in `pred`.
 refreshed <- !is.null(parts[[1]]$refresh)
-# Δ columns are always measured from the weekly (Tuesday) model run, not from the previous refresh
-DLAB <- if (refreshed) sprintf("Δ since %s run", format(parts[[1]]$refresh$model_fit, "%a", tz = "America/New_York")) else "Δ Proj"
-DLAB_OPP <- if (refreshed) sprintf("Δ Opp implied since %s run", format(parts[[1]]$refresh$model_fit, "%a", tz = "America/New_York")) else "Δ Opp implied"
+# Δ columns are always measured from the week's FIRST weekly model run (normally Tuesday), not from the previous refresh
+# and not from a mid-week model rerun
+BASE_TIME <- if (refreshed) (if (!is.null(parts[[1]]$refresh$base_time)) parts[[1]]$refresh$base_time else parts[[1]]$refresh$model_fit) else NA
+DLAB <- if (refreshed) sprintf("Δ since %s", format(BASE_TIME, "%a", tz = "America/New_York")) else "Δ Proj"
+DLAB_OPP <- if (refreshed) sprintf("Δ Opp implied since %s", format(BASE_TIME, "%a", tz = "America/New_York")) else "Δ Opp implied"
 esc <- function(x) { x <- gsub("&", "&amp;", as.character(x), fixed = TRUE); x <- gsub("<", "&lt;", x, fixed = TRUE); gsub('"', "&quot;", gsub(">", "&gt;", x, fixed = TRUE), fixed = TRUE) }
 why_tip <- function(team, proj, why, label) ifelse(is.na(why), esc(team), tip_span(esc(team),
   paste0("<b>", esc(team), " D/ST — ", label, " ", sprintf("%.2f", proj), "</b>\nWhat moves this projection vs an average D/ST this week (points):\n",
@@ -57,7 +59,7 @@ make_proj_tbl <- function(pred, html = FALSE, label = "") {       # same columns
   fmt0 <- function(x) as.character(as.integer(round(x)))
   t <- pred %>% transmute(Rank = rank, Team = team, Opp = paste0(ifelse(home == 1, "vs ", "@ "), opp), `Opp QB` = opp_qb_name,
                           Spread = spread, `Opp implied` = round(implied_opp, 1), Proj = round(proj, 2),
-                          `±` = sprintf("±%.1f", (ci_hi - ci_lo) / 2), `90% CI` = sprintf("%.1f–%.1f", ci_lo, ci_hi), `80% range` = paste(fmt0(q10), "to", fmt0(q90)),
+                          `±` = sprintf("±%.1f", (ci_hi - ci_lo) / 2), `90% CI` = sprintf("%.1f–%.1f", ci_lo, ci_hi),
                           `P(10+)` = sprintf("%.0f%%", 100 * p_boom), `P(<3)` = sprintf("%.0f%%", 100 * p_bust), `P(top 8)` = sprintf("%.0f%%", 100 * p_top8),
                           `E[sacks]` = round(e_sacks, 2), `E[TO]` = round(e_to, 2), `PA pts` = round(e_pa, 2),
                           `YA pts` = round(e_ya, 2), `P(TD)` = round(p_td, 2), Venue = ifelse(indoor == 1, "indoor", "outdoor"),
@@ -65,7 +67,8 @@ make_proj_tbl <- function(pred, html = FALSE, label = "") {       # same columns
   if ("proj_base" %in% names(pred)) t <- t %>% mutate(!!DLAB := signed(pred$proj - pred$proj_base, 2), .after = Proj) %>%
     mutate(Kickoff = kickoff(pred), .after = Opp)
   if (html && "trend_svg" %in% names(pred)) t <- t %>% mutate(Trend = pred$trend_svg, .after = all_of(DLAB))
-  if ("wx_wind" %in% names(pred)) t <- t %>% mutate(Weather = wx_label(pred$indoor, pred$wx_temp, pred$wx_wind, pred$wx_gust, pred$wx_precip_prob, pred$wx_precip_in), .after = Venue)
+  if ("wx_wind" %in% names(pred)) t <- t %>% mutate(Weather = wx_label(pred$indoor, pred$wx_temp, pred$wx_wind, pred$wx_gust, pred$wx_precip_prob,
+                                                                       if ("wx_precip_max" %in% names(pred)) pred$wx_precip_max else pred$wx_precip_in / 3, html = html), .after = Venue)
   t <- t %>% mutate(Tier = tiers(pred$proj)$tier, .after = Rank)
   if (html && "why" %in% names(pred)) t$Team <- why_tip(pred$team, pred$proj, pred$why, label)
   t$`Opp QB` <- qb_cell(pred, html)
@@ -75,8 +78,9 @@ base <- parts[[1]]$pred %>% transmute(team, Opp = paste0(ifelse(home == 1, "vs "
                                       Spread = spread, `Opp implied` = round(implied_opp, 1))
 if (refreshed) base <- base %>% mutate(Kickoff = kickoff(parts[[1]]$pred), .after = Opp) %>%
   mutate(`Δ Opp implied` = signed(parts[[1]]$pred$implied_opp - parts[[1]]$pred$implied_opp_base), .after = `Opp implied`)
-if ("wx_wind" %in% names(parts[[1]]$pred)) base <- base %>% mutate(Weather = wx_label(parts[[1]]$pred$indoor, parts[[1]]$pred$wx_temp, parts[[1]]$pred$wx_wind,
-                                                                                  parts[[1]]$pred$wx_gust, parts[[1]]$pred$wx_precip_prob, parts[[1]]$pred$wx_precip_in), .after = `Opp implied`)
+wx_p1 <- function(html) with(parts[[1]]$pred, wx_label(indoor, wx_temp, wx_wind, wx_gust, wx_precip_prob,
+                                                      if (exists("wx_precip_max")) wx_precip_max else wx_precip_in / 3, html = html))
+if ("wx_wind" %in% names(parts[[1]]$pred)) base <- base %>% mutate(Weather = wx_p1(FALSE), .after = `Opp implied`)
 if (refreshed) base <- base %>% rename(!!DLAB_OPP := `Δ Opp implied`)
 cmp <- reduce(imap(parts, function(p, s) p$pred %>% transmute(team, !!paste(p$SC$label, "proj") := round(proj, 2), !!paste(p$SC$label, "rank") := as.integer(rank),
                                                                 !!paste(p$SC$label, "tier") := tiers(proj)$tier,
@@ -86,10 +90,14 @@ rank_cols <- grep(" rank$", names(cmp), value = TRUE)
 cmp <- cmp %>% mutate(`Avg rank` = round(rowMeans(across(all_of(rank_cols))), 1),
                       `Rank spread` = do.call(pmax, across(all_of(rank_cols))) - do.call(pmin, across(all_of(rank_cols)))) %>%
   arrange(`Avg rank`) %>% rename(Team = team)
-cmp_cls <- ifelse(seq_len(nrow(cmp)) <= 8, "top", ifelse(seq_len(nrow(cmp)) > nrow(cmp) - 8, "bot", ""))     # by average rank
+# colours by tier: each system's rank column by that system's tier; Team by the average of the systems' tiers
+tier_cols <- grep(" tier$", names(cmp), value = TRUE)
+cmp_cls <- tier_cls(round(rowMeans(as.matrix(cmp[tier_cols]))), k = 6)
+rank_tier_cls <- set_names(map(rank_cols, ~ tier_cls(cmp[[sub(" rank$", " tier", .x)]], k = 6)), rank_cols)
 p1 <- parts[[1]]$pred[match(cmp$Team, parts[[1]]$pred$team), ]
 cmp_html <- cmp %>% mutate(Team = if ("why" %in% names(p1)) why_tip(Team, p1$proj, p1$why, parts[[1]]$SC$label) else esc(Team),
                            `Opp QB` = qb_cell(p1, TRUE))
+if ("Weather" %in% names(cmp_html)) cmp_html$Weather <- wx_p1(TRUE)[match(cmp$Team, parts[[1]]$pred$team)]
 
 ## ---- 3. Glossary (shared) ----
 g0 <- parts[[1]]
@@ -102,12 +110,12 @@ compare_gloss <- tribble(~term, ~definition,
   "Kickoff", "kickoff time (Eastern); \U0001F512 = game has started, so its projection is frozen at the last pre-kickoff line",
   "Tier", "natural-break tier of the projection (optimal 1-D grouping into 6 tiers; 1 = best). A solid line above a tier = the drop into it is larger than the model's typical ± (a clear break); dashed = a softer break",
   "<System> tier", "tier of that system's projection (see Tier)",
-  "Trend", "the projection over time: open dot = the weekly model run, filled dots = one per day the page was refreshed (that day's last value); green = up since the weekly run, red = down. Hover a dot for date and value",
-  "Weather", "Open-Meteo forecast for kickoff + 2 h: temperature, sustained wind (max gust), chance of rain (max hourly) and expected rain in inches (total over the 3 hours). Display only: the D/ST model's weather inputs come from the weekly run",
+  "Trend", "the projection over time: open dot = the week's first weekly model run (normally Tuesday), filled dots = one per page refresh; green = up since then, red = down. Hover a dot for date, time and value",
+  "Weather", "Open-Meteo forecast. Temperature and sustained wind: mean over kickoff + 2 h; gust: max. Rain: chance (max hourly) and intensity (peak hourly rate: light < 0.10 in/h, moderate 0.10–0.30, heavy > 0.30) from 1 h before to 3 h after kickoff, since a wet field matters too. Highlighted: wind or gust over 15 mph (light red) / 25 mph (dark red); likely (50%+) moderate rain (light red) / heavy rain (dark red). Display only: the D/ST model's weather inputs come from the weekly run",
   "Opp QB", "the opponent's projected starting QB. Each refresh re-checks it: override file > Sleeper + Ourlads depth charts when both differ from the schedule > nflverse schedule QB unless ruled out > Sleeper, then Ourlads depth chart (QB1 unless Out / Doubtful / IR, else the first healthy backup). A changed starter is re-scored exactly (his career rates + the offense's rates weighted to his snaps). (O) / (D) / (Q) = injury status, \u21BB = changed since the weekly run, \u26A0 = a source disagrees; hover for the sources and depth charts. Started games keep their pre-kickoff QB",
   "Team (hover)", "hover or tap a team to see what moves its projection vs an average D/ST this week (Vegas lines excluded)",
-  "Δ Opp implied", "change in the opponent's Vegas implied points since the weekly (Tuesday) model run (negative = good for this D/ST)",
-  "Δ Proj", "change in the projection since the weekly (Tuesday) model run — not since the previous refresh — driven only by Vegas line moves",
+  "Δ Opp implied", "change in the opponent's Vegas implied points since the week's first weekly model run, normally Tuesday (negative = good for this D/ST)",
+  "Δ Proj", "change in the projection since the week's first weekly model run, normally Tuesday — not since the previous refresh, and not reset by a mid-week model rerun",
   "Avg rank", "average of the three ranks; the table is sorted by it",
   "Rank spread", "largest minus smallest rank across systems; big spreads mean the scoring rules change the pick (usually shutout / points-allowed upside vs yards allowed or sacks)")
 col_gloss <- g0$col_glossary %>% mutate(definition = case_when(
@@ -121,7 +129,7 @@ gloss_lookup <- c(setNames(compare_gloss$definition, compare_gloss$term), setNam
                   setNames(g0$glossary_all$definition, g0$glossary_all$term))
 describe <- function(x) {
   x2 <- sub("^(ESPN|Yahoo|FFPC) (proj|rank|tier|P\\(top 8\\))$", "<System> \\2", x)
-  x2 <- sub("^Δ since .* run$", "Δ Proj", sub("^Δ Opp implied since .* run$", "Δ Opp implied", x2))
+  x2 <- sub("^Δ since \\w+$", "Δ Proj", sub("^Δ Opp implied since \\w+$", "Δ Opp implied", x2))
   unname(coalesce(gloss_lookup[x2], ""))
 }
 feature_gloss <- map(parts, ~ .x$glossary_all %>% filter(str_starts(section, "Features"))) %>% bind_rows() %>%
@@ -132,7 +140,7 @@ feature_gloss <- map(parts, ~ .x$glossary_all %>% filter(str_starts(section, "Fe
 ## ---- 4. HTML helpers ----
 esc <- function(x) { x <- gsub("&", "&amp;", as.character(x), fixed = TRUE); x <- gsub("<", "&lt;", x, fixed = TRUE); gsub('"', "&quot;", gsub(">", "&gt;", x, fixed = TRUE), fixed = TRUE) }
 html_table <- function(df, id = NULL, sortable = FALSE, left = 1, rank_cols = character(), tips = TRUE, raw_cols = character(),
-                       row_cls = NULL, cell_cls = list()) {
+                       row_cls = NULL, cell_cls = list(), stick = 0) {
   th <- map_chr(seq_along(df), function(k) { n <- names(df)[k]; d <- if (tips) describe(n) else ""
     sprintf('<th%s%s>%s%s</th>', if (sortable) sprintf(' onclick="sortTable(this,%d)"', k - 1) else "",
             if (nzchar(d)) sprintf(' title="%s"', esc(d)) else "", esc(n), if (nzchar(d)) "<sup>?</sup>" else "") })
@@ -140,8 +148,8 @@ html_table <- function(df, id = NULL, sortable = FALSE, left = 1, rank_cols = ch
     v <- df[[k]][i]; cls <- if (names(df)[k] %in% rank_cols && !is.na(v)) (if (v <= 8) ' class="top"' else if (v >= 25) ' class="bot"' else "") else ""
     if (names(df)[k] %in% names(cell_cls) && nzchar(cell_cls[[names(df)[k]]][i])) cls <- sprintf(' class="%s"', cell_cls[[names(df)[k]]][i])
     sprintf("<td%s>%s</td>", cls, if (names(df)[k] %in% raw_cols) v else esc(ifelse(is.na(v), "", v))) }), collapse = ""), "</tr>"))
-  sprintf('<table%s class="l%d%s"><thead><tr>%s</tr></thead><tbody>%s</tbody></table>', if (is.null(id)) "" else sprintf(' id="%s"', id),
-          left, if (sortable) " sortable" else "", paste(th, collapse = ""), paste(rows, collapse = ""))
+  sprintf('<table%s class="l%d%s"%s><thead><tr>%s</tr></thead><tbody>%s</tbody></table>', if (is.null(id)) "" else sprintf(' id="%s"', id),
+          left, if (sortable) " sortable" else "", if (stick > 0) sprintf(' data-stick="%d"', stick) else "", paste(th, collapse = ""), paste(rows, collapse = ""))
 }
 gloss_table <- function(df) html_table(df %>% select(Term = term, Definition = definition), left = 99, tips = FALSE)
 
@@ -157,16 +165,16 @@ sys_tab <- function(p) {
   tr <- tiers(p$pred$proj, clear = median((p$pred$ci_hi - p$pred$ci_lo) / 2, na.rm = TRUE)); tt <- tr$tier
   brk <- c(FALSE, tt[-1] != tt[-length(tt)])
   row_cls <- trimws(paste(ifelse(tt %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tt] %in% TRUE, "tb-clear", "tb-soft"), "")))
-  team_cls <- ifelse(p$pred$rank <= 8, "top", ifelse(p$pred$rank >= 25, "bot", ""))
+  team_cls <- tier_cls(tt, k = max(tt))                                    # tier 1 dark green, 2 light green, 5 light red, 6 dark red
   if (all(c("q10", "q90") %in% names(p$pred))) pt <- pt %>% mutate(Range = pmap_chr(p$pred[c("proj", "q10", "q25", "q75", "q90", "ci_lo", "ci_hi")], range_bar), .after = all_of(ac))
   cvt <- p$cv_tbl %>% select(any_of(c("model", "rmse", "mae", "spearman", "top8_avg", "bot8_avg", "edge_top8", "vs_vegas_top8", "t_stat",
                                       "hold_rmse", "hold_spearman", "hold_top8", "hold_vs_vegas_top8", "hold_t", "what")))
-  paste0(sprintf("<p class='rules'><b>%s scoring:</b> %s</p>", esc(p$SC$label), esc(p$SC$rules)),
-         sprintf("<p class='note'>Feature families in this model: %s.</p>", esc(paste(p$families, collapse = ", "))),
+  paste0(sprintf("<p class='note'>Feature families in this model: %s.</p>", esc(paste(p$families, collapse = ", "))),
          "<p class='note'>Range bar: light = where the actual score lands 8 times in 10, dark = 5 times in 10, tick = projection, thin line = 0 points (axis −5 to 25). 90% CI = uncertainty of the projection itself.</p>",
-         "<p class='note'>Tiers: natural breaks in the projections. A solid line = a clear drop (bigger than the model's typical ±), dashed = a softer break. Hover or tap a team for what drives its projection.</p>",
-         html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, rank_cols = "Rank", raw_cols = c("Range", "Trend", "Team", "Opp QB"),
-                    row_cls = row_cls, cell_cls = list(Team = team_cls)),
+         "<p class='note'>Tiers: natural breaks in the projections. A solid line = a clear drop (bigger than the model's typical ±), dashed = a softer break. Tier 1 dark green, tier 2 light green, the bottom two tiers light / dark red. Hover or tap a team for what drives its projection.</p>",
+         html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, raw_cols = c("Range", "Trend", "Team", "Opp QB", "Weather"),
+                    row_cls = row_cls, cell_cls = list(Team = team_cls, Rank = team_cls), stick = 4),
+         sprintf("<p class='rules'><b>%s scoring:</b> %s</p>", esc(p$SC$label), esc(p$SC$rules)),
          if (is.null(p$holdout)) sprintf("<h3>Back-test: %s</h3><p class='note'>Each season predicted by models trained only on earlier seasons (from 2018). Every tuning, feature and blend choice maximizes the weekly top-8 edge over Vegas-only on these seasons, so these numbers are optimistic. %s %d is the clean test.</p>",
                                          paste(unique(range(p$cv_season)), collapse = "–"), esc(if (is.null(p$validation_note) || is.na(p$validation_note)) "" else p$validation_note),
                                          SEASON) else
@@ -177,8 +185,9 @@ sys_tab <- function(p) {
 }
 tabs <- c(list(Compare = paste0(
   "<p class='note'>One model per scoring system (same data, features and method; each tuned and feature-selected on its own 2023–24 back-test; 2025 = clean hold-out). ",
-  "Click a column header to sort. Green = top 8 in that system (Team column: top 8 by average rank), red = bottom 8. Hover or tap a team for what drives its projection. P(top 8) = chance of actually finishing top 8 this week; see each format's tab for score ranges.</p>",
-  html_table(cmp_html, id = "t_compare", sortable = TRUE, left = if (refreshed) 4 else 3, rank_cols = rank_cols, raw_cols = c("Team", "Opp QB"), cell_cls = list(Team = cmp_cls)),
+  "Click a column header to sort. Colours follow the tiers: dark green = tier 1, light green = tier 2, light / dark red = the bottom two tiers (rank columns: that system's tier; Team: the average tier). Hover or tap a team for what drives its projection. P(top 8) = chance of actually finishing top 8 this week; see each format's tab for score ranges.</p>",
+  html_table(cmp_html, id = "t_compare", sortable = TRUE, left = if (refreshed) 4 else 3, raw_cols = c("Team", "Opp QB", "Weather"),
+             cell_cls = c(list(Team = cmp_cls), rank_tier_cls), stick = 4),
   "<h3>Scoring rules</h3>", paste0(map_chr(parts, ~ sprintf("<p class='rules'><b>%s:</b> %s</p>", esc(.x$SC$label), esc(.x$SC$rules))), collapse = ""))),
   set_names(map(parts, sys_tab), map_chr(parts, ~ .x$SC$label)),
   list(Glossary = paste0(
@@ -209,12 +218,12 @@ td.top{background:var(--top);font-weight:600}td.bot{background:var(--bot)}
 .rb .pt{width:2px;margin-left:-1px;background:var(--fg);top:-2px;height:18px}.rb .zero{width:1px;background:var(--muted);opacity:.6}
 .rules,.note{color:var(--muted);font-size:13.5px;max-width:1000px}details{margin:.4rem 0}summary{cursor:pointer;font-weight:600}'
 css <- paste0(css, SITE_CSS)
-js <- 'function show(id){document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("on",p.id===id));
-document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===id));}
+js <- paste0(SITE_JS, 'function show(id){document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("on",p.id===id));
+document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===id));stickCols();}
 function sortTable(th,col){const t=th.closest("table"),b=t.tBodies[0],rows=[...b.rows],asc=th.dataset.asc!=="1";
 rows.sort((x,y)=>{let a=x.cells[col].innerText,c=y.cells[col].innerText,na=parseFloat(a),nc=parseFloat(c);
 if(!isNaN(na)&&!isNaN(nc))return asc?na-nc:nc-na;return asc?a.localeCompare(c):c.localeCompare(a)});
-rows.forEach(r=>b.appendChild(r));t.querySelectorAll("th").forEach(h=>h.dataset.asc="");th.dataset.asc=asc?"1":"0";}'
+rows.forEach(r=>b.appendChild(r));t.querySelectorAll("th").forEach(h=>h.dataset.asc="");th.dataset.asc=asc?"1":"0";}')
 ids <- paste0("p", seq_along(tabs))
 fit_time <- max(do.call(c, map(parts, "generated")))
 status_line <- if (!refreshed) sprintf("model run %s", et(fit_time, "%a %b %d, %I:%M %p ET")) else {
@@ -224,7 +233,7 @@ status_line <- if (!refreshed) sprintf("model run %s", et(fit_time, "%a %b %d, %
                                      if (r$n_locked > 0) sprintf(", %d started", r$n_locked) else "") else "no sportsbook lines yet: weekly-run lines",
           et(fit_time, "%a %b %d"))
 }
-if (refreshed) status_line <- paste0(status_line, sprintf(" · Δ columns = change since the weekly model run (%s)", et(parts[[1]]$refresh$model_fit, "%a %b %d")))
+if (refreshed) status_line <- paste0(status_line, sprintf(" · Δ columns = change since the week's first model run (%s)", et(BASE_TIME, "%a %b %d")))
 if (refreshed && !is.null(parts[[1]]$refresh$qb_sources)) {
   qs <- parts[[1]]$refresh$qb_sources
   nm <- c(sleeper = "Sleeper", report = "injury report", ourlads = "Ourlads")

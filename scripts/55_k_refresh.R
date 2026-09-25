@@ -88,12 +88,12 @@ dyn <- setdiff(names(now), c("game_id", "team"))
 base_cols <- base %>% select(team, starts_with("proj_")) %>% rename_with(~ sub("^proj_", "proj_base_", .x), starts_with("proj_"))
 info <- bind_rows(lines %>% transmute(team = home_team, ko, locked, src), lines %>% transmute(team = away_team, ko, locked, src))
 P$pred <- P$pred %>% select(-any_of(c(dyn, "spread", "total_line", "implied_own", "implied_opp", "wind", "temp", "wind_known", "ko", "locked", "src",
-                                      names(base_cols)[-1], "implied_own_base", "wx_gust", "wx_precip_prob", "wx_precip_in"))) %>%
+                                      names(base_cols)[-1], "implied_own_base", "wx_gust", "wx_precip_prob", "wx_precip_in", "wx_precip_max"))) %>%
   left_join(now %>% select(-game_id), by = "team") %>%
   left_join(te_now %>% select(team, spread, total_line, implied_own, implied_opp, wind, temp, wind_known), by = "team") %>%
   left_join(base_cols, by = "team") %>% left_join(B$te %>% transmute(team, implied_own_base = (total_line + spread) / 2), by = "team") %>%
   left_join(info, by = "team") %>%
-  left_join(wx_all %>% select(game_id, wx_gust = gust, wx_precip_prob = precip_prob, wx_precip_in = precip_in), by = "game_id")
+  left_join(wx_all %>% select(game_id, wx_gust = gust, wx_precip_prob = precip_prob, wx_precip_in = precip_in, wx_precip_max = precip_max), by = "game_id")
 # kicker injury status (starters.R; the sources were fetched by the D/ST refresh minutes ago and are reused).
 # Display only: an Out kicker is flagged with the likely replacement; the projection keeps the listed kicker.
 source(file.path(PROJ_DIR, "scripts/starters.R"))
@@ -110,15 +110,22 @@ ks <- tryCatch({
                   if (any(!is.na(k$k_status))) paste(sprintf("%s %s", k$team, k$k_status)[!is.na(k$k_status)], collapse = ", ") else "none"))
   k }, error = function(e) { message("kickers: status check failed — ", conditionMessage(e)); NULL })
 if (!is.null(ks)) P$pred <- P$pred %>% select(-any_of(c("k_status", "k_out", "k_status_detail", "k_alt"))) %>% left_join(ks, by = "team")
-# projection history → dotted trend line (weekly run + one point per refresh day)
+# projection history → dotted trend line (weekly run + one point per refresh)
 ph <- ph_update(PH_CSV, "k", SEASON, WEEK, fit_time = B$created,
-                base = bind_rows(map(names(B$SCORING), ~ tibble(system = .x, team = P$pred$team, proj = P$pred[[paste0("proj_base_", .x)]]))),
-                cur  = bind_rows(map(names(B$SCORING), ~ tibble(system = .x, team = P$pred$team, proj = P$pred[[paste0("proj_", .x)]]))), now = NOW)
-for (sy in names(B$SCORING)) P$pred[[paste0("trend_svg_", sy)]] <- map_chr(P$pred$team, ~ sparkline(trend_points(ph[ph$system == sy & ph$team == .x, ])))
+                base = bind_rows(map(names(B$SCORING), ~ tibble(system = .x, team = P$pred$team, proj = P$pred[[paste0("proj_base_", .x)]], implied = P$pred$implied_own_base))),
+                cur  = bind_rows(map(names(B$SCORING), ~ tibble(system = .x, team = P$pred$team, proj = P$pred[[paste0("proj_", .x)]], implied = P$pred$implied_own))), now = NOW)
+# Δ columns: always vs the week's FIRST weekly run (normally Tuesday); a mid-week model rerun does not reset them
+fb <- ph_base(ph)
+for (sy in names(B$SCORING)) {
+  f <- fb$tbl[fb$tbl$system == sy, ]; i <- match(P$pred$team, f$team)
+  P$pred[[paste0("proj_base_", sy)]] <- coalesce(f$proj_first[i], P$pred[[paste0("proj_base_", sy)]])
+  if (sy == names(B$SCORING)[1]) P$pred$implied_own_base <- coalesce(f$implied_first[i], P$pred$implied_own_base)
+  P$pred[[paste0("trend_svg_", sy)]] <- map_chr(P$pred$team, ~ sparkline(trend_points(ph[ph$system == sy & ph$team == .x, ])))
+}
 P$refresh <- list(time = NOW, n_priced = sum(lines$src == "sportsbooks"), n_locked = sum(lines$locked), n_games = nrow(lines),
                   books = if (any(!is.na(lines$n_books))) median(lines$n_books, na.rm = TRUE) else NA,
                   weather = if (nrow(wx_use)) sprintf("Open-Meteo forecasts for %d outdoor games", nrow(wx_use)) else "weekly-run values",
-                  model_fit = B$created)
+                  model_fit = B$created, base_time = if (is.na(fb$time)) B$created else fb$time)
 P$nav <- sprintf("<p class='s'><a href='%s'>D/ST projections</a> · <b>Kickers</b> · <a href='%sk/archive/'>past weeks</a></p>", SITE_BASE, SITE_BASE)
 mv <- P$pred[which.max(abs(P$pred$proj_espn - P$pred$proj_base_espn)), ]
 message(sprintf("kickers: re-scored · biggest ESPN move %s %+.2f", mv$team, mv$proj_espn - mv$proj_base_espn))
