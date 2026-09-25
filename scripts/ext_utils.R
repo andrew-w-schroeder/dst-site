@@ -7,11 +7,11 @@
 #             Sleeper does; kickers: FG by distance, misses, PATs — exact).
 #   ESPN    : lm-api-reads.fantasy.espn.com kona_player_info, ESPN standard league defaults: ESPN's own projected
 #             points for D/ST; kickers re-scored from the projected stats (falls back to ESPN's points).
-# Only each source's weekly RANK is stored (data/lines/ext_rank_history.csv in the public site repo), not their
-# projections. Base R + dplyr / tibble / purrr + jsonlite / curl (runs on the GitHub runner).
+# Stored per snapshot (data/lines/ext_rank_history.csv in the public site repo): each source's weekly rank and its
+# ESPN-standard projected points (needed for RMSE and projection correlation; Andrew, 2026-09-25). Base R + dplyr / tibble / purrr + jsonlite / curl (runs on the GitHub runner).
 # ==============================================================================
 
-EXT_COLS <- c("pulled_at", "season", "week", "source", "pos", "team", "rank")
+EXT_COLS <- c("pulled_at", "season", "week", "source", "pos", "team", "rank", "pts")   # pts (ESPN-standard projection) added 2026-09-25
 ext_norm_team <- function(x) dplyr::recode(x, OAK = "LV", SD = "LAC", STL = "LA", LAR = "LA", JAC = "JAX", WSH = "WAS", ARZ = "ARI")
 ext_get <- function(url, headers = NULL, tries = 2) {
   for (k in seq_len(tries)) {
@@ -88,7 +88,7 @@ ext_espn <- function(season, week) {
   }
   NULL
 }
-# both sources → rank per source × position (a team's top-projected kicker = that source's kicker; 1 = best)
+# both sources → rank + ESPN-standard projected points per source × position (a team's top-projected kicker = that source's kicker; 1 = best)
 ext_ranks <- function(season, week, sources = c("Sleeper", "ESPN")) {
   x <- dplyr::bind_rows(if ("Sleeper" %in% sources) tryCatch(ext_sleeper(season, week), error = function(e) NULL),
                         if ("ESPN" %in% sources) tryCatch(ext_espn(season, week), error = function(e) NULL))
@@ -96,12 +96,14 @@ ext_ranks <- function(season, week, sources = c("Sleeper", "ESPN")) {
   x <- x[!is.na(x$team) & !is.na(x$pts), ]
   x <- dplyr::ungroup(dplyr::slice_max(dplyr::group_by(x, source, pos, team), pts, n = 1, with_ties = FALSE))
   x <- dplyr::mutate(dplyr::group_by(x, source, pos), rank = rank(-pts, ties.method = "first"))
-  dplyr::ungroup(x)[c("source", "pos", "team", "rank")]
+  dplyr::ungroup(x)[c("source", "pos", "team", "rank", "pts")]
 }
 read_ext_hist <- function(file) {
   if (!file.exists(file)) return(tibble::tibble(pulled_at = character(), season = integer(), week = integer(), source = character(),
-                                                pos = character(), team = character(), rank = integer()))
-  tibble::as_tibble(utils::read.csv(file, stringsAsFactors = FALSE, colClasses = c(pulled_at = "character", source = "character", pos = "character", team = "character")))
+                                                pos = character(), team = character(), rank = integer(), pts = numeric()))
+  h <- tibble::as_tibble(utils::read.csv(file, stringsAsFactors = FALSE, colClasses = c(pulled_at = "character", source = "character", pos = "character", team = "character")))
+  if (!"pts" %in% names(h)) h$pts <- NA_real_                    # rows from before 2026-09-25 stored the rank only
+  h
 }
 # snapshot this week's ranks for teams whose game hasn't kicked off (ko: tibble team, ko [POSIXct UTC])
 ext_snapshot <- function(file, season, week, now, ko) {

@@ -134,6 +134,12 @@ if (!nzchar(Sys.getenv("NO_EXT")) && file.exists(file.path(PROJ_DIR, "scripts/ex
     bind_rows(lines %>% transmute(team = home, ko), lines %>% transmute(team = away, ko))
   ext_snapshot(EXT_CSV, SEASON, WEEK, NOW, kt)
 }, error = function(e) message("Sleeper / ESPN ranks: ", conditionMessage(e)))
+# this week's latest Sleeper / ESPN rank per team (frozen at kickoff) → shown next to ours in the ESPN-format table
+ext_now <- tryCatch({ kt2 <- if (exists("kt")) kt else NULL
+  if (is.null(kt2) || !file.exists(EXT_CSV)) NULL else
+    ext_latest(read_ext_hist(EXT_CSV) %>% filter(season == SEASON, week == WEEK), kt2 %>% mutate(season = as.integer(SEASON), week = as.integer(WEEK))) %>%
+      filter(pos == "DEF") %>% select(team, source, rank) %>% tidyr::pivot_wider(names_from = source, values_from = rank) },
+  error = function(e) NULL)
 
 ## ---- 3c. Projected starting QBs ----
 b1 <- bundles[[1]]
@@ -220,6 +226,10 @@ for (s in names(bundles)) {
                                         opp_qb_changed = changed, opp_qb_rescored = rescored, opp_qb_disagree = coalesce(pq$disagree, "") != "",
                                         opp_qb_tip = ifelse(is.na(pq$qb_name), NA_character_, paste0(qb_tip(pq, w_name, rescored),
                                           ifelse(changed & !rescored, "\n\u26A0 Changed since the weekly run but NOT re-scored: rerun the weekly model (this week's bundle predates QB scenarios)", ""))))
+  }
+  if (s == "espn" && !is.null(ext_now) && nrow(ext_now)) {
+    parts$pred$espn_rank <- if ("ESPN" %in% names(ext_now)) ext_now$ESPN[match(parts$pred$team, ext_now$team)] else NA_integer_
+    parts$pred$sleeper_rank <- if ("Sleeper" %in% names(ext_now)) ext_now$Sleeper[match(parts$pred$team, ext_now$team)] else NA_integer_
   }
   parts$refresh <- list(time = NOW, n_priced = sum(lines$src == "sportsbooks"), n_locked = sum(lines$locked),
                         books = if (any(!is.na(lines$n_books))) median(lines$n_books, na.rm = TRUE) else NA, model_fit = b$created,

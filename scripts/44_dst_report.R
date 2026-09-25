@@ -67,6 +67,8 @@ make_proj_tbl <- function(pred, html = FALSE, label = "") {       # same columns
   if ("proj_base" %in% names(pred)) t <- t %>% mutate(!!DLAB := signed(pred$proj - pred$proj_base, 2), .after = Proj) %>%
     mutate(Kickoff = kickoff(pred), .after = Opp)
   if (html && "trend_svg" %in% names(pred)) t <- t %>% mutate(Trend = pred$trend_svg, .after = all_of(DLAB))
+  if (label == "ESPN" && any(!is.na(pred$espn_rank %||% NA) | !is.na(pred$sleeper_rank %||% NA)))
+    t <- t %>% mutate(`ESPN rank` = pred$espn_rank, `Sleeper rank` = pred$sleeper_rank, .after = Proj)
   if ("wx_wind" %in% names(pred)) t <- t %>% mutate(Weather = wx_label(pred$indoor, pred$wx_temp, pred$wx_wind, pred$wx_gust, pred$wx_precip_prob,
                                                                        if ("wx_precip_max" %in% names(pred)) pred$wx_precip_max else pred$wx_precip_in / 3, html = html), .after = Venue) %>%
     select(-Venue)                                                   # Weather already says "indoor"
@@ -118,6 +120,7 @@ compare_gloss <- tribble(~term, ~definition,
   "Δ Opp implied", "change in the opponent's Vegas implied points since the week's first weekly model run, normally Tuesday (negative = good for this D/ST)",
   "Δ Proj", "change in the projection since the week's first weekly model run, normally Tuesday — not since the previous refresh, and not reset by a mid-week model rerun",
   "Avg rank", "average of the three ranks; the table is sorted by it",
+  "ESPN rank", RANKCOL_TIP, "Sleeper rank", RANKCOL_TIP,
   "Rank spread", "largest minus smallest rank across systems; big spreads mean the scoring rules change the pick (usually shutout / points-allowed upside vs yards allowed or sacks)")
 col_gloss <- g0$col_glossary %>% mutate(definition = case_when(
   term == "Proj"   ~ "projected fantasy points for the tab's scoring system: average of elastic net + component model + ridge",
@@ -167,6 +170,7 @@ sys_tab <- function(p) {
   brk <- c(FALSE, tt[-1] != tt[-length(tt)])
   row_cls <- trimws(paste(ifelse(tt %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tt] %in% TRUE, "tb-clear", "tb-soft"), "")))
   team_cls <- tier_cls(tt, k = max(tt))                                    # tier 1 dark green, 2 light green, 5 light red, 6 dark red
+  ext_cls <- if ("ESPN rank" %in% names(pt)) list(`ESPN rank` = rank_flag(p$pred$rank, p$pred$espn_rank), `Sleeper rank` = rank_flag(p$pred$rank, p$pred$sleeper_rank)) else list()
   if (all(c("q10", "q90") %in% names(p$pred))) pt <- pt %>% mutate(Range = pmap_chr(p$pred[c("proj", "q10", "q25", "q75", "q90", "ci_lo", "ci_hi")], range_bar), .after = all_of(ac))
   cvt <- p$cv_tbl %>% select(any_of(c("model", "rmse", "mae", "spearman", "top8_avg", "bot8_avg", "edge_top8", "vs_vegas_top8", "t_stat",
                                       "hold_rmse", "hold_spearman", "hold_top8", "hold_vs_vegas_top8", "hold_t", "what")))
@@ -174,7 +178,8 @@ sys_tab <- function(p) {
          "<p class='note'>Range bar: light = where the actual score lands 8 times in 10, dark = 5 times in 10, tick = projection, thin line = 0 points (axis −5 to 25). 90% CI = uncertainty of the projection itself.</p>",
          "<p class='note'>Tiers: natural breaks in the projections. A solid line = a clear drop (bigger than the model's typical ±), dashed = a softer break. Tier 1 dark green, tier 2 light green, the bottom two tiers light / dark red. Hover or tap a team for what drives its projection.</p>",
          html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, raw_cols = c("Range", "Trend", "Team", "Opp QB", "Weather"),
-                    row_cls = row_cls, cell_cls = list(Team = team_cls, Rank = team_cls), stick = 4),
+                    row_cls = row_cls, cell_cls = c(list(Team = team_cls, Rank = team_cls), ext_cls), stick = 4),
+         if ("ESPN rank" %in% names(pt)) "<p class='note'>ESPN rank / Sleeper rank: that site's rank this week in ESPN standard scoring. Light amber = we have the D/ST in our top 12 but they have it as a sit (13–18); dark amber = not rosterable (19+).</p>" else "",
          sprintf("<p class='rules'><b>%s scoring:</b> %s</p>", esc(p$SC$label), esc(p$SC$rules)),
          if (is.null(p$holdout)) sprintf("<h3>Back-test: %s</h3><p class='note'>Each season predicted by models trained only on earlier seasons (from 2018). Every tuning, feature and blend choice maximizes the weekly top-8 edge over Vegas-only on these seasons, so these numbers are optimistic. %s %d is the clean test.</p>",
                                          paste(unique(range(p$cv_season)), collapse = "–"), esc(if (is.null(p$validation_note) || is.na(p$validation_note)) "" else p$validation_note),
@@ -201,9 +206,9 @@ tabs <- c(list(Compare = paste0(
 
 # Track record + vs Sleeper / ESPN tabs (62_track_record.R), before the Glossary
 TR_F <- track_file(PROJ_DIR, SEASON)
-if (file.exists(TR_F)) { tt <- tryCatch(track_tabs(readRDS(TR_F), "DEF", setNames(map_chr(parts, ~ .x$SC$label), names(parts)), unit = "D/ST"),
-                                        error = function(e) { message("track record tabs skipped: ", conditionMessage(e)); NULL })
-  if (!is.null(tt)) tabs <- append(tabs, list(`Track record` = tt$track, `vs Sleeper / ESPN` = tt$ext), after = length(tabs) - 1) }
+if (file.exists(TR_F)) { tt <- tryCatch(track_tab(readRDS(TR_F), "DEF", setNames(map_chr(parts, ~ .x$SC$label), names(parts)), unit = "D/ST"),
+                                        error = function(e) { message("track record tab skipped: ", conditionMessage(e)); NULL })
+  if (!is.null(tt)) tabs <- append(tabs, list(`Track record` = tt), after = length(tabs) - 1) }
 css <- ':root{--bg:#fff;--fg:#1d1d1f;--muted:#666;--line:#ddd;--head:#f3f3f3;--top:#e3f4e8;--bot:#fbe6e6;--accent:#1f5fbf;--rng80:#c9dcf5;--rng50:#6f9ee0}
 @media (prefers-color-scheme: dark){:root{--bg:#141414;--fg:#e8e8e8;--muted:#9a9a9a;--line:#333;--head:#222;--top:#17351f;--bot:#3a1a1a;--accent:#7fb0ff;--rng80:#26395a;--rng50:#4f7fc4}}
 body{font-family:system-ui,sans-serif;max-width:1250px;margin:1.5rem auto;padding:0 16px;color:var(--fg);background:var(--bg)}
