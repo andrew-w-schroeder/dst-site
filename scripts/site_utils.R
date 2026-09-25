@@ -167,7 +167,7 @@ drivers <- function(te, pred_fun, groups, top = 4, min_abs = 0.05) {
 }
 # D/ST feature groups: model family × side (mirrors family_of() in 40_dst_model.R)
 dst_groups <- function(vars) {
-  b <- sub("^(o_|d_)", "", vars)
+  b <- sub("^(o_|d_|t_)", "", vars)
   fam <- dplyr::case_when(
     vars %in% c("spread", "total_line", "implied_opp", "implied_own", "home") ~ "vegas",
     vars %in% c("indoor", "grass", "temp", "wind", "wind_hi", "cold", "rest_diff", "div_game", "week") ~ "Venue, weather & rest",
@@ -181,7 +181,8 @@ dst_groups <- function(vars) {
     b %in% c("press_rate", "hurry_rate", "blitz_rate", "bad_throw") ~ "pressure & blitz",
     b %in% c("int_rate", "fum_rate", "fuml_rate", "to_rate", "to_given_g") ~ "turnovers",
     b %in% c("neg_rate", "runloss_rate") ~ "negative plays",
-    b %in% c("pass_rate", "pass_oe", "plays_g", "punt_drive") ~ "pace & pass rate",
+    b %in% c("pass_rate", "pass_oe", "plays_g", "punt_drive") ~ "play volume & pass rate",
+    b %in% c("sec_play", "sec_play_neu") ~ "pace (sec / play)",
     b %in% c("pen_play", "penyds_g") ~ "penalties",
     startsWith(b, "dst_") | b %in% c("fp_g", "fpc_g") ~ "D/ST points history",
     b %in% c("ngs_press", "ngs_ttp", "ngs_p2s", "ngs_blitz", "ngs_getoff") ~ "pass rush (NGS)",
@@ -190,7 +191,8 @@ dst_groups <- function(vars) {
     startsWith(b, "ftn_") ~ "charting (FTN)",
     TRUE ~ "other")
   side <- ifelse(grepl("^d_", vars) & !fam %in% c("vegas") & !grepl("^(Venue|Opp\\.|Pass-rush|Turnover)", fam), "This D: ",
-                 ifelse(grepl("^o_", vars) & !grepl("^(Venue|Opp\\.|Pass-rush|Turnover)", fam), "Opp. offense: ", ""))
+                 ifelse(grepl("^o_", vars) & !grepl("^(Venue|Opp\\.|Pass-rush|Turnover)", fam), "Opp. offense: ",
+                        ifelse(grepl("^t_", vars), "Own offense: ", "")))
   lab <- paste0(side, fam)
   keep <- fam != "vegas"
   split(vars[keep], lab[keep])
@@ -203,6 +205,7 @@ k_groups <- function(vars) {
     vars %in% c("k_fgoe", "k_xpoe", "k_log_fga", "k_new", "k_drafted") ~ "Kicker recent skill & experience",
     vars %in% c("k_long_share", "k_avg_dist") ~ "Kicker range (long attempts)",
     startsWith(vars, "c_") ~ "Coach 4th-down tendency",
+    grepl("sec_play", vars) ~ "Game pace (sec / play)",
     startsWith(vars, "o_") ~ "Own offense (scoring / drives)",
     startsWith(vars, "d_") ~ "Opp. defense (points / drives allowed)",
     TRUE ~ NA_character_)

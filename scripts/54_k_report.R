@@ -94,10 +94,10 @@ sys_table <- function(sy) {
     `P(boom)` = pct(p[[paste0("p_boom_", sy)]]), `P(bust)` = pct(p[[paste0("p_bust_", sy)]]), `P(top N)` = pct(p[[paste0("p_top_", sy)]]),
     `E[FGA]` = f1(p$e_fga, 2), `E[50+]` = f1(p$e_a_50p, 2), `E[XP]` = f1(p$e_xp, 2), `P(make) 40s / 50+` = paste0(pct(p$p_40s), " / ", pct(p$p_50p)),
     `Career FG%` = pct(p$k_fg_pct), `Career 50+%` = pct(p$k_fg50_pct), `Career XP%` = pct(p$k_xp_pct), `Career FGA` = p$k_career_fga,
-    `Coach go OE` = sprintf("%+.1f%%", 100 * p$c_go_oe), Inj = coalesce(p$injury, ""))
+    `Coach GROE` = if ("c_groe" %in% names(p)) sprintf("%+.1f%%", 100 * p$c_groe) else sprintf("%+.1f%%", 100 * p$c_go_oe), Inj = coalesce(p$injury, ""))
 }
-tip[c("Career FG%", "Career 50+%", "Career XP%", "Career FGA", "Coach go OE")] <- c(tip["k_fg_pct"], tip["k_fg50_pct"], tip["k_xp_pct"],
-  "Career FG attempts before this game (nflverse pbp since 2004).", tip["c_go_oe"])
+tip[c("Career FG%", "Career 50+%", "Career XP%", "Career FGA", "Coach GROE")] <- c(tip["k_fg_pct"], tip["k_fg50_pct"], tip["k_xp_pct"],
+  "Career FG attempts before this game (nflverse pbp since 2004).", if (!is.na(tip["c_groe"])) tip["c_groe"] else tip["c_go_oe"])
 tip[c("ESPN proj", "Dec proj", "Avg rank", "Rank spread", "Kickoff", DLAB, DLAB_IMP, "Tier", "ESPN tier", "Dec tier", "Trend", "Gust", "Rain", "Kicker")] <- c(
   "ESPN projection.", "Decimal projection.", "Mean of the two ranks.",
   "|ESPN rank − Decimal rank|.", "Kickoff (Eastern). \U0001F512 = game started: frozen at the last pre-kickoff line.",

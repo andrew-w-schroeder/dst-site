@@ -42,10 +42,13 @@ comp_score <- function(C, te, SCORING) {
   out
 }
 
-# production blend = mean(enet, components) for one system
-blend_score <- function(B, te, sy, comp = NULL) {
-  if (is.null(comp)) comp <- comp_score(B$comp, te, B$SCORING)
-  (lin_pred(B$enet[[sy]], te) + comp[[paste0("fp_", sy)]]) / 2
+# production blend = mean of the portable models in `models` (B$blend; default enet + components) for one system
+blend_score <- function(B, te, sy, comp = NULL, models = NULL) {
+  models <- if (!is.null(models)) models else if (!is.null(B$blend)) B$blend else c("enet", "components")
+  parts <- list()
+  if ("enet" %in% models) parts$enet <- lin_pred(B$enet[[sy]], te)
+  if ("components" %in% models) { if (is.null(comp)) comp <- comp_score(B$comp, te, B$SCORING); parts$components <- comp[[paste0("fp_", sy)]] }
+  rowMeans(do.call(cbind, parts))
 }
 
 # environment features derived from roof / wind / temp (must match 50_k_model.R build_frame)
@@ -61,6 +64,7 @@ derive_vegas <- function(te) dplyr::mutate(te, implied_own = (total_line + sprea
 wq <- function(v, w, p) { o <- order(v); cw <- cumsum(w[o]); v[o][pmin(length(v), findInterval(p, cw) + 1)] }
 outcome_cols <- function(proj, U, sy) {
   pool <- U$pool[U$pool$system == sy, ]; hs <- U$step[[sy]] / 2
+  if (is.list(U$boom)) U$boom <- U$boom[[sy]]            # per-format boom cut (bundles from 2026-09-24 on)
   dist1 <- function(pj) { w <- dnorm((pool$proj - pj) / U$bw); list(v = pj + (pool$y - pool$proj), w = w / sum(w)) }
   q <- t(sapply(proj, function(pj) { d <- dist1(pj)
     c(wq(d$v, d$w, c(.1, .25, .75, .9)), sum(d$w[d$v >= U$boom - hs]), sum(d$w[d$v < U$bust - hs])) }))
@@ -77,10 +81,11 @@ score_bundle <- function(B, te) {
                           comp[c("e_fga", "e_fgm", "e_xp", "e_a_50p", "p_u30", "p_30s", "p_40s", "p_50p")])
   for (sy in names(B$SCORING)) {
     out[[paste0("enet_", sy)]] <- lin_pred(B$enet[[sy]], te); out[[paste0("comp_", sy)]] <- comp[[paste0("fp_", sy)]]
-    out[[paste0("proj_", sy)]] <- (out[[paste0("enet_", sy)]] + out[[paste0("comp_", sy)]]) / 2
+    models <- if (!is.null(B$blend)) B$blend else c("enet", "components")
+    out[[paste0("proj_", sy)]] <- rowMeans(cbind(if ("enet" %in% models) out[[paste0("enet_", sy)]], if ("components" %in% models) out[[paste0("comp_", sy)]]))
     oc <- outcome_cols(out[[paste0("proj_", sy)]], B$unc, sy); names(oc) <- paste0(names(oc), "_", sy)
     out <- dplyr::bind_cols(out, oc)
-    bm <- sapply(B$boot, function(bb) blend_score(bb, te, sy))
+    bm <- sapply(B$boot, function(bb) blend_score(bb, te, sy, models = if (!is.null(B$blend)) B$blend else c("enet", "components")))
     out[[paste0("ci_lo_", sy)]] <- apply(bm, 1, quantile, .05); out[[paste0("ci_hi_", sy)]] <- apply(bm, 1, quantile, .95)
     out[[paste0("pm_", sy)]] <- (out[[paste0("ci_hi_", sy)]] - out[[paste0("ci_lo_", sy)]]) / 2
     out[[paste0("rank_", sy)]] <- rank(-out[[paste0("proj_", sy)]], ties.method = "first")
