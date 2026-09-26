@@ -102,7 +102,7 @@ sys_table <- function(sy) {
   brk <- c(FALSE, tr$tier[-1] != tr$tier[-length(tr$tier)])
   attr(t, "row_cls") <- trimws(paste(ifelse(tr$tier %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tr$tier] %in% TRUE, "tb-clear", "tb-soft"), "")))
   tc <- tier_cls(tr$tier, k = max(tr$tier))
-  attr(t, "cell_cls") <- c(list(Rank = tc, Kicker = tc, Wind = wind_c[o], Gust = gust_c[o], Rain = rain_c[o]), ext_c)
+  attr(t, "cell_cls") <- c(list(Rank = tc, Kicker = tc, Proj = tc, Wind = wind_c[o], Gust = gust_c[o], Rain = rain_c[o]), ext_c)   # Proj coloured like Rank
   t %>% mutate(
     `±` = f1(p[[paste0("pm_", sy)]], 2), `90% CI` = paste0(f1(p[[paste0("ci_lo_", sy)]]), "–", f1(p[[paste0("ci_hi_", sy)]])),
     `Range bar` = range_bar(p[[paste0("q10_", sy)]], p[[paste0("q25_", sy)]], p[[paste0("q75_", sy)]], p[[paste0("q90_", sy)]], p[[paste0("proj_", sy)]]),
@@ -153,6 +153,7 @@ sys_html <- function(sy) { t <- sys_table(sy)
 panes <- c(paste0("<p class='s'>Colours follow the tiers: dark green = tier 1, light green = tier 2, light / dark red = the bottom two tiers (rank columns: that format's tier; Kicker: the average). Hover or tap a kicker for what drives the ESPN projection.</p>",
                   html_table(cmp_tbl, id = "t_cmp", raw = "Kicker", stick = 4,
                              cell_cls = list(Kicker = pos_cls, `ESPN rank` = tier_cls(te_c, k = 6), `Dec rank` = tier_cls(td_c, k = 6),
+                                             `ESPN proj` = tier_cls(te_c, k = 6), `Dec proj` = tier_cls(td_c, k = 6),
                                              Wind = wind_c[oc], Gust = gust_c[oc], Rain = rain_c[oc]))),
            sys_html("espn"), sys_html("dec"),
            if (!is.null(tt)) tt, P$backtest_html, html_table(glossary))

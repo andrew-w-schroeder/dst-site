@@ -187,7 +187,7 @@ sys_tab <- function(p) {
          "<p class='note'>Range bar: light = where the actual score lands 8 times in 10, dark = 5 times in 10, tick = projection, thin line = 0 points (axis −5 to 25). 90% CI = uncertainty of the projection itself.</p>",
          "<p class='note'>Tiers: natural breaks in the projections. A solid line = a clear drop (bigger than the model's typical ±), dashed = a softer break. Tier 1 dark green, tier 2 light green, the bottom two tiers light / dark red. Hover or tap a team for what drives its projection.</p>",
          html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, raw_cols = c("Range", "Trend", "Team", "Opp QB", "Weather"),
-                    row_cls = row_cls, cell_cls = c(list(Team = team_cls, Rank = team_cls), ext_cls), stick = 4),
+                    row_cls = row_cls, cell_cls = c(list(Team = team_cls, Rank = team_cls, Proj = team_cls), ext_cls), stick = 4),   # Proj coloured like Rank (Andrew 2026-09-25)
          if (any(c("ESPN rank", "Vegas-only rank") %in% names(pt))) "<p class='note'>Vegas-only / ESPN / Sleeper rank: that source's rank this week, with its projected points in parentheses (ESPN and Sleeper in ESPN standard scoring). Light amber = we have the D/ST in our top 12 but that source has it as a sit (13–18); dark amber = not rosterable (19+).</p>" else "",
          sprintf("<p class='rules'><b>%s scoring:</b> %s</p>", esc(p$SC$label), esc(p$SC$rules)),
          if (is.null(p$holdout)) sprintf("<h3>Back-test: %s</h3><p class='note'>Each season predicted by models trained only on earlier seasons (from 2018). Every tuning, feature and blend choice maximizes the weekly top-8 edge over Vegas-only on these seasons, so these numbers are optimistic. %s %d is the clean test.</p>",
@@ -202,7 +202,7 @@ tabs <- c(list(Compare = paste0(
   "<p class='note'>One model per scoring system (same data, features and method; each tuned and feature-selected on its own 2023–24 back-test; 2025 = clean hold-out). ",
   "Click a column header to sort. Colours follow the tiers: dark green = tier 1, light green = tier 2, light / dark red = the bottom two tiers (rank columns: that system's tier; Team: the average tier). Hover or tap a team for what drives its projection. P(top 8) = chance of actually finishing top 8 this week; see each format's tab for score ranges.</p>",
   html_table(cmp_html, id = "t_compare", sortable = TRUE, left = if (refreshed) 4 else 3, raw_cols = c("Team", "Opp QB", "Weather"),
-             cell_cls = c(list(Team = cmp_cls), rank_tier_cls), stick = 4),
+             cell_cls = c(list(Team = cmp_cls), rank_tier_cls, setNames(rank_tier_cls, sub(" rank$", " proj", names(rank_tier_cls)))), stick = 4),
   "<h3>Scoring rules</h3>", paste0(map_chr(parts, ~ sprintf("<p class='rules'><b>%s:</b> %s</p>", esc(.x$SC$label), esc(.x$SC$rules))), collapse = ""))),
   set_names(map(parts, sys_tab), map_chr(parts, ~ .x$SC$label)),
   list(Glossary = paste0(
