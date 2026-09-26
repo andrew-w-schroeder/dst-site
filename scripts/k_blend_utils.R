@@ -77,13 +77,17 @@ outcome_cols <- function(proj, U, sy) {
 # full re-score of one bundle for a (possibly updated) te: projections, components, ranges, bootstrap CI
 score_bundle <- function(B, te) {
   comp <- comp_score(B$comp, te, B$SCORING)
+  te_sim <- te; if (!is.null(B$sim) && isTRUE(B$sim$exact >= 0.99)) attr(te_sim, "k_sim_draws") <- k_sim_draws(B$sim, te)   # draw once, score both formats
   out <- dplyr::bind_cols(tibble::tibble(game_id = te$game_id, team = te$team),
                           comp[c("e_fga", "e_fgm", "e_xp", "e_a_50p", "p_u30", "p_30s", "p_40s", "p_50p")])
   for (sy in names(B$SCORING)) {
     out[[paste0("enet_", sy)]] <- lin_pred(B$enet[[sy]], te); out[[paste0("comp_", sy)]] <- comp[[paste0("fp_", sy)]]
     models <- if (!is.null(B$blend)) B$blend else c("enet", "components")
     out[[paste0("proj_", sy)]] <- rowMeans(cbind(if ("enet" %in% models) out[[paste0("enet_", sy)]], if ("components" %in% models) out[[paste0("comp_", sy)]]))
-    oc <- outcome_cols(out[[paste0("proj_", sy)]], B$unc, sy); names(oc) <- paste0(names(oc), "_", sy)
+    oc <- outcome_cols(out[[paste0("proj_", sy)]], B$unc, sy)
+    sp <- k_sim_probs(B$sim, te_sim, out[[paste0("proj_", sy)]], sy, B$unc)       # component simulation (bundles from 2026-09-25 on)
+    if (!is.null(sp)) { oc$p_boom <- sp$p_boom; oc$p_ceiling <- sp$p_ceiling; oc$sim_sd <- sp$sim_sd }
+    names(oc) <- paste0(names(oc), "_", sy)
     out <- dplyr::bind_cols(out, oc)
     bm <- sapply(B$boot, function(bb) blend_score(bb, te, sy, models = if (!is.null(B$blend)) B$blend else c("enet", "components")))
     out[[paste0("ci_lo_", sy)]] <- apply(bm, 1, quantile, .05); out[[paste0("ci_hi_", sy)]] <- apply(bm, 1, quantile, .95)
@@ -91,4 +95,72 @@ score_bundle <- function(B, te) {
     out[[paste0("rank_", sy)]] <- rank(-out[[paste0("proj_", sy)]], ties.method = "first")
   }
   out
+}
+
+## ---- Component simulation: P(more than 10) and P(15+) per matchup (Andrew, 2026-09-25; tested in 71_component_sim_test.R) ----
+# FG attempts per distance band (u30 / 30s / 40s / 50p) and XP attempts are counts; makes per band are binomial with this
+# kicker's / conditions' make chance; every part is drawn JOINTLY from one past game (each past game's quantile per part,
+# an empirical copula), so game script links them. Draws are scored per format (ESPN: band points, 60+ bonus; decimal:
+# 0.1 × the band's average made distance + that spread) and re-centred on the production projection (unchanged).
+# Back-test 2021–25: P(15+) clearly better than the kernel method (ESPN t 2.7, decimal t 2.7 vs a projection curve);
+# P(>10) a wash (so a small log-odds offset keeps its average right: said 27.2% = happened, ESPN); P(<5) ran high,
+# so P(bust) stays on the kernel method.
+K_SIM_BANDS <- c("u30", "30s", "40s", "50p")
+K_SIM_OFFSET <- list(espn = c(p_boom = 0.061, p_ceiling = -0.052), dec = c(p_boom = 0.098, p_ceiling = 0.021))   # 2021–25 back-test fit
+.ksim_pit_pois <- function(y, mu) stats::ppois(y - 1, mu) + stats::runif(length(y)) * stats::dpois(y, mu)
+.ksim_pit_bin  <- function(y, n, p) ifelse(n > 0, stats::pbinom(y - 1, n, p) + stats::runif(length(y)) * stats::dbinom(y, n, p), stats::runif(length(y)))
+.ksim_lin  <- function(b, te) drop(cbind(1, as.matrix(te[setdiff(names(b), "(Intercept)")])) %*% b)
+.ksim_fill <- function(te, med) { for (f in names(med)) { if (!f %in% names(te)) te[[f]] <- med[[f]]; te[[f]][is.na(te[[f]])] <- med[[f]] }; te }
+.ksim_make_X <- function(te, mx) {             # (games × 4 bands) rows: band intercepts, shared kicker/conditions terms, band wind slopes
+  do.call(rbind, lapply(seq_along(K_SIM_BANDS), function(k) { D <- matrix(0, nrow(te), 4); D[, k] <- 1
+    cbind(D, as.matrix(te[mx]), D * te$wind_o) }))
+}
+# tr needs: the count / make variables, a_u30..a_50p (attempts), m_u30..m_50p (makes), m60 (60+ makes), k_xpa, k_xpm, fp_<format>
+k_sim_fit <- function(tr, count_vars, make_vars, made_dist, seed = 1) {
+  allx <- unique(c(unlist(count_vars), make_vars, "k_xp_pct", "wind_o", "cold", "indoor"))
+  med <- vapply(allx, function(f) { m <- stats::median(tr[[f]], na.rm = TRUE); if (is.na(m)) 0 else m }, 0); tr <- .ksim_fill(tr, med)
+  fitc <- function(y, x) { b <- stats::coef(stats::glm(stats::as.formula(paste(y, "~", paste(c("1", x), collapse = " + "))), data = tr, family = stats::quasipoisson()))
+    b[is.na(b)] <- 0; b }
+  Bc <- lapply(stats::setNames(K_SIM_BANDS, K_SIM_BANDS), function(bd) fitc(paste0("a_", bd), count_vars[[bd]])); Bx <- fitc("k_xpa", count_vars$xp)
+  X <- .ksim_make_X(tr, make_vars); att <- unlist(lapply(K_SIM_BANDS, function(bd) tr[[paste0("a_", bd)]])); mad <- unlist(lapply(K_SIM_BANDS, function(bd) tr[[paste0("m_", bd)]]))
+  ok <- att > 0; gm <- stats::glm.fit(X[ok, ], mad[ok] / att[ok], weights = att[ok], family = stats::binomial()); Bm <- gm$coefficients; Bm[is.na(Bm)] <- 0
+  xpX <- cbind(1, as.matrix(tr[c("k_xp_pct", "wind_o", "cold", "indoor")])); okx <- tr$k_xpa > 0
+  gx <- stats::glm.fit(xpX[okx, ], tr$k_xpm[okx] / tr$k_xpa[okx], weights = tr$k_xpa[okx], family = stats::binomial()); Bxp <- gx$coefficients; Bxp[is.na(Bxp)] <- 0
+  set.seed(seed)
+  pm <- matrix(stats::plogis(drop(X %*% Bm)), nrow(tr)); px <- stats::plogis(drop(xpX %*% Bxp))
+  pool <- as.data.frame(c(
+    lapply(stats::setNames(K_SIM_BANDS, paste0("ua_", K_SIM_BANDS)), function(bd) .ksim_pit_pois(tr[[paste0("a_", bd)]], exp(.ksim_lin(Bc[[bd]], tr)))),
+    lapply(stats::setNames(seq_along(K_SIM_BANDS), paste0("um_", K_SIM_BANDS)), function(k) .ksim_pit_bin(tr[[paste0("m_", K_SIM_BANDS[k])]], tr[[paste0("a_", K_SIM_BANDS[k])]], pm[, k])),
+    list(ux = .ksim_pit_pois(tr$k_xpa, exp(.ksim_lin(Bx, tr))), uxm = .ksim_pit_bin(tr$k_xpm, tr$k_xpa, px))), check.names = FALSE)
+  rebuilt <- 3 * (tr$m_u30 + tr$m_30s) + 4 * tr$m_40s + 5 * tr$m_50p + tr$m60 - (tr$a_u30 + tr$a_30s + tr$a_40s + tr$a_50p - tr$m_u30 - tr$m_30s - tr$m_40s - tr$m_50p) + tr$k_xpm
+  list(Bc = Bc, Bx = Bx, Bm = Bm, Bxp = Bxp, make_vars = make_vars, med = med, pool = pool, share60 = sum(tr$m60) / max(1, sum(tr$m_50p)),
+       dist = made_dist, exact = mean(abs(rebuilt - tr$fp_espn) < 1e-9), n = nrow(tr), seed = seed, offset = K_SIM_OFFSET)
+}
+k_sim_draws <- function(S, te) {                 # list of games × past games matrices per format (not re-centred)
+  te <- .ksim_fill(te, S$med); nt <- nrow(te); np <- nrow(S$pool); set.seed(S$seed)
+  RU <- function(u) matrix(u, nt, np, byrow = TRUE); RM <- function(m) matrix(m, nt, np); cl <- function(u) pmin(pmax(u, 1e-12), 1 - 1e-12)
+  pm <- matrix(stats::plogis(drop(.ksim_make_X(te, S$make_vars) %*% S$Bm)), nt); px <- stats::plogis(drop(cbind(1, as.matrix(te[c("k_xp_pct", "wind_o", "cold", "indoor")])) %*% S$Bxp))
+  A <- lapply(stats::setNames(K_SIM_BANDS, K_SIM_BANDS), function(bd) matrix(stats::qpois(cl(RU(S$pool[[paste0("ua_", bd)]])), RM(exp(.ksim_lin(S$Bc[[bd]], te)))), nt, np))
+  Mk <- lapply(stats::setNames(seq_along(K_SIM_BANDS), K_SIM_BANDS), function(k) matrix(stats::qbinom(cl(RU(S$pool[[paste0("um_", K_SIM_BANDS[k])]])), A[[k]], RM(pm[, k])), nt, np))
+  XA <- matrix(stats::qpois(cl(RU(S$pool$ux)), RM(exp(.ksim_lin(S$Bx, te)))), nt, np); XM <- matrix(stats::qbinom(cl(RU(S$pool$uxm)), XA, RM(px)), nt, np)
+  M60 <- matrix(stats::rbinom(length(Mk$`50p`), Mk$`50p`, S$share60), nt, np)
+  miss <- Reduce(`+`, A) - Reduce(`+`, Mk)
+  dm <- S$dist$mean; dv <- S$dist$var
+  fg_dec <- Reduce(`+`, lapply(K_SIM_BANDS, function(bd) 0.1 * dm[[bd]] * Mk[[bd]]))
+  sd_dec <- sqrt(Reduce(`+`, lapply(K_SIM_BANDS, function(bd) 0.01 * dv[[bd]] * Mk[[bd]])))
+  list(espn = 3 * (Mk$u30 + Mk$`30s`) + 4 * Mk$`40s` + 5 * Mk$`50p` + M60 - miss + XM,
+       dec  = fg_dec + matrix(stats::rnorm(nt * np), nt, np) * sd_dec - miss + XM)
+}
+# per format: P(more than BOOM) and P(15+) (continuity-corrected cuts), NULL when unavailable
+k_sim_probs <- function(S, te, proj, sy, U) {
+  if (is.null(S) || !isTRUE(S$exact >= 0.99)) return(NULL)
+  D <- if (!is.null(attr(te, "k_sim_draws"))) attr(te, "k_sim_draws") else k_sim_draws(S, te)
+  step <- U$step[[sy]]; boom <- if (is.list(U$boom)) U$boom[[sy]] else U$boom
+  cuts <- list(p_boom = list(cut = boom - step / 2, above = TRUE), p_ceiling = list(cut = 15 - step / 2, above = TRUE))
+  set.seed(S$seed); Mj <- D[[sy]] + matrix(stats::runif(length(D[[sy]]), -step / 2, step / 2), nrow(D[[sy]])); Mj <- Mj - rowMeans(Mj) + proj
+  off <- S$offset[[sy]]
+  out <- lapply(stats::setNames(names(cuts), names(cuts)), function(k) { p <- rowMeans(Mj >= cuts[[k]]$cut)
+    if (!is.null(off) && !is.na(off[k])) p <- stats::plogis(stats::qlogis(pmin(pmax(p, 1e-4), 1 - 1e-4)) + off[[k]]); p })
+  out$sim_sd <- apply(D[[sy]], 1, stats::sd); out$sim_check <- max(abs(rowMeans(Mj) - proj))
+  tibble::as_tibble(out)
 }

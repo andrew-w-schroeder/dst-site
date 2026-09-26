@@ -60,10 +60,13 @@ make_proj_tbl <- function(pred, html = FALSE, label = "") {       # same columns
   t <- pred %>% transmute(Rank = rank, Team = team, Opp = paste0(ifelse(home == 1, "vs ", "@ "), opp), `Opp QB` = opp_qb_name,
                           Spread = spread, `Opp implied` = round(implied_opp, 1), Proj = round(proj, 2),
                           `±` = sprintf("±%.1f", (ci_hi - ci_lo) / 2), `90% CI` = sprintf("%.1f–%.1f", ci_lo, ci_hi),
-                          `P(10+)` = sprintf("%.0f%%", 100 * p_boom), `P(<3)` = sprintf("%.0f%%", 100 * p_bust), `P(top 8)` = sprintf("%.0f%%", 100 * p_top8),
+                          `P(10+)` = sprintf("%.0f%%", 100 * p_boom), `P(<3)` = sprintf("%.0f%%", 100 * p_bust),
+                          `P(15+)` = if ("p_ceiling" %in% names(pred)) ifelse(is.na(p_ceiling), "", sprintf("%.0f%%", 100 * p_ceiling)) else "",
+                          `P(top 8)` = sprintf("%.0f%%", 100 * p_top8),
                           `E[sacks]` = round(e_sacks, 2), `E[TO]` = round(e_to, 2), `PA pts` = round(e_pa, 2),
                           `YA pts` = round(e_ya, 2), `P(TD)` = round(p_td, 2), Venue = ifelse(indoor == 1, "indoor", "outdoor"),
                           `Opp QB hist %` = round(100 * o_qb_cont), `Opp caller hist %` = round(100 * o_pc_cont))
+  if (all(t$`P(15+)` == "")) t$`P(15+)` <- NULL                    # older bundles: no simulation
   if ("proj_base" %in% names(pred)) t <- t %>% mutate(!!DLAB := signed(pred$proj - pred$proj_base, 2), .after = Proj) %>%
     mutate(Kickoff = kickoff(pred), .after = Opp)
   if (html && "trend_svg" %in% names(pred)) t <- t %>% mutate(Trend = pred$trend_svg, .after = all_of(DLAB))
@@ -108,6 +111,7 @@ if ("Weather" %in% names(cmp_html)) cmp_html$Weather <- wx_p1(TRUE)[match(cmp$Te
 ## ---- 3. Glossary (shared) ----
 g0 <- parts[[1]]
 compare_gloss <- tribble(~term, ~definition,
+  "P(15+)", "ceiling: chance of a 15+ point game, from simulating this matchup's parts (sacks, takeaways, return TDs, points and yards allowed, drawn together from past games) centred on the projection. Higher for defenses that score through turnovers and TDs",
   "<System> proj", "projected D/ST fantasy points under that scoring system (each system has its own model, tuning and feature selection)",
   "<System> rank", "rank of that projection among this week's 32 D/STs (1 = best)",
   "<System> P(top 8)", "chance the D/ST finishes as a top-8 scorer this week under that scoring system (4,000 simulated weeks using back-test errors)",

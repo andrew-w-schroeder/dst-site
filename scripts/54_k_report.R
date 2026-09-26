@@ -106,11 +106,13 @@ sys_table <- function(sy) {
   t %>% mutate(
     `±` = f1(p[[paste0("pm_", sy)]], 2), `90% CI` = paste0(f1(p[[paste0("ci_lo_", sy)]]), "–", f1(p[[paste0("ci_hi_", sy)]])),
     `Range bar` = range_bar(p[[paste0("q10_", sy)]], p[[paste0("q25_", sy)]], p[[paste0("q75_", sy)]], p[[paste0("q90_", sy)]], p[[paste0("proj_", sy)]]),
-    `P(boom)` = pct(p[[paste0("p_boom_", sy)]]), `P(bust)` = pct(p[[paste0("p_bust_", sy)]]), `P(top N)` = pct(p[[paste0("p_top_", sy)]]),
+    `P(boom)` = pct(p[[paste0("p_boom_", sy)]]), `P(bust)` = pct(p[[paste0("p_bust_", sy)]]),
+    `P(15+)` = if (paste0("p_ceiling_", sy) %in% names(p)) pct(p[[paste0("p_ceiling_", sy)]]) else NA_character_, `P(top N)` = pct(p[[paste0("p_top_", sy)]]),
     `E[FGA]` = f1(p$e_fga, 2), `E[50+]` = f1(p$e_a_50p, 2), `E[XP]` = f1(p$e_xp, 2), `P(make) 40s / 50+` = paste0(pct(p$p_40s), " / ", pct(p$p_50p)),
     `Career FG%` = pct(p$k_fg_pct), `FG% OE` = { v <- if ("k_fgoe_disp" %in% names(p)) p$k_fgoe_disp else if ("k_fgoe" %in% names(p)) p$k_fgoe else rep(NA_real_, nrow(p))
                 ifelse(is.na(v), "", sprintf("%+.1f%%", 100 * v)) }, `Career 50+%` = pct(p$k_fg50_pct), `Career XP%` = pct(p$k_xp_pct), `Career FGA` = p$k_career_fga,
-    `Coach GROE` = if ("c_groe" %in% names(p)) sprintf("%+.1f%%", 100 * p$c_groe) else sprintf("%+.1f%%", 100 * p$c_go_oe), Inj = coalesce(p$injury, ""))
+    `Coach GROE` = if ("c_groe" %in% names(p)) sprintf("%+.1f%%", 100 * p$c_groe) else sprintf("%+.1f%%", 100 * p$c_go_oe), Inj = coalesce(p$injury, "")) %>%
+    { if (all(is.na(.$`P(15+)`))) select(., -`P(15+)`) else . }                       # older bundles: no simulation
 }
 tip[c("ESPN rank", "Sleeper rank")] <- RANKCOL_TIP
 tip["Vegas-only rank"] <- "rank and projection of the Vegas-only baseline (a regression on the betting lines alone: implied points, spread, total, home), with the same lines as our projection. Amber as for ESPN / Sleeper rank"

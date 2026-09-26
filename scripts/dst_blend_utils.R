@@ -28,11 +28,14 @@ component_cols <- function(B, specs, te, sc) tibble::tibble(
 
 # Outcome ranges, boom/bust odds and P(top 8) from out-of-sample back-test residuals (see 40_dst_model.R, 9b).
 wq <- function(x, w, p) { o <- order(x); x <- x[o]; cw <- cumsum(w[o]) / sum(w); x[which(cw >= p)[1]] }
-outcome_dist <- function(proj, unc_proj, unc_resid, bw, n_sim, seed) {
+# D/ST scores are whole points but proj + residual is continuous, so the cuts sit half a point below the
+# whole-point thresholds: 10+ ≡ ≥ 9.5, < 3 ≡ < 2.5 (continuity correction, Andrew 2026-09-25; before it
+# P(boom) ran 2 pts low in the back-test: said 24.2% vs 26.2% happened).
+outcome_dist <- function(proj, unc_proj, unc_resid, bw, n_sim, seed, boom_cut = 9.5, bust_cut = 2.5) {
   w_all <- sapply(proj, function(p) dnorm((unc_proj - p) / bw))                       # n_backtest × n_teams
   od <- purrr::map_dfr(seq_along(proj), function(k) { w <- w_all[, k]; sim <- proj[k] + unc_resid
     tibble::tibble(q10 = wq(sim, w, .10), q25 = wq(sim, w, .25), q75 = wq(sim, w, .75), q90 = wq(sim, w, .90),
-                   p_boom = sum(w * (sim >= 10)) / sum(w), p_bust = sum(w * (sim < 3)) / sum(w)) })
+                   p_boom = sum(w * (sim >= boom_cut)) / sum(w), p_bust = sum(w * (sim < bust_cut)) / sum(w)) })
   set.seed(seed)
   sims <- sapply(seq_along(proj), function(k) proj[k] + sample(unc_resid, n_sim, replace = TRUE, prob = w_all[, k]))
   od$p_top8 <- colMeans(t(apply(-sims, 1, rank, ties.method = "random")) <= 8)
@@ -72,4 +75,63 @@ swap_qbs <- function(b, starters, force = FALSE) {
                                       opp_qb_name = ifelse(changed, dplyr::coalesce(new_nm, pool_nm, id), raw$opp_qb_name),
                                       base_qb_name = raw$opp_qb_name, qb_changed = changed, o_qb_cont = raw$o_qb_cont,
                                       qb_new = changed & !(paste(raw$opp, id) %in% paste(Q$alt$team, Q$alt$qb_id))))
+}
+
+## ---- Component simulation: P(10+) / P(<3) / P(15+) per matchup (Andrew, 2026-09-25; tested in 71_component_sim_test.R) ----
+# Each game is simulated from its parts (sacks, INTs, fumble recoveries, defensive/return TDs as counts; points and
+# yards allowed as regressions + a past game's miss; safeties / blocks / 2-pt returns as they happened), with all parts
+# drawn JOINTLY from one past game (each past game's quantile per part = an empirical copula), so game script links
+# them. The draws keep their SHAPE but are re-centred on the production projection, so the projection never changes.
+# The pool (quantiles of every training game) is stored in the bundle, so the daily refresh re-simulates with new
+# lines / QBs exactly, without data. Back-test 2019–25 (Andrew's NGS model, ESPN): average said = happened (boom 26.1 vs
+# 26.2%, bust 31.9 vs 32.3%), log loss slightly better than the kernel method; the simulated spread tracks the actual
+# spread (t 3.3). Used only when the system's points rebuild exactly from the parts (else the kernel method stays).
+.sim_pit_pois <- function(y, mu) stats::ppois(y - 1, mu) + stats::runif(length(y)) * stats::dpois(y, mu)
+.sim_lin  <- function(b, te) drop(cbind(1, as.matrix(te[setdiff(names(b), "(Intercept)")])) %*% b)
+.sim_fill <- function(te, med) { for (f in names(med)) { if (!f %in% names(te)) te[[f]] <- med[[f]]; te[[f]][is.na(te[[f]])] <- med[[f]] }; te }
+.sim_pa_pts <- function(pa, SC) SC$pa_pts[cut(pa, SC$pa_breaks, labels = FALSE)]
+.sim_ya_pts <- function(ya, SC) if (is.null(SC$ya_breaks)) 0 * ya else SC$ya_pts[cut(ya, SC$ya_breaks, labels = FALSE)]
+DST_SIM_Y <- c(sacks = "dst_sacks", ints = "dst_ints", fr = "dst_fr", td = "dst_td")
+DST_SIM_CUTS <- list(p_boom = list(cut = 9.5, above = TRUE), p_bust = list(cut = 2.5, above = FALSE), p_ceiling = list(cut = 14.5, above = TRUE))
+
+dst_sim_fit <- function(tr, specs, SC, seed = 1) {
+  X <- list(sacks = specs$sacks$x, ints = specs$ints$x, fr = specs$fr$x, td = specs$big$x, pa = specs$pa$x,
+            ya = if (!is.null(SC$ya_breaks)) specs$ya$x)
+  allx <- unique(unlist(X)); med <- vapply(allx, function(f) { m <- stats::median(tr[[f]], na.rm = TRUE); if (is.na(m)) 0 else m }, 0)
+  tr <- .sim_fill(tr, med)
+  fit <- function(y, x, fam) { b <- stats::coef(stats::glm(stats::as.formula(paste(y, "~", paste(c("1", x), collapse = " + "))), data = tr, family = fam))
+    b[is.na(b)] <- 0; b }
+  B <- c(lapply(stats::setNames(names(DST_SIM_Y), names(DST_SIM_Y)), function(p) fit(DST_SIM_Y[[p]], X[[p]], stats::quasipoisson())),
+         list(pa = fit("pa", X$pa, stats::gaussian()), ya = if (!is.null(X$ya)) fit("ya", X$ya, stats::gaussian())))
+  set.seed(seed)
+  pool <- as.data.frame(lapply(stats::setNames(names(DST_SIM_Y), paste0("u_", names(DST_SIM_Y))),
+                               function(p) .sim_pit_pois(tr[[DST_SIM_Y[[p]]]], exp(.sim_lin(B[[p]], tr)))))
+  pool$r_pa <- tr$pa - .sim_lin(B$pa, tr)
+  pool$r_ya <- if (!is.null(B$ya)) tr$ya - .sim_lin(B$ya, tr) else 0
+  pool$rare <- with(tr, SC$safety * dst_safety + SC$block_kick * dst_blk_kick + SC$block_pat * dst_blk_pat + SC$two_pt_ret * dst_2pt)
+  rebuilt <- with(tr, SC$sack * dst_sacks + SC$int * dst_ints + SC$fum_rec * dst_fr + SC$td * dst_td) + pool$rare +
+    .sim_pa_pts(tr$pa, SC) + .sim_ya_pts(tr$ya, SC)
+  list(B = B, med = med, pool = pool, exact = mean(abs(rebuilt - tr$fp) < 1e-9), n = nrow(tr), seed = seed, cuts = DST_SIM_CUTS)
+}
+dst_sim_draws <- function(S, te, SC) {                    # games × past games matrix of simulated points (not re-centred)
+  te <- .sim_fill(te, S$med); nt <- nrow(te); np <- nrow(S$pool)
+  RU <- function(u) matrix(u, nt, np, byrow = TRUE); RM <- function(m) matrix(m, nt, np)
+  cnt <- function(p) matrix(stats::qpois(pmin(RU(S$pool[[paste0("u_", p)]]), 1 - 1e-12), RM(exp(.sim_lin(S$B[[p]], te)))), nt, np)
+  M <- SC$sack * cnt("sacks") + SC$int * cnt("ints") + SC$fum_rec * cnt("fr") + SC$td * cnt("td") + RU(S$pool$rare) +
+    matrix(.sim_pa_pts(pmax(0, round(RM(.sim_lin(S$B$pa, te)) + RU(S$pool$r_pa))), SC), nt, np)
+  if (!is.null(S$B$ya)) M <- M + matrix(.sim_ya_pts(round(RM(.sim_lin(S$B$ya, te)) + RU(S$pool$r_ya)), SC), nt, np)
+  M
+}
+# shared: re-centre draws on the projection (+ ±½-step jitter so whole-point draws don't snap to the lattice), then P per cut
+sim_probs <- function(M, proj, cuts, step = 1, seed = 1, offset = NULL) {
+  set.seed(seed); Mj <- M + matrix(stats::runif(length(M), -step / 2, step / 2), nrow(M)); Mj <- Mj - rowMeans(Mj) + proj
+  out <- lapply(stats::setNames(names(cuts), names(cuts)), function(k) { p <- rowMeans(if (cuts[[k]]$above) Mj >= cuts[[k]]$cut else Mj < cuts[[k]]$cut)
+    if (!is.null(offset) && !is.null(offset[[k]])) p <- stats::plogis(stats::qlogis(pmin(pmax(p, 1e-4), 1 - 1e-4)) + offset[[k]]); p })
+  out$sim_sd <- apply(M, 1, stats::sd); out$sim_check <- max(abs(rowMeans(Mj) - proj))
+  tibble::as_tibble(out)
+}
+# P(10+), P(<3), P(15+) for this week's rows; NULL when the bundle has no simulation or the points don't rebuild exactly
+dst_sim_probs <- function(S, te, proj, SC) {
+  if (is.null(S) || !isTRUE(S$exact >= 0.99)) return(NULL)
+  sim_probs(dst_sim_draws(S, te, SC), proj, S$cuts, step = 1, seed = S$seed)
 }
