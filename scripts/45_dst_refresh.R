@@ -194,7 +194,7 @@ score <- function(b, te) {
   boot <- sapply(b$boot, blend_pred, te = te, sc = b$SC, specs = b$specs, models = b$final_models)
   od <- outcome_dist(out$proj, b$unc$proj, b$unc$resid, b$unc$bw, b$unc$n_sim, b$unc$seed)
   sp <- dst_sim_probs(b$sim, te, out$proj, b$SC)       # component simulation (bundles from 2026-09-25 on): P(10+), P(<3), P(15+)
-  if (!is.null(sp)) { od$p_boom <- sp$p_boom; od$p_bust <- sp$p_bust; od$p_ceiling <- sp$p_ceiling; od$sim_sd <- sp$sim_sd }
+  if (!is.null(sp)) { od$p_boom <- sp$p_boom; if ("p_bust" %in% names(sp)) od$p_bust <- sp$p_bust; od$p_ceiling <- sp$p_ceiling; od$sim_sd <- sp$sim_sd }
   bind_cols(out, component_cols(M$comp, b$specs, te, b$SC), od, boot_summary(boot))
 }
 dyn_cols <- c("spread", "total_line", "implied_opp", "enet", "ridge", "components", "proj", "e_sacks", "e_to", "e_pa", "e_ya", "p_td",

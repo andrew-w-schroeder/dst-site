@@ -93,6 +93,11 @@ swap_qbs <- function(b, starters, force = FALSE) {
 .sim_ya_pts <- function(ya, SC) if (is.null(SC$ya_breaks)) 0 * ya else SC$ya_pts[cut(ya, SC$ya_breaks, labels = FALSE)]
 DST_SIM_Y <- c(sacks = "dst_sacks", ints = "dst_ints", fr = "dst_fr", td = "dst_td")
 DST_SIM_CUTS <- list(p_boom = list(cut = 9.5, above = TRUE), p_bust = list(cut = 2.5, above = FALSE), p_ceiling = list(cut = 14.5, above = TRUE))
+# Per-format log-odds offsets (72_sim_calibration.R on Andrew's 2019–25 back-test, 2026-09-25): on Yahoo / FFPC the raw
+# simulation ran ~1.2 pts high on P(10+) and ~1.5 pts low on P(<3). The offsets fix the average; ESPN needs none.
+# Yahoo P(<3) stays on the kernel method: even calibrated it scored worse (log loss −0.41%, t −1.6).
+DST_SIM_OFFSET <- list(Yahoo = c(p_boom = -0.060, p_ceiling = -0.022), FFPC = c(p_boom = -0.061, p_bust = 0.085, p_ceiling = -0.038))
+DST_SIM_KERNEL <- list(Yahoo = "p_bust")        # outcomes that keep the kernel method
 
 dst_sim_fit <- function(tr, specs, SC, seed = 1) {
   X <- list(sacks = specs$sacks$x, ints = specs$ints$x, fr = specs$fr$x, td = specs$big$x, pa = specs$pa$x,
@@ -131,7 +136,9 @@ sim_probs <- function(M, proj, cuts, step = 1, seed = 1, offset = NULL) {
   tibble::as_tibble(out)
 }
 # P(10+), P(<3), P(15+) for this week's rows; NULL when the bundle has no simulation or the points don't rebuild exactly
+# (offsets / kernel choices are looked up by format at scoring time, so a new dst_blend_utils.R applies to this week's bundles)
 dst_sim_probs <- function(S, te, proj, SC) {
   if (is.null(S) || !isTRUE(S$exact >= 0.99)) return(NULL)
-  sim_probs(dst_sim_draws(S, te, SC), proj, S$cuts, step = 1, seed = S$seed)
+  out <- sim_probs(dst_sim_draws(S, te, SC), proj, S$cuts, step = 1, seed = S$seed, offset = as.list(DST_SIM_OFFSET[[SC$label]]))
+  out[setdiff(names(out), DST_SIM_KERNEL[[SC$label]])]
 }
