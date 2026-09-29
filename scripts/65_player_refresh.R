@@ -114,7 +114,15 @@ if (nzchar(KEY) || nzchar(MOCK)) tryCatch({
     pulled <- pulled + 1
   }
   if (length(longs)) {
-    L <- ladder_merge(bind_rows(longs))
+    ## per-book outcomes of games kicking off within 3 h (normally their last pull before kickoff), kept per game so
+    ## the weekly run (78) can add them to the per-book props history without buying them again (81)
+    BOOKS_RDS <- file.path(PROJ_DIR, sprintf("data/players/props_books_%d_wk%02d.rds", SEASON, WEEK))
+    raw0 <- bind_rows(longs); near <- m$game_id[as.numeric(difftime(m$ct, NOW, units = "hours")) <= 3]
+    near <- intersect(near, unique(raw0$game_id))
+    if (length(near)) tryCatch({ bk <- if (file.exists(BOOKS_RDS)) readRDS(BOOKS_RDS) else list()
+      for (g in near) bk[[g]] <- list(pulled_at = isoz(NOW), event_id = m$event_id[m$game_id == g][1], long = raw0[raw0$game_id == g, ])
+      saveRDS(bk, BOOKS_RDS) }, error = function(e) message("players: per-book save — ", conditionMessage(e)))
+    L <- ladder_merge(raw0)
     if (attr(L, "ladder_n") > 0) message(sprintf("players: ladders used for %d book x player x stat lines without a main line (Over-only de-vig k = %.3f, %s)",
       attr(L, "ladder_n"), attr(L, "ladder_k"), if (attr(L, "ladder_k_n") >= 5) sprintf("from %d players with both, middle half %s", attr(L, "ladder_k_n"), attr(L, "ladder_k_iqr")) else "default"))
     ou <- props_consensus(book_lines(L)); td <- props_anytime(L)
