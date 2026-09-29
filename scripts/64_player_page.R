@@ -22,7 +22,7 @@ PP_PROP_LAB <- c(pass_yds = "Pass yds", pass_td = "Pass TD", pass_int = "INT", p
 PP_TIP <- c(
   Rank = "Rank at the position in this format.",
   Tier = "Natural-break tier of the projections (optimal 1-D grouping; 1 = best). Solid line = a gap of 1.5+ points between tiers; dashed = a smaller gap.",
-  Player = "Hover or tap for the sportsbook lines behind the projection and which stats had no prop.",
+  Player = "\U0001F525 = Vegas love: our Vegas-only projection ranks him at least 25% higher at his position than FantasyPros ECR (and at least 2 spots). \u2620\uFE0F = Vegas fade: at least 25% (and 2 spots) lower. The % is the gap divided by the better of the two ranks, so 2 spots matters more near the top (WR8 vs WR10 = 25%) than further down. Hover or tap a player for the exact difference.",
   Kickoff = "Kickoff (Eastern). \U0001F512 = game started: frozen at the last props pulled before kickoff.",
   Imp = "Team implied points from the latest pre-kickoff spread and total (median of sportsbooks, from the D/ST page's line pulls).",
   Proj = "Vegas-only projection: the sportsbook props converted to expected stats (yardage medians corrected for skew, counts via a Poisson fit to line and odds, anytime-TD price calibrated on 2023+ results) and scored in this format.",
@@ -44,7 +44,10 @@ pp_flag <- function(ours, theirs, pos) { n <- unname(PP_START[pos])          # p
 PP_AMBER <- paste0("<p class='s legend'><span class='sw fl1'></span> <b>Light amber</b>: we rank him a start at his position ",
   "(inside QB 12 / RB 24 / WR 36 / TE 12) but that source ranks him just outside, a borderline sit (e.g. WR 37\u201354). ",
   "<span class='sw fl2'></span> <b>Dark amber</b>: that source ranks him well outside, beyond 1.5\u00d7 the start line (e.g. WR 55+). ",
-  "Compared on position ranks, also on FLEX.</p>")
+  "Compared on position ranks, also on FLEX.</p>",
+  "<p class='s legend'>\U0001F525 <b>Vegas love</b>: our Vegas-only projection ranks him at least 25% higher at his position than FantasyPros ECR ",
+  "(the gap \u00f7 the better of the two ranks, and at least 2 spots: WR8 vs WR10 = 25%, WR40 vs WR50 = 25%). ",
+  "\u2620\uFE0F <b>Vegas fade</b>: at least 25% (and 2 spots) lower. Hover a player for the exact difference.</p>")
 pp_rank_pts <- function(rk, pts) ifelse(is.na(rk), "", ifelse(is.na(pts), as.character(rk), sprintf("%d (%.1f)", as.integer(rk), pts)))
 PP_FILL_NOTE <- "Italic* = no prop for this stat: receptions from the receiving-yards prop and the player's yards per catch (or the reverse); otherwise his recency-weighted career average per game, shrunk toward players at his position without that prop."
 
@@ -76,6 +79,30 @@ pp_player_tip <- function(p, fmt) {
          if (length(fills)) paste0("\n<b>No prop</b>: ", pp_esc(paste(fills, collapse = " · "))) else "")
 }
 
+## Vegas love / fade vs FantasyPros ECR (Andrew 2026-09-29): compare position ranks as a percentage, so a
+## 2-spot gap inside the top 10 counts more than the same gap outside the top 25.
+##   diff % = (ECR rank - our rank) / the better (smaller) of the two ranks   (symmetric: 8 vs 10 = +25%, 10 vs 8 = -25%)
+##   flame when we rank him at least PP_LOVE_PCT higher, skull and crossbones at least that much lower,
+##   and only when the gap is at least PP_LOVE_MIN spots (so RB2 vs RB3 at the very top is not flagged)
+PP_LOVE_PCT <- 0.25; PP_LOVE_MIN <- 2
+PP_FLAME <- "\U0001F525"; PP_SKULL <- "\u2620\uFE0F"
+pp_player_cell <- function(d, prk) {
+  ecr <- if ("ecr_rank" %in% names(d)) d$ecr_rank else rep(NA_real_, nrow(d))
+  gap <- ecr - prk; pc <- gap / pmin(ecr, prk)
+  sym <- ifelse(is.na(pc), "", ifelse(pc >= PP_LOVE_PCT & gap >= PP_LOVE_MIN, paste0(" ", PP_FLAME),
+               ifelse(pc <= -PP_LOVE_PCT & -gap >= PP_LOVE_MIN, paste0(" ", PP_SKULL), "")))
+  what <- ifelse(is.na(ecr), "No FantasyPros ECR for this player this week.",
+    ifelse(gap == 0, "Same rank as ECR.",
+      sprintf("%d spot%s %s than ECR (%+.0f%%)%s", as.integer(abs(gap)), ifelse(abs(gap) == 1, "", "s"),
+              ifelse(gap > 0, "higher", "lower"), 100 * pc,
+              ifelse(nzchar(sym), ifelse(gap > 0, paste0(": Vegas love ", PP_FLAME), paste0(": Vegas fade ", PP_SKULL)), ""))))
+  tip <- paste0("<b>", pp_esc(d$player_name), " (", d$team, ", ", d$pos, ")</b>",
+                ifelse(d$td_keep %in% TRUE, " TD-only", ""),
+                "\nVegas ", d$pos, as.integer(prk), ifelse(is.na(ecr), "", sprintf(" · ECR %s%d (average expert rank %.1f)", d$pos, as.integer(ecr), d$ecr_avg)),
+                "\n", what)
+  tip_span(paste0(pp_esc(d$player_name), ifelse(d$td_keep, " <span class='s'>(TD)</span>", ""), sym), tip)
+}
+
 pp_pos_table <- function(P, pos, fmt) {
   if (!nrow(P$cur)) return("<p class='s'>No props posted yet for this position.</p>")
   flex <- pos == "FLEX"
@@ -97,8 +124,7 @@ pp_pos_table <- function(P, pos, fmt) {
     ifelse(d[[paste0("src.", s)]] %in% "prop", val, paste0("<i class='fill'>", val, "*</i>")) }) |> setNames(scols)
   ko <- paste0(ifelse(d$locked, "\U0001F512 ", ""), pp_et(d$ko, "%a %I:%M %p"))
   t <- tibble(Rank = seq_len(nrow(d)), Tier = tr$tier,
-              Player = tip_span(paste0(pp_esc(d$player_name), ifelse(d$td_keep, " <span class='s'>(TD)</span>", "")),
-                                vapply(seq_len(nrow(d)), \(i) pp_player_tip(d[i, ], fmt), "")),
+              Player = pp_player_cell(d, prk),
               Team = d$team, Opp = paste0(ifelse(d$home == 1, "vs ", "@ "), d$opp), Kickoff = ko, Imp = pp_f(d$implied),
               Proj = pp_f(v, 2), "\u0394" = pp_sg(v - first$proj[match(d$gsis_id, first$gsis_id)]),
               Trend = spark, "P(boom)" = pp_pct(d[[paste0("p_boom_", fmt)]]), "P(bust)" = pp_pct(d[[paste0("p_bust_", fmt)]]))
