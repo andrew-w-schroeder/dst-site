@@ -146,8 +146,9 @@ imp <- tryCatch({
     filter(abs(as.numeric(difftime(ct, ko, units = "days"))) <= 2) |>
     group_by(game_id) |> slice_max(t, n = 1, with_ties = FALSE) |> ungroup()
   g <- games |> select(game_id, home_team, away_team) |> inner_join(lx |> select(game_id, sp, total), by = "game_id")
-  bind_rows(g |> transmute(game_id, team = home_team, implied = (total - sp) / 2),
-            g |> transmute(game_id, team = away_team, implied = (total + sp) / 2))
+  ## line_history's home_spread is + when the home team is favored (as nflverse spread_line; see 45)
+  bind_rows(g |> transmute(game_id, team = home_team, implied = (total + sp) / 2),
+            g |> transmute(game_id, team = away_team, implied = (total - sp) / 2))
 }, error = function(e) tibble(game_id = character(), team = character(), implied = numeric()))
 if (nrow(cur)) {
   cur <- cur |> left_join(gl, by = c("game_id", "team")) |> left_join(imp, by = c("game_id", "team")) |>
@@ -159,6 +160,10 @@ if (nrow(cur)) {
 XP_CSV <- file.path(PROJ_DIR, sprintf("data/players/ext_players_%d_wk%02d.csv", SEASON, WEEK))
 if (!nzchar(Sys.getenv("NO_EXT")) && (any(games$ko > NOW) || !file.exists(XP_CSV)))   # after the week: one pull, for the fallback
   tryCatch(xp_snapshot(XP_CSV, SEASON, WEEK, NOW, games$ko), error = function(e) message("players: ESPN / Sleeper / ECR — ", conditionMessage(e)))
+## games that kicked off with no ECR pulled before kickoff (a late publish, a missed run): the DynastyProcess
+## file's version from just before kickoff, from its git history
+if (!nzchar(Sys.getenv("NO_EXT")))
+  tryCatch(xp_ecr_backfill(XP_CSV, gl |> distinct(team, ko), NOW, games$ko), error = function(e) message("players: ECR history — ", conditionMessage(e)))
 if (nrow(cur)) {
   xa <- tryCatch(xp_attach(XP_CSV, cur |> distinct(gsis_id, player_name, pos, team), gl |> distinct(team, ko)),
                  error = function(e) { message("players: ESPN / Sleeper / ECR attach — ", conditionMessage(e)); NULL })

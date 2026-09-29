@@ -136,6 +136,9 @@ ps_bb <- function(vfp, p_td, pos, bb) {          # bb: pos, fmt, event, b0, b1, 
   for (f in names(PS_FORMATS)) for (ev in c("boom", "bust")) {
     k <- match(paste(pos, f, ev), paste(bb$pos, bb$fmt, bb$event)); c <- bb[k, ]
     v <- vfp[[paste0("vfp_", f)]]; t <- coalesce(p_td, c$td_fill)
+    ## the fitted curve bends over at the top (b2 < 0); hold it flat past its peak so a higher projection
+    ## never lowers P(boom) (matters for elite TEs: the TE curve peaks near 13 half-PPR points)
+    top <- ifelse(c$b2 < 0, -c$b1 / (2 * c$b2), Inf); v <- pmin(v, top)
     out[[paste0("p_", ev, "_", f)]] <- plogis(c$b0 + c$b1 * v + c$b2 * v^2 + c$b3 * t)
   }
   as_tibble(out)

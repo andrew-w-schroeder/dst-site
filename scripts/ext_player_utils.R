@@ -88,20 +88,65 @@ xp_espn <- function(season, week) {
 }
 
 ## FantasyPros ECR (DynastyProcess scrape); ko = this week's kickoffs (POSIXct, UTC) for the stale-week guard
-xp_ecr <- function(ko) {
-  txt <- xp_get("https://raw.githubusercontent.com/dynastyprocess/data/master/files/fp_latest_weekly.csv", mock = "ecr.csv")
-  if (is.null(txt)) return(NULL)
+xp_ecr_parse <- function(txt, ko) {
   x <- tryCatch(utils::read.csv(text = txt, stringsAsFactors = FALSE), error = function(e) NULL)
   if (is.null(x) || !nrow(x)) return(NULL)
   x <- x[x$page %in% c("qb", "ppr-rb", "ppr-wr", "ppr-te") & x$pos %in% c("QB", "RB", "WR", "TE"), ]
   kt <- as.POSIXct(as.numeric(x$player_game_kickoff_ts), origin = "1970-01-01", tz = "UTC")
   near <- vapply(kt, function(t) !is.na(t) && any(abs(as.numeric(difftime(ko, t, units = "days"))) <= 2), TRUE)
   x <- x[near, ]
-  if (!nrow(x)) { message("  ECR: no rows for this week's games yet"); return(NULL) }
+  if (!nrow(x)) return(NULL)
   tibble::tibble(source = "ECR", name = x$player_name, team = x$team, pos = x$pos,
                  ecr_rank = as.numeric(x$rank), ecr_avg = as.numeric(x$ecr), ecr_sd = as.numeric(x$sd),
                  ecr_best = as.numeric(x$best), ecr_worst = as.numeric(x$worst), ecr_date = as.character(x$scrape_date),
                  pts_ppr = suppressWarnings(as.numeric(x$r2p_pts)))
+}
+xp_ecr <- function(ko) {
+  txt <- xp_get("https://raw.githubusercontent.com/dynastyprocess/data/master/files/fp_latest_weekly.csv", mock = "ecr.csv")
+  if (is.null(txt)) return(NULL)
+  x <- xp_ecr_parse(txt, ko)
+  if (is.null(x)) message("  ECR: no rows for this week's games yet")
+  x
+}
+## the ECR file as it was just before `before` (POSIXct UTC): newest commit touching it (GitHub API; uses
+## GITHUB_TOKEN when set, as in the workflow) -> that version. Returns list(rows, time) or NULL.
+xp_ecr_asof <- function(before, ko) {
+  api <- sprintf("https://api.github.com/repos/dynastyprocess/data/commits?path=files/fp_latest_weekly.csv&until=%s&per_page=1",
+                 format(before, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"))
+  tok <- Sys.getenv("GITHUB_TOKEN")
+  hdr <- c(Accept = "application/vnd.github+json", if (nzchar(tok)) c(Authorization = paste("Bearer", tok)))
+  js <- xp_get(api, hdr, mock = "ecr_commits.json"); if (is.null(js)) return(NULL)
+  cm <- tryCatch(jsonlite::fromJSON(js, simplifyVector = FALSE), error = function(e) NULL)
+  if (!length(cm)) return(NULL)
+  sha <- cm[[1]]$sha; tm <- as.POSIXct(sub("Z$", "", cm[[1]]$commit$committer$date), format = "%Y-%m-%dT%H:%M:%S", tz = "UTC")
+  if (is.na(tm) || tm >= before) return(NULL)
+  txt <- xp_get(sprintf("https://raw.githubusercontent.com/dynastyprocess/data/%s/files/fp_latest_weekly.csv", sha), mock = "ecr_asof.csv")
+  if (is.null(txt)) return(NULL)
+  rows <- xp_ecr_parse(txt, ko); if (is.null(rows)) return(NULL)
+  list(rows = rows, time = tm)
+}
+## add a pre-kickoff ECR snapshot for every started team that has none in the weekly file
+xp_ecr_backfill <- function(file, team_ko, now, ko_all) {
+  have <- if (file.exists(file)) {
+    h <- utils::read.csv(file, stringsAsFactors = FALSE, colClasses = c(pulled_at = "character", team = "character"))
+    h <- h[h$source == "ECR", ]; h$t <- as.POSIXct(sub("Z$", "", h$pulled_at), format = "%Y-%m-%dT%H:%M:%S", tz = "UTC")
+    h <- merge(h, team_ko, by = "team"); unique(h$team[h$t < h$ko]) } else character()
+  need <- team_ko[team_ko$ko <= now & !team_ko$team %in% have, ]
+  if (!nrow(need)) return(invisible(NULL))
+  added <- 0L
+  for (k in sort(unique(need$ko))) {
+    k <- as.POSIXct(k, origin = "1970-01-01", tz = "UTC")
+    r <- xp_ecr_asof(k, ko_all); if (is.null(r)) next
+    x <- r$rows; x$team <- xp_team(x$team)
+    x <- x[x$team %in% need$team[need$ko == k], ]
+    if (!nrow(x)) next
+    x$pulled_at <- format(r$time, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+    for (c in setdiff(XP_COLS, names(x))) x[[c]] <- NA
+    utils::write.table(x[XP_COLS], file, sep = ",", row.names = FALSE, col.names = !file.exists(file), append = file.exists(file), qmethod = "double")
+    added <- added + nrow(x)
+  }
+  if (added) message(sprintf("players: ECR from before kickoff (DynastyProcess history) added for %d players", added))
+  invisible(added)
 }
 
 ## pull all three, keep each source's top N per position, append to the weekly snapshot file

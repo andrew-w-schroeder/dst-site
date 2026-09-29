@@ -16,7 +16,7 @@ on:
     - cron: "10 23 * * 1"   # 19:10 ET: before Monday Night Football
   push:
     branches: [main]
-    paths: ["output/players_site/**"]
+    paths: ["output/players_site/**", "scripts/64_player_page.R", "scripts/65_player_refresh.R", "scripts/player_site_utils.R", "scripts/ext_player_utils.R", "scripts/props_utils.R"]
   workflow_dispatch:
 
 permissions:
@@ -44,6 +44,7 @@ jobs:
       - name: Pull props and re-score players
         env:
           PROPS_API_KEY: ${{ secrets.PROPS_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}   # ECR history lookups (GitHub API)
           FF_PROJ_DIR: ${{ github.workspace }}
           LANG: C.UTF-8
         run: Rscript scripts/65_player_refresh.R
