@@ -438,3 +438,24 @@ TRACK_CSS <- '
 .tc-grid{stroke:var(--line,var(--bd,#ddd));stroke-width:1}.tc-zero{stroke:var(--muted,var(--mut,#888))}.tc-ax{font-size:10.5px;fill:var(--muted,var(--mut,#666))}
 .tc-lab{font-size:11px;fill:var(--fg,#222)}'
 SITE_CSS <- paste0(SITE_CSS, TRACK_CSS)
+
+## ---- Site navigation: one headline tab bar on every page (D/ST · Kickers · Players) ----
+# active = "dst" | "k" | "players"; the "past weeks" link goes to that page's own archive
+site_nav <- function(active, base = Sys.getenv("SITE_BASE", "/dst-site/")) {
+  items <- c(dst = "D/ST", k = "Kickers", players = "Players")
+  href  <- c(dst = base, k = paste0(base, "k/"), players = paste0(base, "players/"))
+  arch  <- c(dst = paste0(base, "archive/"), k = paste0(base, "k/archive/"), players = paste0(base, "players/archive/"))
+  paste0('<nav class="topnav" aria-label="Pages">',
+         paste0(sprintf('<a class="navtab%s" href="%s"%s>%s</a>', ifelse(names(items) == active, " on", ""), href,
+                        ifelse(names(items) == active, ' aria-current="page"', ""), items), collapse = ""),
+         sprintf('<a class="navarch" href="%s">past weeks</a>', arch[[active]]), '</nav>')
+}
+NAV_CSS <- '
+.topnav{display:flex;flex-wrap:wrap;align-items:flex-end;gap:6px;border-bottom:3px solid var(--acc,var(--accent,#2b6cb0));margin:0 0 16px;padding-top:4px}
+.topnav a.navtab{font-size:1.2rem;font-weight:700;letter-spacing:.01em;padding:10px 26px;border:2px solid var(--bd,var(--line,#ccc));border-bottom:none;
+  border-radius:10px 10px 0 0;text-decoration:none;color:var(--fg,#222);background:var(--th,var(--head,#f3f3f5));margin-bottom:-3px}
+.topnav a.navtab:hover{filter:brightness(.95)}
+.topnav a.navtab.on{background:var(--acc,var(--accent,#2b6cb0));border-color:var(--acc,var(--accent,#2b6cb0));color:#fff}
+.topnav a.navarch{margin-left:auto;font-size:13px;padding:0 4px 8px;color:var(--acc,var(--accent,#2b6cb0))}
+@media (max-width:560px){.topnav{gap:4px}.topnav a.navtab{font-size:.98rem;padding:8px 11px}.topnav a.navarch{font-size:12px;padding:0 0 7px}}'
+SITE_CSS <- paste0(SITE_CSS, NAV_CSS)

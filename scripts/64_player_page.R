@@ -156,7 +156,7 @@ th{background:var(--th);cursor:pointer;position:sticky;top:0}td.l{text-align:lef
 .bar button.on{background:var(--acc);color:#fff;border-color:var(--acc)}.pane{display:none}.pane.on{display:block}
 i.fill{color:var(--mut)}.sw{display:inline-block;width:12px;height:12px;border:1px solid var(--bd);vertical-align:middle;border-radius:2px}
 .sw.fl1{background:var(--fl1)}.sw.fl2{background:var(--fl2)}p.legend{margin:.2rem 0}', SITE_CSS, '</style></head><body>',
-  sprintf("<p class='s'><a href='%s'>D/ST</a> · <a href='%sk/'>Kickers</a> · <b>Players</b> · <a href='%splayers/archive/'>past weeks</a></p>", b, b, b),
+  if (exists("site_nav")) site_nav("players", b) else sprintf("<p class='s'><a href='%s'>D/ST</a> · <a href='%sk/'>Kickers</a> · <b>Players</b></p>", b, b),
   sprintf("<h1>Player projections — %d week %d</h1><p class='s'>%s Vegas-only: sportsbook player props (pass / rush / receiving yards, attempts, receptions, pass TDs, INTs, anytime TD) converted to expected stats and scored in your format. In back-tests (2024–26) no model or extra stats beat these at kickoff. Hover a column header for its definition; click to sort.</p>",
           P$season, P$week, status),
   '<div class="bar"><div id="posb">', paste0(sprintf('<button data-pos="%s">%s</button>', c(pos_l, "GL"), c(pos_l, "Glossary")), collapse = ""), '</div>',

@@ -137,7 +137,7 @@ P$refresh <- list(time = NOW, n_priced = sum(lines$src == "sportsbooks"), n_lock
                   books = if (any(!is.na(lines$n_books))) median(lines$n_books, na.rm = TRUE) else NA,
                   weather = if (nrow(wx_use)) sprintf("Open-Meteo forecasts for %d outdoor games", nrow(wx_use)) else "weekly-run values",
                   model_fit = B$created, base_time = if (is.na(fb$time)) B$created else fb$time)
-P$nav <- sprintf("<p class='s'><a href='%s'>D/ST projections</a> · <b>Kickers</b> · <a href='%splayers/'>Players</a> · <a href='%sk/archive/'>past weeks</a></p>", SITE_BASE, SITE_BASE, SITE_BASE)
+P$nav <- site_nav("k", SITE_BASE)
 mv <- P$pred[which.max(abs(P$pred$proj_espn - P$pred$proj_base_espn)), ]
 message(sprintf("kickers: re-scored · biggest ESPN move %s %+.2f", mv$team, mv$proj_espn - mv$proj_base_espn))
 
