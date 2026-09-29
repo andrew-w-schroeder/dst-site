@@ -60,7 +60,11 @@ get_json <- function(path, query) {
                                                      remaining = 99999, used = 0)) }
   url <- paste0(API, path, "?", paste(names(query), vapply(query, utils::URLencode, "", reserved = TRUE), sep = "=", collapse = "&"))
   r <- curl::curl_fetch_memory(url)
-  if (r$status_code != 200) stop(sprintf("HTTP %d for %s", r$status_code, path))
+  if (r$status_code != 200) {
+    msg <- tryCatch({ j <- jsonlite::fromJSON(rawToChar(r$content)); paste(c(j$error_code, j$message), collapse = ": ") }, error = function(e) substr(rawToChar(r$content), 1, 200))
+    stop(sprintf("HTTP %d for %s (%s)%s", r$status_code, path, msg,
+                 if (r$status_code == 401) " -- 401 = the PROPS_API_KEY secret is wrong / expired, or the plan's credits are used up" else ""))
+  }
   h <- curl::parse_headers_list(r$headers)
   list(body = jsonlite::fromJSON(rawToChar(r$content), simplifyVector = FALSE),
        remaining = suppressWarnings(as.numeric(h[["x-requests-remaining"]] %||% NA)), used = suppressWarnings(as.numeric(h[["x-requests-last"]] %||% NA)))
@@ -76,11 +80,19 @@ if (nzchar(KEY) || nzchar(MOCK)) tryCatch({
     mutate(ct = utc(commence_time)) |> filter(abs(as.numeric(difftime(ct, ko, units = "days"))) <= 2) |>
     distinct(game_id, .keep_all = TRUE) |> filter(ct > NOW)
   message(sprintf("players: %d events listed, %d of this week's games not started", nrow(evt), nrow(m)))
-  rows <- list(); longs <- list()
+  ## ladders (*_alternate markets): "auto" = only for games whose last stored pull has fewer than LADDER_MIN_MAIN
+  ## players with a main yardage / receptions line (early in the week); "always" / "never". Credits are charged
+  ## only for markets a book actually returns.
+  LADDERS <- Sys.getenv("PROPS_LADDERS", "auto"); LADDER_MIN_MAIN <- 12
+  prev <- if (file.exists(LIVE_CSV)) read.csv(LIVE_CSV, stringsAsFactors = FALSE) |> filter(market %in% c("player_pass_yds", "player_rush_yds", "player_reception_yds", "player_receptions")) |>
+    group_by(game_id) |> filter(pulled_at == max(pulled_at)) |> summarise(n = n_distinct(player), .groups = "drop") else tibble(game_id = character(), n = integer())
+  lad_games <- switch(LADDERS, always = m$game_id, never = character(), setdiff(m$game_id, prev$game_id[prev$n >= LADDER_MIN_MAIN]))
+  longs <- list()
   for (i in seq_len(nrow(m))) {
     if (!is.na(left) && left < MIN_LEFT) { message(sprintf("players: stopping, %s credits left (< %s)", left, MIN_LEFT)); break }
+    mk <- c(PROP_MARKETS, if (m$game_id[i] %in% lad_games) PROP_ALT_MARKETS)
     r <- tryCatch(get_json(sprintf("/events/%s/odds", m$event_id[i]),
-                           list(apiKey = KEY, regions = "us", markets = paste(PROP_MARKETS, collapse = ","), oddsFormat = "american")),
+                           list(apiKey = KEY, regions = "us", markets = paste(mk, collapse = ","), oddsFormat = "american")),
                   error = function(e) { message("players: ", m$game_id[i], " — ", conditionMessage(e)); NULL })
     if (is.null(r)) next
     left <- r$remaining; credits <- credits + coalesce(r$used, 0)
@@ -88,19 +100,20 @@ if (nzchar(KEY) || nzchar(MOCK)) tryCatch({
     if (!nrow(long)) next
     long$game_id <- m$game_id[i]
     longs[[length(longs) + 1]] <- long
-    ou <- props_consensus(book_lines(long))
-    td <- props_anytime(long)
-    rows[[length(rows) + 1]] <- bind_rows(
-      ou |> transmute(game_id, market, player, n_books, line, p_over, med_est, line_min, line_max),
-      td |> transmute(game_id, market, player, n_books, p_td_raw)) |>
-      mutate(pulled_at = isoz(NOW), event_id = m$event_id[i], commence_time = m$commence_time[i])
     pulled <- pulled + 1
   }
-  if (length(rows)) {
-    new <- bind_rows(rows)
+  if (length(longs)) {
+    L <- ladder_merge(bind_rows(longs))
+    if (attr(L, "ladder_n") > 0) message(sprintf("players: ladders used for %d book x player x stat lines without a main line (Over-only de-vig k = %.3f, %s)",
+      attr(L, "ladder_n"), attr(L, "ladder_k"), if (attr(L, "ladder_k_n") >= 5) sprintf("from %d players with both, middle half %s", attr(L, "ladder_k_n"), attr(L, "ladder_k_iqr")) else "default"))
+    ou <- props_consensus(book_lines(L)); td <- props_anytime(L)
+    new <- bind_rows(ou |> transmute(game_id, market, player, n_books, line, p_over, med_est, line_min, line_max),
+                     td |> transmute(game_id, market, player, n_books, p_td_raw)) |>
+      left_join(m |> select(game_id, event_id, commence_time), by = "game_id") |> mutate(pulled_at = isoz(NOW))
     for (c in setdiff(LIVE_COLS, names(new))) new[[c]] <- NA
     dir.create(dirname(LIVE_CSV), recursive = TRUE, showWarnings = FALSE)
     write.table(new[LIVE_COLS], LIVE_CSV, sep = ",", row.names = FALSE, col.names = !file.exists(LIVE_CSV), append = file.exists(LIVE_CSV), qmethod = "double")
+    longs <- list(L)
   }
   message(sprintf("players: pulled props for %d games (%s credits used, %s left)", pulled, credits, left))
   ## "±": resample the books and the calibration refits (player_site_utils.R ps_ci), stored per pull
@@ -174,7 +187,20 @@ if (length(thin)) {
                   error = function(e) { message("players: fallback — ", conditionMessage(e)); tibble() })
   if (nrow(fbr)) {
     has_core <- if (nrow(cur)) cur |> filter(core) |> select(game_id, gsis_id) else tibble(game_id = character(), gsis_id = character())
-    fbr <- fbr |> anti_join(has_core, by = c("game_id", "gsis_id")) |> mutate(t = as.POSIXct(NA, tz = "UTC"))
+    fbr <- fbr |> anti_join(has_core, by = c("game_id", "gsis_id")) |> mutate(t = as.POSIXct(NA, tz = "UTC"), td_prop = FALSE)
+    ## an anytime-TD price already posted (often the first prop up): use it for his TDs instead of his history
+    tdp <- if (nrow(cur)) cur |> filter(!core, !is.na(p_td_raw)) |> select(game_id, gsis_id, p_td_new = p_td_raw, e_td_new = e.tds, n_td = n_books.tds) else tibble()
+    if (nrow(tdp)) {
+      fbr <- fbr |> left_join(tdp, by = c("game_id", "gsis_id"))
+      i <- !is.na(fbr$p_td_new)
+      for (f in names(PS_FORMATS)) fbr[[paste0("vfp_", f)]][i] <- pmax(fbr[[paste0("vfp_", f)]][i] + 6 * (fbr$e_td_new[i] - fbr$e.tds[i]), 0)
+      fbr$e.tds[i] <- fbr$e_td_new[i]; fbr$src.tds[i] <- "prop"; fbr$p_td_raw[i] <- fbr$p_td_new[i]; fbr$td_prop[i] <- TRUE
+      fbr$n_books.tds <- fbr$n_td
+      bbn <- ps_bb(fbr |> select(starts_with("vfp_")), fbr$p_td_raw, fbr$pos, B$bb)
+      fbr[names(bbn)] <- bbn
+      fbr <- fbr |> select(-p_td_new, -e_td_new, -n_td)
+      message(sprintf("players: %d of them with a posted anytime-TD price", sum(i)))
+    }
     if (nrow(cur)) cur <- cur |> anti_join(fbr |> select(game_id, gsis_id), by = c("game_id", "gsis_id"))   # TD-only rows give way
     cur <- bind_rows(cur, fbr); n_fb <- nrow(fbr)
   }

@@ -30,7 +30,7 @@ PP_TIP <- c(
   Trend = "Projection at every props pull this week (open dot = first pull with props). Green = up, red = down. Hover a dot for the time.",
   "P(boom)" = "Chance of a boom week: half PPR QB 25+, RB / WR 20+, TE 15+ (other formats: the same share of player-games; FLEX uses each player's own position). Logistic fit per position on the Vegas projection and the anytime-TD price, 2023+: at the same projection a higher TD chance means more boom weeks, strongest for RBs, so RB P(boom) doesn't follow the rank exactly.",
   "P(bust)" = "Chance of a bust week: half PPR QB under 12, RB / WR under 6, TE under 4 (other formats: the same share). Logistic fit on the Vegas projection, 2023+.",
-  "TD%" = "Anytime-TD price as a probability (median across books; includes the books' margin). Expected TDs in the projection are calibrated from it.",
+  "TD%" = "Anytime-TD price as a probability (median across books; includes the books' margin). Expected TDs in the projection are calibrated from it. On rows without props yet: the sportsbook price when one is posted (it then sets his expected TDs), otherwise italic* = the price implied by his expected TDs from history.",
   Books = "Sportsbooks behind the median lines (most for any one of this player's markets).",
   "Pass att" = "Expected pass attempts (volume; doesn't score).", "Rush att" = "Expected rushing attempts (volume; doesn't score).",
   Pos = "FLEX tab: the player's rank at his own position in this format.",
@@ -140,6 +140,7 @@ pp_pos_table <- function(P, pos, fmt) {
   if (!nrow(d)) return("<p class='s'>No props posted yet for this position.</p>")
   if (!"fallback" %in% names(d)) d$fallback <- FALSE
   v <- d[[paste0("vfp_", fmt)]]; o <- order(-v); d <- d[o, ]; v <- v[o]; fb <- d$fallback %in% TRUE
+  tdp <- if ("td_prop" %in% names(d)) d$td_prop %in% TRUE else rep(FALSE, nrow(d))   # no-props row with a posted TD price
   prk <- ave(-v, d$pos, FUN = \(x) rank(x, ties.method = "first"))          # rank within the player's position
   k <- max(5, min(10, ceiling(nrow(d) / 10)))
   tr <- tiers(v, k = min(k, nrow(d)), clear = 1.5)
@@ -188,13 +189,13 @@ pp_pos_table <- function(P, pos, fmt) {
       t[[cn]] <- ifelse(is.na(rk), "", ifelse(is.na(pts), lab(rk), sprintf("%s (%.1f)", lab(rk), pts)))
       ext_c[[cn]] <- ifelse(fb, "", pp_flag(prk, rk, d$pos)) } }
   if (length(ext_c)) t <- t |> relocate(any_of(c("ECR", "ESPN rank", "Sleeper rank")), .after = any_of(c("Proj", "\u00b1")))
-  t <- bind_cols(t, as_tibble(stat_cells), tibble("TD%" = pp_pct(d$p_td_raw),
-    Books = ifelse(fb, "", do.call(pmax, c(map(grep("^n_books\\.", names(d), value = TRUE), \(c) coalesce(d[[c]], 0)), na.rm = TRUE)))))
+  t <- bind_cols(t, as_tibble(stat_cells), tibble("TD%" = ifelse(fb & !tdp & !is.na(d$p_td_raw), paste0("<i class='fill'>", pp_pct(d$p_td_raw), "*</i>"), pp_pct(d$p_td_raw)),
+    Books = ifelse(fb & !tdp, "", do.call(pmax, c(map(grep("^n_books\\.", names(d), value = TRUE), \(c) coalesce(d[[c]], 0)), na.rm = TRUE)))))
   brk <- c(FALSE, tr$tier[-1] != tr$tier[-length(tr$tier)])
   row_cls <- trimws(paste(ifelse(tr$tier %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tr$tier] %in% TRUE, "tb-clear", "tb-soft"), ""),
                           ifelse(fb, "nop", "")))
   tc <- tier_cls(tr$tier, k = max(tr$tier))
-  pp_table(t, raw = c("Player", "Trend", "ECR", "Range bar", "\u00b1", unname(scols)), id = paste0("t_", pos, "_", fmt), row_cls = row_cls,
+  pp_table(t, raw = c("Player", "Trend", "ECR", "Range bar", "\u00b1", "TD%", unname(scols)), id = paste0("t_", pos, "_", fmt), row_cls = row_cls,
            cell_cls = c(list(Rank = tc, Player = tc, Proj = tc), ext_c))
 }
 

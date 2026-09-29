@@ -94,6 +94,50 @@ book_lines <- function(long) {
     mutate(med_est = coalesce(med_interp, main_line))
 }
 
+## ---- Alternate lines ("ladders": DraftKings' 50+ / 75+ / 100+ yards etc.; Andrew 2026-09-29) ----
+## The Odds API lists them as separate *_alternate markets. Early in the week some books post these (and the
+## anytime TD) before the main over/unders. They are used only where a book has no main line for that player
+## and stat: two-sided ladders as they are; Over-only milestones de-vigged by k (their margin sits on the one
+## side): P(over) = implied / k. k is estimated in each pull from books that post both a main line and a
+## ladder for the same player (the ladder's implied P(over) at the main line's 50/50 point, / 0.5), else
+## LADDER_K_DEFAULT (a starting guess, logged each pull so it can be checked). Output: `long` with the ladder
+## rows renamed to the main market (Over-only ones given a matching Under), so book_lines / consensus / ps_ci
+## treat them like any other book's line.
+PROP_ALT_MARKETS <- c("player_pass_yds_alternate", "player_pass_tds_alternate", "player_rush_yds_alternate",
+                      "player_reception_yds_alternate", "player_receptions_alternate")
+LADDER_K_DEFAULT <- 1.06
+p_to_am <- function(p) ifelse(p >= 0.5, -100 * p / (1 - p), 100 * (1 - p) / p)
+ladder_merge <- function(long, k = NULL) {
+  keys <- intersect(c("game_id", "event_id"), names(long))
+  if (!nrow(long) || !any(grepl("_alternate$", long$market))) return(structure(long, ladder_k = NA_real_, ladder_n = 0L, ladder_k_n = 0L))
+  base <- long |> filter(!grepl("_alternate$", market))
+  alt <- long |> filter(grepl("_alternate$", market), !is.na(point), !is_team_defense(player), side %in% c("Over", "Under")) |>
+    mutate(market = sub("_alternate$", "", market))
+  gk <- c(keys, "book", "market", "player")
+  main_keys <- base |> filter(side %in% c("Over", "Under"), !is.na(point)) |> distinct(across(all_of(gk)))
+  sides <- alt |> group_by(across(all_of(gk))) |> summarise(two = any(side == "Under") & any(side == "Over"), .groups = "drop")
+  alt <- alt |> left_join(sides, by = gk)
+  ## k from overlaps: ladder implied P(over) at the main no-vig 50/50 point
+  k_n <- 0L; k_iqr <- NA_character_
+  if (is.null(k)) {
+    ov <- alt |> filter(!two, side == "Over") |> mutate(p = am_to_p(price)) |> semi_join(main_keys, by = gk)
+    mm <- if (nrow(ov)) book_lines(base |> semi_join(ov |> distinct(across(all_of(gk))), by = gk)) |> select(all_of(gk), med_est) else tibble()
+    ks <- if (nrow(mm)) ov |> inner_join(mm, by = gk) |> group_by(across(all_of(gk))) |> summarise(k = {
+      o <- order(point); x <- point[o]; y <- qlogis(pmin(pmax(p[o], 0.01), 0.99)); m <- med_est[1]
+      if (length(x) < 2 || m < min(x) || m > max(x)) NA_real_ else 2 * plogis(approx(x, y, m, ties = mean)$y) }, .groups = "drop") |>
+      filter(is.finite(k), k > 0.9, k < 1.4) else tibble(k = numeric())
+    k_n <- nrow(ks); k_iqr <- if (k_n) paste(sprintf("%.3f", quantile(ks$k, c(0.25, 0.75))), collapse = "-") else NA_character_
+    k <- if (k_n >= 5) min(max(median(ks$k), 1), 1.3) else LADDER_K_DEFAULT
+  }
+  use <- alt |> anti_join(main_keys, by = gk)                  # only where the book has no main line
+  two <- use |> filter(two) |> select(-two)
+  one <- use |> filter(!two, side == "Over") |> mutate(p = pmin(am_to_p(price) / k, 0.99)) |> select(-two)
+  syn <- bind_rows(one |> mutate(price = p_to_am(p)), one |> mutate(side = "Under", price = p_to_am(1 - p))) |> select(-p)
+  out <- bind_rows(base, two, syn)
+  n_lad <- bind_rows(two, syn) |> distinct(across(all_of(gk))) |> nrow()
+  structure(out, ladder_k = k, ladder_n = n_lad, ladder_k_n = k_n, ladder_k_iqr = k_iqr)
+}
+
 ## ---- Consensus across books (median) ----
 props_consensus <- function(bl) {
   bl |>

@@ -157,6 +157,7 @@ xp_snapshot <- function(file, season, week, now, ko) {
     tryCatch(xp_ecr(ko), error = function(e) { message("  ECR: ", conditionMessage(e)); NULL }))
   if (!nrow(x)) { message("players: ESPN / Sleeper / ECR: nothing pulled"); return(invisible(NULL)) }
   x$team <- xp_team(x$team)
+  for (c in c("ecr_rank", "pts_half")) if (!c %in% names(x)) x[[c]] <- NA_real_   # e.g. no ECR rows yet on Tuesday
   x <- x |> dplyr::filter(!is.na(name)) |>
     dplyr::mutate(ord = dplyr::if_else(source == "ECR", ecr_rank, -pts_half)) |>
     dplyr::group_by(source, pos) |> dplyr::arrange(ord, .by_group = TRUE) |>
