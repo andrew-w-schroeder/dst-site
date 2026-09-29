@@ -53,7 +53,8 @@ message(sprintf("players: %d week %d, %d games, %d started", SEASON, WEEK, nrow(
 
 ## ---- 2. Pull props for games not started ----
 API <- Sys.getenv("ODDS_API_BASE", "https://api.the-odds-api.com/v4/sports/americanfootball_nfl")
-KEY <- Sys.getenv("PROPS_API_KEY"); MOCK <- Sys.getenv("PLAYER_PROPS_MOCK")
+KEY <- gsub("^[\"' ]+|[\"' ]+$", "", trimws(Sys.getenv("PROPS_API_KEY"))); MOCK <- Sys.getenv("PLAYER_PROPS_MOCK")   # tolerate a pasted newline / quotes
+if (nzchar(KEY)) message(sprintf("players: PROPS_API_KEY is %d characters (Odds API keys are 32)", nchar(KEY)))
 MIN_LEFT <- as.numeric(Sys.getenv("PROPS_MIN_REMAINING", "300"))
 get_json <- function(path, query) {
   if (nzchar(MOCK)) { M <- readRDS(MOCK); return(list(body = if (path == "/events") M$events else M$odds[[sub("^/events/([^/]+)/odds$", "\\1", path)]],
