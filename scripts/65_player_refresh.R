@@ -81,13 +81,23 @@ if (nzchar(KEY) || nzchar(MOCK)) tryCatch({
     mutate(ct = utc(commence_time)) |> filter(abs(as.numeric(difftime(ct, ko, units = "days"))) <= 2) |>
     distinct(game_id, .keep_all = TRUE) |> filter(ct > NOW)
   message(sprintf("players: %d events listed, %d of this week's games not started", nrow(evt), nrow(m)))
-  ## ladders (*_alternate markets): "auto" = only for games whose last stored pull has fewer than LADDER_MIN_MAIN
-  ## players with a main yardage / receptions line (early in the week); "always" / "never". Credits are charged
+  ## ladders (*_alternate markets): "auto" = for games whose last stored pull had fewer than LADDER_MIN_MAIN players
+  ## with a main yardage / receptions line, or still used a ladder-only line; "always" / "never". Credits are charged
   ## only for markets a book actually returns.
   LADDERS <- Sys.getenv("PROPS_LADDERS", "auto"); LADDER_MIN_MAIN <- 12
+  ## players with a real main line in each game's last pull (lines built only from ladders don't count: LADDER_CSV)
+  LADDER_CSV <- file.path(PROJ_DIR, sprintf("data/players/props_ladder_%d_wk%02d.csv", SEASON, WEEK))
+  lad_prev <- if (file.exists(LADDER_CSV)) read.csv(LADDER_CSV, stringsAsFactors = FALSE) |> filter(n_ladder >= n_books) |> select(pulled_at, game_id, market, player) else NULL
   prev <- if (file.exists(LIVE_CSV)) read.csv(LIVE_CSV, stringsAsFactors = FALSE) |> filter(market %in% c("player_pass_yds", "player_rush_yds", "player_reception_yds", "player_receptions")) |>
-    group_by(game_id) |> filter(pulled_at == max(pulled_at)) |> summarise(n = n_distinct(player), .groups = "drop") else tibble(game_id = character(), n = integer())
-  lad_games <- switch(LADDERS, always = m$game_id, never = character(), setdiff(m$game_id, prev$game_id[prev$n >= LADDER_MIN_MAIN]))
+    group_by(game_id) |> filter(pulled_at == max(pulled_at)) |> ungroup() |>
+    (\(x) if (is.null(lad_prev)) x else anti_join(x, lad_prev, by = c("pulled_at", "game_id", "market", "player")))() |>
+    group_by(game_id) |> summarise(n = n_distinct(player), .groups = "drop") else tibble(game_id = character(), n = integer())
+  ## auto: keep asking for ladders while a game is thin on main lines or its last pull still used ladder-only lines
+  lad_live <- if (!is.null(lad_prev) && file.exists(LIVE_CSV)) {
+    lt <- read.csv(LIVE_CSV, stringsAsFactors = FALSE) |> group_by(game_id) |> summarise(pulled_at = max(pulled_at), .groups = "drop")
+    unique(semi_join(lad_prev, lt, by = c("game_id", "pulled_at"))$game_id) } else character()
+  lad_games <- switch(LADDERS, always = m$game_id, never = character(),
+                      union(setdiff(m$game_id, prev$game_id[prev$n >= LADDER_MIN_MAIN]), intersect(m$game_id, lad_live)))
   longs <- list()
   for (i in seq_len(nrow(m))) {
     if (!is.na(left) && left < MIN_LEFT) { message(sprintf("players: stopping, %s credits left (< %s)", left, MIN_LEFT)); break }
@@ -114,6 +124,12 @@ if (nzchar(KEY) || nzchar(MOCK)) tryCatch({
     for (c in setdiff(LIVE_COLS, names(new))) new[[c]] <- NA
     dir.create(dirname(LIVE_CSV), recursive = TRUE, showWarnings = FALSE)
     write.table(new[LIVE_COLS], LIVE_CSV, sep = ",", row.names = FALSE, col.names = !file.exists(LIVE_CSV), append = file.exists(LIVE_CSV), qmethod = "double")
+    lu <- attr(L, "ladder_used")
+    if (!is.null(lu) && nrow(lu)) {                                # which consensus lines used ladder books (and how many)
+      lu <- ou |> select(game_id, market, player, n_books) |> inner_join(lu, by = c("game_id", "market", "player")) |> mutate(pulled_at = isoz(NOW))
+      write.table(lu[c("pulled_at", "game_id", "market", "player", "n_books", "n_ladder")], LADDER_CSV, sep = ",", row.names = FALSE,
+                  col.names = !file.exists(LADDER_CSV), append = file.exists(LADDER_CSV), qmethod = "double")
+    }
     longs <- list(L)
   }
   message(sprintf("players: pulled props for %d games (%s credits used, %s left)", pulled, credits, left))

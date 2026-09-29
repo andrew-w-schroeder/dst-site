@@ -101,11 +101,50 @@ xp_ecr_parse <- function(txt, ko) {
                  ecr_best = as.numeric(x$best), ecr_worst = as.numeric(x$worst), ecr_date = as.character(x$scrape_date),
                  pts_ppr = suppressWarnings(as.numeric(x$r2p_pts)))
 }
-xp_ecr <- function(ko) {
+## FantasyPros' own weekly ranking pages (Andrew 2026-09-29: DynastyProcess only re-scrapes about twice a day, so on
+## Tuesday its file can still hold last week). Each page embeds its table as `var ecrData = {...};` (the same fields
+## DynastyProcess saves). qb / ppr-rb / ppr-wr / ppr-te, as the DynastyProcess pages. Same stale-week guard.
+XP_FP_PAGES <- c(qb = "QB", "ppr-rb" = "RB", "ppr-wr" = "WR", "ppr-te" = "TE")
+xp_ecr_fp_parse <- function(html, page, ko, week = NULL) {
+  m <- regmatches(html, regexpr("var ecrData = \\{.*?\\};", html, perl = TRUE))
+  if (!length(m)) return(NULL)
+  js <- tryCatch(jsonlite::fromJSON(sub(";$", "", sub("^var ecrData = ", "", m)), simplifyVector = TRUE), error = function(e) NULL)
+  if (is.null(js) || !length(js$players)) return(NULL)
+  if (!is.null(week) && !is.null(js$week) && suppressWarnings(as.integer(js$week)) %in% 1:22 && as.integer(js$week) != week) return(NULL)
+  p <- as.data.frame(js$players, stringsAsFactors = FALSE)
+  g <- function(...) { for (k in c(...)) if (k %in% names(p)) return(p[[k]]); rep(NA, nrow(p)) }
+  kt <- suppressWarnings(as.numeric(g("player_game_kickoff_ts")))
+  if (any(!is.na(kt))) {
+    kt <- as.POSIXct(kt, origin = "1970-01-01", tz = "UTC")
+    near <- vapply(kt, function(t) !is.na(t) && any(abs(as.numeric(difftime(ko, t, units = "days"))) <= 2), TRUE)
+    p <- p[near, , drop = FALSE]; if (!nrow(p)) return(NULL)
+  }
+  pos <- unname(XP_FP_PAGES[page])
+  tibble::tibble(source = "ECR", name = as.character(g("player_name")), team = as.character(g("player_team_id", "team")), pos = pos,
+                 ecr_rank = suppressWarnings(as.numeric(g("rank_ecr", "pos_rank", "rank"))), ecr_avg = suppressWarnings(as.numeric(g("rank_ave", "ecr"))),
+                 ecr_sd = suppressWarnings(as.numeric(g("rank_std", "sd"))), ecr_best = suppressWarnings(as.numeric(g("rank_min", "best"))),
+                 ecr_worst = suppressWarnings(as.numeric(g("rank_max", "worst"))), ecr_date = format(Sys.Date()),
+                 pts_ppr = suppressWarnings(as.numeric(g("r2p_pts")))) |>
+    dplyr::filter(!is.na(ecr_rank), !is.na(name))
+}
+xp_ecr_fp <- function(ko, week = NULL) {
+  out <- lapply(names(XP_FP_PAGES), function(pg) {
+    html <- xp_get(sprintf("https://www.fantasypros.com/nfl/rankings/%s.php", pg), mock = paste0("fp_", pg, ".html"))
+    if (is.null(html)) return(NULL)
+    x <- xp_ecr_fp_parse(html, pg, ko, week)
+    if (is.null(x)) message(sprintf("  ECR (FantasyPros %s page): no rows for this week", pg))
+    x })
+  x <- dplyr::bind_rows(out)
+  if (!nrow(x)) NULL else x
+}
+## ECR: FantasyPros' pages first (current), else DynastyProcess's scrape of them
+xp_ecr <- function(ko, week = NULL) {
+  x <- tryCatch(xp_ecr_fp(ko, week), error = function(e) { message("  ECR (FantasyPros): ", conditionMessage(e)); NULL })
+  if (!is.null(x) && nrow(x)) { message(sprintf("  ECR: FantasyPros pages, %d players", nrow(x))); return(x) }
   txt <- xp_get("https://raw.githubusercontent.com/dynastyprocess/data/master/files/fp_latest_weekly.csv", mock = "ecr.csv")
   if (is.null(txt)) return(NULL)
   x <- xp_ecr_parse(txt, ko)
-  if (is.null(x)) message("  ECR: no rows for this week's games yet")
+  if (is.null(x)) message("  ECR: no rows for this week's games yet (FantasyPros pages and DynastyProcess)") else message(sprintf("  ECR: DynastyProcess file, %d players", nrow(x)))
   x
 }
 ## the ECR file as it was just before `before` (POSIXct UTC): newest commit touching it (GitHub API; uses
@@ -154,7 +193,7 @@ xp_snapshot <- function(file, season, week, now, ko) {
   x <- dplyr::bind_rows(
     tryCatch(xp_points(xp_sleeper(season, week)), error = function(e) { message("  Sleeper: ", conditionMessage(e)); NULL }),
     tryCatch(xp_points(xp_espn(season, week)), error = function(e) { message("  ESPN: ", conditionMessage(e)); NULL }),
-    tryCatch(xp_ecr(ko), error = function(e) { message("  ECR: ", conditionMessage(e)); NULL }))
+    tryCatch(xp_ecr(ko, week), error = function(e) { message("  ECR: ", conditionMessage(e)); NULL }))
   if (!nrow(x)) { message("players: ESPN / Sleeper / ECR: nothing pulled"); return(invisible(NULL)) }
   x$team <- xp_team(x$team)
   for (c in c("ecr_rank", "pts_half")) if (!c %in% names(x)) x[[c]] <- NA_real_   # e.g. no ECR rows yet on Tuesday

@@ -134,8 +134,10 @@ ladder_merge <- function(long, k = NULL) {
   one <- use |> filter(!two, side == "Over") |> mutate(p = pmin(am_to_p(price) / k, 0.99)) |> select(-two)
   syn <- bind_rows(one |> mutate(price = p_to_am(p)), one |> mutate(side = "Under", price = p_to_am(1 - p))) |> select(-p)
   out <- bind_rows(base, two, syn)
-  n_lad <- bind_rows(two, syn) |> distinct(across(all_of(gk))) |> nrow()
-  structure(out, ladder_k = k, ladder_n = n_lad, ladder_k_n = k_n, ladder_k_iqr = k_iqr)
+  used <- bind_rows(two, syn) |> distinct(across(all_of(gk)))
+  n_lad <- nrow(used)
+  used <- used |> count(across(all_of(setdiff(gk, "book"))), name = "n_ladder")   # books whose line came from a ladder
+  structure(out, ladder_k = k, ladder_n = n_lad, ladder_k_n = k_n, ladder_k_iqr = k_iqr, ladder_used = used)
 }
 
 ## ---- Consensus across books (median) ----
