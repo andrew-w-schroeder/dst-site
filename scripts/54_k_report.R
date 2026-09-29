@@ -3,7 +3,7 @@
 #
 # Reads output/k/report_parts_<season>_wk<ww>.rds (written by 50_k_model.R, or the re-scored copy that
 # 55_k_refresh.R writes under work/) and writes output/k/k_proj_<season>_wk<ww>.html.
-# Tabs: Compare · ESPN · Decimal · Back-test · Glossary. Refreshed parts add kickoff / lock / Δ Proj columns
+# Tabs: ESPN · Decimal · Track record · Back-test · Glossary (Compare hidden since 2026-09-29: SHOW_COMPARE=1). Refreshed parts add kickoff / lock / Δ Proj columns
 # and a "lines updated" status line. Only dplyr / tidyr / purrr / tibble, so it runs on the GitHub runner.
 # Usage: Rscript 54_k_report.R [season] [week]      (defaults: newest report parts)
 # ==============================================================================
@@ -45,7 +45,7 @@ html_table <- function(df, raw = character(), id = "", row_cls = NULL, cell_cls 
   hdr <- paste0("<tr>", paste0(sprintf('<th title="%s" onclick="srt(this)">%s</th>', esc(coalesce(tip[names(df)], "")), esc(names(df))), collapse = ""), "</tr>")
   M <- as.matrix(df)
   body <- vapply(seq_len(nrow(df)), function(i) { r <- M[i, ]
-    txt <- !grepl("^[-+−0-9.,%–/ NA]*$", r) & !(names(df) %in% raw) | names(df) %in% c("Kicker")
+    txt <- !grepl("^[-+−0-9.,%–/ NA]*$", r) & !(names(df) %in% raw) | names(df) %in% c("Kicker", "Weather")
     cls <- ifelse(txt, "l", "")
     for (cn in intersect(names(cell_cls), names(df))) { k <- which(names(df) == cn); if (nzchar(cell_cls[[cn]][i])) cls[k] <- trimws(paste(cls[k], cell_cls[[cn]][i])) }
     paste0(if (!is.null(row_cls) && nzchar(row_cls[i])) sprintf('<tr class="%s">', row_cls[i]) else "<tr>",
@@ -65,6 +65,11 @@ gust_lab <- if ("wx_gust" %in% names(pred)) ifelse(pred$indoor == 1 | is.na(pred
 rain_max <- if ("wx_precip_max" %in% names(pred)) pred$wx_precip_max else if ("wx_precip_in" %in% names(pred)) pred$wx_precip_in / 3 else rep(NA_real_, nrow(pred))
 rain_lab <- if ("wx_precip_prob" %in% names(pred)) ifelse(pred$indoor == 1 | is.na(pred$wx_precip_prob), "",
                 paste0(round(pred$wx_precip_prob), "%", ifelse(nzchar(coalesce(rain_level(rain_max), "")), paste0(" · ", rain_level(rain_max)), ""))) else rep("", nrow(pred))
+# one Weather column like the D/ST page (Andrew 2026-09-29): temp · wind (gust) · rain, highlighted inside the cell;
+# * = no forecast yet: the model uses the outdoor median wind
+wx_html <- ifelse(pred$indoor == 1, "indoor", ifelse(pred$wind_known %in% 1,
+  wx_label(rep(0, nrow(pred)), if ("temp" %in% names(pred)) pred$temp else NA, pred$wind, if ("wx_gust" %in% names(pred)) pred$wx_gust else NA,
+           if ("wx_precip_prob" %in% names(pred)) pred$wx_precip_prob else NA, rain_max, html = TRUE), paste0(round(pred$wind), " mph*")))
 # weather highlights: wind / gust > 15 mph light red, > 25 dark red; likely (50%+) moderate rain light red, heavy dark red
 wind_c <- ifelse(pred$indoor == 1, "", wind_cls(pred$wind))
 gust_c <- if ("wx_gust" %in% names(pred)) ifelse(pred$indoor == 1, "", wind_cls(pred$wx_gust)) else rep("", nrow(pred))
@@ -88,8 +93,9 @@ opp_lab <- paste0(ifelse(pred$home == 1, "vs ", "@ "), pred$opp)
 sys_table <- function(sy) {
   o <- order(pred[[paste0("rank_", sy)]]); p <- pred[o, ]
   tr <- tiers(p[[paste0("proj_", sy)]], clear = median(p[[paste0("pm_", sy)]], na.rm = TRUE))
-  t <- tibble(Rank = p[[paste0("rank_", sy)]], Tier = tr$tier, Kicker = why_tip(p, sy), Team = p$team, Opp = opp_lab[o], Kickoff = kickoff(p),
-              Wind = wind_lab[o], Gust = gust_lab[o], Rain = rain_lab[o], Imp = f1(p$implied_own), Proj = f1(p[[paste0("proj_", sy)]], 2))
+  rk <- p[[paste0("rank_", sy)]]
+  t <- tibble(Rank = rk, Tier = tr$tier, Kicker = paste0(why_tip(p, sy), if ("ecr_rank" %in% names(p)) love_fade(rk, p$ecr_rank, "kicker") else ""),
+              Team = p$team, Opp = opp_lab[o], Kickoff = kickoff(p), Weather = wx_html[o], Imp = f1(p$implied_own), Proj = f1(p[[paste0("proj_", sy)]], 2))
   if (refreshed) t[[DLAB]] <- signed(p[[paste0("proj_", sy)]] - p[[paste0("proj_base_", sy)]])
   if (paste0("trend_svg_", sy) %in% names(p)) t$Trend <- p[[paste0("trend_svg_", sy)]]
   ext_c <- list()                                                        # other rankings this week: "rank (projected points)"
@@ -99,10 +105,12 @@ sys_table <- function(sy) {
   vp <- p[[paste0("vegas_proj_", sy)]]
   if (!is.null(vp) && any(!is.na(vp))) { vr <- rank(-vp, ties.method = "first")
     t <- t %>% mutate(`Vegas-only rank` = rank_pts(vr, vp), .after = Proj); ext_c$`Vegas-only rank` <- rank_flag(t$Rank, vr) }
+  if (any(!is.na(p[["ecr_rank"]] %||% NA))) { t <- t %>% mutate(ECR = ecr_cell(p$ecr_rank, p$ecr_avg, p$ecr_sd), .after = Proj)   # right of Proj
+    ext_c$ECR <- rank_flag(t$Rank, p$ecr_rank) }
   brk <- c(FALSE, tr$tier[-1] != tr$tier[-length(tr$tier)])
   attr(t, "row_cls") <- trimws(paste(ifelse(tr$tier %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tr$tier] %in% TRUE, "tb-clear", "tb-soft"), "")))
   tc <- tier_cls(tr$tier, k = max(tr$tier))
-  attr(t, "cell_cls") <- c(list(Rank = tc, Kicker = tc, Proj = tc, Wind = wind_c[o], Gust = gust_c[o], Rain = rain_c[o]), ext_c)   # Proj coloured like Rank
+  attr(t, "cell_cls") <- c(list(Rank = tc, Kicker = tc, Proj = tc), ext_c)   # Proj coloured like Rank; weather highlights sit inside the Weather cell
   t %>% mutate(
     `±` = f1(p[[paste0("pm_", sy)]], 2), `90% CI` = paste0(f1(p[[paste0("ci_lo_", sy)]]), "–", f1(p[[paste0("ci_hi_", sy)]])),
     `Range bar` = range_bar(p[[paste0("q10_", sy)]], p[[paste0("q25_", sy)]], p[[paste0("q75_", sy)]], p[[paste0("q90_", sy)]], p[[paste0("proj_", sy)]]),
@@ -115,6 +123,8 @@ sys_table <- function(sy) {
     { if (all(is.na(.$`P(15+)`))) select(., -`P(15+)`) else . }                       # older bundles: no simulation
 }
 tip[c("ESPN rank", "Sleeper rank")] <- RANKCOL_TIP
+tip["ECR"] <- ECR_TIP
+tip["Weather"] <- "Open-Meteo forecast. Temperature and sustained wind: mean over kickoff + 2 h; gust (g): max. Rain: chance (max hourly) and intensity (peak hourly rate: light < 0.10 in/h, moderate 0.10–0.30, heavy > 0.30) from 1 h before to 3 h after kickoff. Highlighted: wind or gust over 15 mph (light red) / 25 mph (dark red); likely (50%+) moderate rain (light red) / heavy rain (dark red). * = no forecast yet: the model uses the outdoor median wind. The model uses sustained wind and temperature; gusts and rain are display only."
 tip["Vegas-only rank"] <- "rank and projection of the Vegas-only baseline (a regression on the betting lines alone: implied points, spread, total, home), with the same lines as our projection. Amber as for ESPN / Sleeper rank"
 tip["FG% OE"] <- paste0("FG% over expected: decayed field-goal makes above the league's expected make rate for each kick's distance, roof and weather, per attempt (recent seasons count more), shrunk toward 0 for kickers with few attempts. +2% = makes 2 more of every 100 kicks than an average kicker would in the same spots.",
   if ("k_fgoe_ver" %in% names(pred)) paste0(" Version shown: ", c(kicker_fgoe = "original", kicker_fgoe2 = "v2 (recency-weighted league baseline, wind bands, rain, snow)", kicker_fgoe2r = "v2 with faster decay")[pred$k_fgoe_ver[1]], " — the one the model uses.") else "")
@@ -148,7 +158,8 @@ te_c <- tiers(cmp$proj_espn)$tier; td_c <- tiers(cmp$proj_dec)$tier
 pos_cls <- tier_cls(round((te_c + td_c) / 2), k = 6)                                                 # Kicker: average of the two tiers
 sys_html <- function(sy) { t <- sys_table(sy)
   paste0("<p class='s'>Tiers: natural breaks (solid line = clear drop, dashed = softer); dark green = tier 1, light green = tier 2, light / dark red = the bottom two tiers. Hover or tap a kicker for what drives the projection.</p>",
-         html_table(t, raw = c("Range bar", "Trend", "Kicker"), id = paste0("t_", sy), row_cls = attr(t, "row_cls"), cell_cls = attr(t, "cell_cls"), stick = 4),
+         if ("ECR" %in% names(t)) "<p class='s'>ECR = FantasyPros expert consensus rank (hover for the average expert rank). \U0001F525 after a kicker = we rank him at least 25% (and 3 spots) higher than ECR; \u2620\uFE0F = at least 25% (and 3 spots) lower. Hover the symbol for the exact difference.</p>" else "",
+         html_table(t, raw = c("Range bar", "Trend", "Kicker", "Weather", "ECR"), id = paste0("t_", sy), row_cls = attr(t, "row_cls"), cell_cls = attr(t, "cell_cls"), stick = 4),
          "<p class='s'><b>Scoring:</b> ", esc(SC[[sy]]$long), "</p>") }
 panes <- c(paste0("<p class='s'>Colours follow the tiers: dark green = tier 1, light green = tier 2, light / dark red = the bottom two tiers (rank columns: that format's tier; Kicker: the average). Hover or tap a kicker for what drives the ESPN projection.</p>",
                   html_table(cmp_tbl, id = "t_cmp", raw = "Kicker", stick = 4,
@@ -158,6 +169,7 @@ panes <- c(paste0("<p class='s'>Colours follow the tiers: dark green = tier 1, l
            sys_html("espn"), sys_html("dec"),
            if (!is.null(tt)) tt, P$backtest_html, html_table(glossary))
 if (!is.null(tt)) tabs <- c("Compare", SC$espn$label, SC$dec$label, "Track record", "Back-test", "Glossary")
+if (!identical(Sys.getenv("SHOW_COMPARE"), "1")) { keep <- tabs != "Compare"; tabs <- tabs[keep]; panes <- panes[keep] }   # Compare hidden (Andrew 2026-09-29)
 
 ## ---- page ----
 status <- if (!refreshed) sprintf("Model run %s.", format(P$generated, "%a %b %d %H:%M")) else {
@@ -182,7 +194,7 @@ th{background:var(--th);cursor:pointer;position:sticky;top:0}td.l{text-align:lef
 td.top{background:#e3f4e8;font-weight:600}td.bot{background:#fbe6e6}
 @media (prefers-color-scheme:dark){td.top{background:#17351f}td.bot{background:#3a1a1a}}', SITE_CSS, '</style></head><body>',
   if (!is.null(P$nav)) P$nav else "",
-  sprintf("<h1>Kicker projections — %d week %d</h1><p class='s'>%s Blend of elastic net + component model, trained 2015 → last completed week. Kicker = depth-chart PK1 (fallback: last kicker used). Hover a column header for its definition; click to sort. Wind * = no forecast, outdoor median used.</p>",
+  sprintf("<h1>Kicker projections — %d week %d</h1><p class='s'>%s Blend of elastic net + component model, trained 2015 → last completed week. Kicker = depth-chart PK1 (fallback: last kicker used). Hover a column header for its definition; click to sort. Weather * = no forecast yet, outdoor median wind used.</p>",
           SEASON, WEEK, status),
   '<div class="tabs">', paste0(sprintf('<button onclick="tab(%d)"%s>%s</button>', seq_along(tabs) - 1, ifelse(seq_along(tabs) == 1, ' class="on"', ""), tabs), collapse = ""), "</div>",
   paste0(sprintf('<div class="pane%s">%s</div>', ifelse(seq_along(panes) == 1, " on", ""), panes), collapse = ""),

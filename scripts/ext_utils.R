@@ -127,3 +127,70 @@ ext_latest <- function(h, ko) {
   post <- dplyr::ungroup(dplyr::slice_min(dplyr::group_by(post, season, week, source, pos, team), t, n = 1, with_ties = FALSE))
   dplyr::bind_rows(dplyr::mutate(pre, after_ko = FALSE), dplyr::mutate(post, after_ko = TRUE))
 }
+
+## ---- FantasyPros ECR for D/ST and kickers (Andrew 2026-09-29) ----
+# FantasyPros' own weekly pages (dst.php, k.php: the `ecrData` JSON embedded in each), else DynastyProcess's scrape of
+# them (files/fp_latest_weekly.csv, about twice a day). Rows whose listed game is not this week's (within 2 days of one
+# of `ko`) or whose page week differs are dropped. Snapshots go to data/lines/ecr_history.csv (same columns as the
+# Sleeper / ESPN rank history, source = "ECR", plus name / ecr_avg / ecr_sd); pages use each team's last pull before kickoff.
+ECR_COLS <- c(EXT_COLS, "name", "ecr_avg", "ecr_sd")
+ECR_PAGES <- c(dst = "DEF", k = "K")
+.ecr_near <- function(ts, ko) { t <- suppressWarnings(as.numeric(ts))
+  if (all(is.na(t))) return(rep(TRUE, length(ts)))
+  t <- as.POSIXct(t, origin = "1970-01-01", tz = "UTC")
+  vapply(t, function(x) !is.na(x) && any(abs(as.numeric(difftime(ko, x, units = "days"))) <= 2), TRUE) }
+ext_ecr_fp <- function(week, ko) {
+  purrr::map_dfr(names(ECR_PAGES), function(pg) {
+    html <- ext_get(sprintf("https://www.fantasypros.com/nfl/rankings/%s.php", pg), tries = 1)
+    if (is.null(html)) return(NULL)
+    m <- regmatches(html, regexpr("var ecrData = \\{.*?\\};", html, perl = TRUE))
+    js <- if (length(m)) tryCatch(jsonlite::fromJSON(sub(";$", "", sub("^var ecrData = ", "", m)), simplifyVector = TRUE), error = function(e) NULL) else NULL
+    if (is.null(js) || !length(js$players)) { message("  ECR (FantasyPros ", pg, " page): no table found"); return(NULL) }
+    if (!is.null(js$week) && suppressWarnings(as.integer(js$week)) %in% 1:22 && as.integer(js$week) != week) { message("  ECR (FantasyPros ", pg, " page): still week ", js$week); return(NULL) }
+    p <- as.data.frame(js$players, stringsAsFactors = FALSE)
+    g <- function(...) { for (k in c(...)) if (k %in% names(p)) return(p[[k]]); rep(NA, nrow(p)) }
+    p <- p[.ecr_near(g("player_game_kickoff_ts"), ko), , drop = FALSE]; if (!nrow(p)) return(NULL)
+    tibble::tibble(source = "ECR", pos = unname(ECR_PAGES[pg]), team = ext_norm_team(as.character(g("player_team_id", "team"))),
+                   rank = suppressWarnings(as.integer(g("rank_ecr", "rank"))), pts = suppressWarnings(as.numeric(g("r2p_pts"))),
+                   name = as.character(g("player_name")), ecr_avg = suppressWarnings(as.numeric(g("rank_ave", "ecr"))), ecr_sd = suppressWarnings(as.numeric(g("rank_std", "sd"))))
+  })
+}
+ext_ecr_dp <- function(ko) {
+  txt <- ext_get("https://raw.githubusercontent.com/dynastyprocess/data/master/files/fp_latest_weekly.csv", tries = 1)
+  if (is.null(txt)) return(NULL)
+  x <- tryCatch(utils::read.csv(text = txt, stringsAsFactors = FALSE), error = function(e) NULL)
+  if (is.null(x) || !nrow(x)) return(NULL)
+  x <- x[x$page %in% names(ECR_PAGES), ]; x <- x[.ecr_near(x$player_game_kickoff_ts, ko), ]
+  if (!nrow(x)) return(NULL)
+  tibble::tibble(source = "ECR", pos = unname(ECR_PAGES[x$page]), team = ext_norm_team(x$team), rank = as.integer(x$rank),
+                 pts = suppressWarnings(as.numeric(x$r2p_pts)), name = x$player_name, ecr_avg = as.numeric(x$ecr), ecr_sd = as.numeric(x$sd))
+}
+read_ecr_hist <- function(file) {
+  if (!file.exists(file)) return(tibble::tibble(pulled_at = character(), season = integer(), week = integer(), source = character(), pos = character(),
+                                                team = character(), rank = integer(), pts = numeric(), name = character(), ecr_avg = numeric(), ecr_sd = numeric()))
+  tibble::as_tibble(utils::read.csv(file, stringsAsFactors = FALSE, colClasses = c(pulled_at = "character", source = "character", pos = "character", team = "character", name = "character")))
+}
+# snapshot (ko = this week's kickoffs, POSIXct UTC); nothing written when neither source has this week yet
+ecr_snapshot <- function(file, season, week, now, ko) {
+  x <- tryCatch(ext_ecr_fp(week, ko), error = function(e) { message("  ECR (FantasyPros): ", conditionMessage(e)); NULL })
+  src <- "FantasyPros pages"
+  if (is.null(x) || !nrow(x)) { x <- tryCatch(ext_ecr_dp(ko), error = function(e) NULL); src <- "DynastyProcess file" }
+  if (is.null(x) || !nrow(x)) { message("ECR (D/ST, K): no rankings for this week yet"); return(invisible(read_ecr_hist(file))) }
+  x <- x[!is.na(x$team) & !is.na(x$rank), ]
+  x <- dplyr::ungroup(dplyr::slice_min(dplyr::group_by(x, pos, team), rank, n = 1, with_ties = FALSE))   # one kicker per team (the best-ranked)
+  x <- dplyr::mutate(x, pulled_at = format(now, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"), season = as.integer(season), week = as.integer(week))
+  h <- dplyr::bind_rows(read_ecr_hist(file), x[ECR_COLS])
+  dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE); utils::write.csv(h, file, row.names = FALSE)
+  tb <- table(x$pos); message("ECR snapshot (", src, "): ", paste(names(tb), tb, collapse = ", "))
+  invisible(h)
+}
+# per team: its ECR rank from the last snapshot before kickoff (ext_latest), re-ranked 1..n among the teams listed
+ecr_now <- function(file, season, week, kt, pos) {
+  if (!file.exists(file)) return(NULL)
+  h <- read_ecr_hist(file); h <- h[h$season == season & h$week == week & h$pos == pos, ]
+  if (!nrow(h)) return(NULL)
+  l <- ext_latest(h, kt %>% dplyr::mutate(season = as.integer(season), week = as.integer(week)))
+  if (!nrow(l)) return(NULL)
+  l$rank_all <- l$rank; l$rank <- rank(l$rank, ties.method = "first")
+  l[c("team", "rank", "rank_all", "name", "ecr_avg", "ecr_sd")]
+}

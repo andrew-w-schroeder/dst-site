@@ -127,13 +127,15 @@ wk_games <- tryCatch(week_games(SEASON, WEEK), error = function(e) NULL)
 wx <- tryCatch(wx_latest(wx_update(WX_CSV, wk_games, NOW)), error = function(e) { message("weather: ", conditionMessage(e)); wx_latest(read_wx_hist(WX_CSV)) })
 
 ## ---- 3b2. Sleeper / ESPN weekly ranks for the track record (rank only; teams not yet kicked off; ext_utils.R) ----
-EXT_CSV <- file.path(PROJ_DIR, "data/lines/ext_rank_history.csv")
-if (!nzchar(Sys.getenv("NO_EXT")) && file.exists(file.path(PROJ_DIR, "scripts/ext_utils.R"))) tryCatch({
-  source(file.path(PROJ_DIR, "scripts/ext_utils.R"))
-  kt <- if (!is.null(wk_games)) bind_rows(wk_games %>% transmute(team = home_team, ko = kickoff), wk_games %>% transmute(team = away_team, ko = kickoff)) else
-    bind_rows(lines %>% transmute(team = home, ko), lines %>% transmute(team = away, ko))
-  ext_snapshot(EXT_CSV, SEASON, WEEK, NOW, kt)
-}, error = function(e) message("Sleeper / ESPN ranks: ", conditionMessage(e)))
+EXT_CSV <- file.path(PROJ_DIR, "data/lines/ext_rank_history.csv"); ECR_CSV <- file.path(PROJ_DIR, "data/lines/ecr_history.csv")
+has_ext <- file.exists(file.path(PROJ_DIR, "scripts/ext_utils.R"))
+if (has_ext) source(file.path(PROJ_DIR, "scripts/ext_utils.R"))
+kt <- if (!is.null(wk_games)) bind_rows(wk_games %>% transmute(team = home_team, ko = kickoff), wk_games %>% transmute(team = away_team, ko = kickoff)) else
+  bind_rows(lines %>% transmute(team = home, ko), lines %>% transmute(team = away, ko))
+if (!nzchar(Sys.getenv("NO_EXT")) && has_ext) tryCatch(ext_snapshot(EXT_CSV, SEASON, WEEK, NOW, kt), error = function(e) message("Sleeper / ESPN ranks: ", conditionMessage(e)))
+## FantasyPros ECR for D/ST and kickers (ext_utils.R; Andrew 2026-09-29): snapshot, then each team's last pull before kickoff
+if (!nzchar(Sys.getenv("NO_EXT")) && has_ext && exists("ecr_snapshot")) tryCatch(ecr_snapshot(ECR_CSV, SEASON, WEEK, NOW, unique(kt$ko[!is.na(kt$ko)])), error = function(e) message("ECR: ", conditionMessage(e)))
+ecr_def <- if (has_ext && exists("ecr_now")) tryCatch(ecr_now(ECR_CSV, SEASON, WEEK, kt, "DEF"), error = function(e) { message("ECR: ", conditionMessage(e)); NULL }) else NULL
 # this week's latest Sleeper / ESPN rank per team (frozen at kickoff) → shown next to ours in the ESPN-format table
 ext_now <- tryCatch({ kt2 <- if (exists("kt")) kt else NULL
   if (is.null(kt2) || !file.exists(EXT_CSV)) NULL else
@@ -234,6 +236,8 @@ for (s in names(bundles)) {
     e <- ext_now[ext_now$source == src, ]; i <- match(parts$pred$team, e$team)
     parts$pred[[paste0(tolower(src), "_rank")]] <- e$rank[i]; parts$pred[[paste0(tolower(src), "_pts")]] <- e$pts[i]
   }
+  if (!is.null(ecr_def) && nrow(ecr_def)) { i <- match(parts$pred$team, ecr_def$team)          # FantasyPros ECR, every scoring tab
+    parts$pred$ecr_rank <- ecr_def$rank[i]; parts$pred$ecr_avg <- ecr_def$ecr_avg[i]; parts$pred$ecr_sd <- ecr_def$ecr_sd[i] }
   parts$refresh <- list(time = NOW, n_priced = sum(lines$src == "sportsbooks"), n_locked = sum(lines$locked),
                         books = if (any(!is.na(lines$n_books))) median(lines$n_books, na.rm = TRUE) else NA, model_fit = b$created,
                         qb_sources = if (!is.null(starters)) attr(starters, "sources") else NULL, qb_rescore = can_swap)

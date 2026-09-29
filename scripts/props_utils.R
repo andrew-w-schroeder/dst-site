@@ -263,7 +263,18 @@ match_players <- function(players, games, rosters) {
       group_by(game_id, player) |> filter(n() == 1) |> ungroup() |> mutate(method = "fuzzy")
   } else tibble()
 
-  bind_rows(exact, li, lo, ns, fz) |>
+  ## 6. first and last name swapped by the book ("James Jordan" for Jordan James), fantasy position, unique in the game
+  rest <- if (nrow(fz)) rest |> anti_join(fz, by = c("game_id", "player")) else rest
+  sw <- if (nrow(rest)) {
+    rest |> mutate(k_sw = vapply(strsplit(k, " "), \(w) if (length(w) == 2) paste(w[2], w[1]) else NA_character_, "")) |>
+      filter(!is.na(k_sw)) |>
+      inner_join(gr |> filter(position %in% fantasy_pos) |> inner_join(keys, by = "gsis_id", relationship = "many-to-many"),
+                 by = c("game_id", "k_sw" = "key"), relationship = "many-to-many") |>
+      distinct(game_id, player, gsis_id, .keep_all = TRUE) |>
+      group_by(game_id, player) |> filter(n() == 1) |> ungroup() |> mutate(method = "swapped")
+  } else tibble()
+
+  bind_rows(exact, li, lo, ns, fz, sw) |>
     select(game_id, player, gsis_id, team, position, method) |>
     right_join(pk |> select(game_id, player), by = c("game_id", "player")) |>
     mutate(method = coalesce(method, "unmatched"))

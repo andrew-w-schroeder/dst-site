@@ -3,7 +3,7 @@
 #
 # Reads output/dst/<system>/report_parts_<season>_wk<ww>.rds written by 40_dst_model.R and writes
 #   output/dst/dst_proj_<season>_wk<ww>_all.{html,md}
-# Tabs: Compare (all three side by side, sortable) · one tab per scoring system · Glossary.
+# Tabs: one per scoring system · Track record · Glossary (Compare, all three side by side, hidden since 2026-09-29: SHOW_COMPARE=1).
 # Usage: Rscript 44_dst_report.R [season] [week]   (defaults: the newest report parts found)
 # ==============================================================================
 
@@ -74,12 +74,14 @@ make_proj_tbl <- function(pred, html = FALSE, label = "") {       # same columns
   if (label == "ESPN" && any(!is.na(pred[["espn_rank"]] %||% NA) | !is.na(pred[["sleeper_rank"]] %||% NA)))
     t <- t %>% mutate(`ESPN rank` = rank_pts(pred[["espn_rank"]], pred[["espn_pts"]] %||% NA), `Sleeper rank` = rank_pts(pred[["sleeper_rank"]], pred[["sleeper_pts"]] %||% NA), .after = Proj)
   if ("vegas_proj" %in% names(pred)) t <- t %>% mutate(`Vegas-only rank` = rank_pts(rank(-pred$vegas_proj, ties.method = "first"), pred$vegas_proj), .after = Proj)
+  if (any(!is.na(pred[["ecr_rank"]] %||% NA))) t <- t %>% mutate(ECR = ecr_cell(pred$ecr_rank, pred$ecr_avg, pred$ecr_sd, html), .after = Proj)   # right of Proj (Andrew 2026-09-29)
   if ("wx_wind" %in% names(pred)) t <- t %>% mutate(Weather = wx_label(pred$indoor, pred$wx_temp, pred$wx_wind, pred$wx_gust, pred$wx_precip_prob,
                                                                        if ("wx_precip_max" %in% names(pred)) pred$wx_precip_max else pred$wx_precip_in / 3, html = html),
                                                     .after = all_of(if ("Kickoff" %in% names(t)) "Kickoff" else "Venue")) %>%
     select(-Venue)                                                   # Weather already says "indoor"
   t <- t %>% mutate(Tier = tiers(pred$proj)$tier, .after = Rank)
   if (html && "why" %in% names(pred)) t$Team <- why_tip(pred$team, pred$proj, pred$why, label)
+  if (html && any(!is.na(pred[["ecr_rank"]] %||% NA))) t$Team <- paste0(if ("why" %in% names(pred)) t$Team else esc(t$Team), love_fade(pred$rank, pred$ecr_rank, "D/ST"))
   t$`Opp QB` <- qb_cell(pred, html)
   t
 }
@@ -127,7 +129,7 @@ compare_gloss <- tribble(~term, ~definition,
   "Δ Opp implied", "change in the opponent's Vegas implied points since the week's first weekly model run, normally Tuesday (negative = good for this D/ST)",
   "Δ Proj", "change in the projection since the week's first weekly model run, normally Tuesday — not since the previous refresh, and not reset by a mid-week model rerun",
   "Avg rank", "average of the three ranks; the table is sorted by it",
-  "ESPN rank", RANKCOL_TIP, "Sleeper rank", RANKCOL_TIP,
+  "ESPN rank", RANKCOL_TIP, "Sleeper rank", RANKCOL_TIP, "ECR", ECR_TIP,
   "Vegas-only rank", "rank and projection of the Vegas-only baseline (a regression on the betting lines alone: spread, total, implied points, home), with the same lines as our projection. Amber as for ESPN / Sleeper rank",
   "Rank spread", "largest minus smallest rank across systems; big spreads mean the scoring rules change the pick (usually shutout / points-allowed upside vs yards allowed or sacks)")
 col_gloss <- g0$col_glossary %>% mutate(definition = case_when(
@@ -179,15 +181,17 @@ sys_tab <- function(p) {
   row_cls <- trimws(paste(ifelse(tt %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tt] %in% TRUE, "tb-clear", "tb-soft"), "")))
   team_cls <- tier_cls(tt, k = max(tt))                                    # tier 1 dark green, 2 light green, 5 light red, 6 dark red
   ext_cls <- c(if ("ESPN rank" %in% names(pt)) list(`ESPN rank` = rank_flag(p$pred$rank, p$pred[["espn_rank"]]), `Sleeper rank` = rank_flag(p$pred$rank, p$pred[["sleeper_rank"]])),
-               if ("vegas_proj" %in% names(p$pred)) list(`Vegas-only rank` = rank_flag(p$pred$rank, rank(-p$pred$vegas_proj, ties.method = "first"))))
+               if ("vegas_proj" %in% names(p$pred)) list(`Vegas-only rank` = rank_flag(p$pred$rank, rank(-p$pred$vegas_proj, ties.method = "first"))),
+               if ("ECR" %in% names(pt)) list(ECR = rank_flag(p$pred$rank, p$pred$ecr_rank)))
   if (all(c("q10", "q90") %in% names(p$pred))) pt <- pt %>% mutate(Range = pmap_chr(p$pred[c("proj", "q10", "q25", "q75", "q90", "ci_lo", "ci_hi")], range_bar), .after = all_of(ac))
   cvt <- p$cv_tbl %>% select(any_of(c("model", "rmse", "mae", "spearman", "top8_avg", "bot8_avg", "edge_top8", "vs_vegas_top8", "t_stat",
                                       "hold_rmse", "hold_spearman", "hold_top8", "hold_vs_vegas_top8", "hold_t", "what")))
   paste0(sprintf("<p class='note'>Feature families in this model: %s.</p>", esc(paste(p$families, collapse = ", "))),
          "<p class='note'>Range bar: light = where the actual score lands 8 times in 10, dark = 5 times in 10, tick = projection, thin line = 0 points (axis −5 to 25). 90% CI = uncertainty of the projection itself.</p>",
          "<p class='note'>Tiers: natural breaks in the projections. A solid line = a clear drop (bigger than the model's typical ±), dashed = a softer break. Tier 1 dark green, tier 2 light green, the bottom two tiers light / dark red. Hover or tap a team for what drives its projection.</p>",
-         html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, raw_cols = c("Range", "Trend", "Team", "Opp QB", "Weather"),
+         html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, raw_cols = c("Range", "Trend", "Team", "Opp QB", "Weather", "ECR"),
                     row_cls = row_cls, cell_cls = c(list(Team = team_cls, Rank = team_cls, Proj = team_cls), ext_cls), stick = 4),   # Proj coloured like Rank (Andrew 2026-09-25)
+         if ("ECR" %in% names(pt)) "<p class='note'>ECR = FantasyPros expert consensus rank (hover for the average expert rank). \U0001F525 after a team = we rank it at least 25% (and 3 spots) higher than ECR; \u2620\uFE0F = at least 25% (and 3 spots) lower. Hover the symbol for the exact difference.</p>" else "",
          if (any(c("ESPN rank", "Vegas-only rank") %in% names(pt))) "<p class='note'>Vegas-only / ESPN / Sleeper rank: that source's rank this week, with its projected points in parentheses (ESPN and Sleeper in ESPN standard scoring). Light amber = we have the D/ST in our top 12 but that source has it as a sit (13–18); dark amber = not rosterable (19+).</p>" else "",
          sprintf("<p class='rules'><b>%s scoring:</b> %s</p>", esc(p$SC$label), esc(p$SC$rules)),
          if (is.null(p$holdout)) sprintf("<h3>Back-test: %s</h3><p class='note'>Each season predicted by models trained only on earlier seasons (from 2018). Every tuning, feature and blend choice maximizes the weekly top-8 edge over Vegas-only on these seasons, so these numbers are optimistic. %s %d is the clean test.</p>",
@@ -213,6 +217,8 @@ tabs <- c(list(Compare = paste0(
     paste0(imap_chr(split(feature_gloss, feature_gloss$section), ~ sprintf("<details><summary>%s</summary>%s</details>", esc(.y),
       html_table(.x %>% transmute(Feature = term, Definition = definition, `In model for` = ifelse(nzchar(used_in), used_in, "—")), left = 99, tips = FALSE))), collapse = ""))))
 
+# Compare tab hidden (Andrew 2026-09-29); SHOW_COMPARE=1 brings it back
+if (!identical(Sys.getenv("SHOW_COMPARE"), "1")) tabs$Compare <- NULL
 # Track record + vs Sleeper / ESPN tabs (62_track_record.R), before the Glossary
 TR_F <- track_file(PROJ_DIR, SEASON)
 if (file.exists(TR_F)) { tt <- tryCatch(track_tab(readRDS(TR_F), "DEF", setNames(map_chr(parts, ~ .x$SC$label), names(parts)), unit = "D/ST"),
@@ -257,7 +263,7 @@ if (refreshed) status_line <- paste0(status_line, sprintf(" · Δ columns = chan
 if (refreshed && !is.null(parts[[1]]$refresh$qb_sources)) {
   qs <- parts[[1]]$refresh$qb_sources
   nm <- c(sleeper = "Sleeper", report = "injury report", ourlads = "Ourlads")
-  status_line <- paste0(status_line, sprintf(" · starting QBs checked: %s%s%s", paste(nm[qs$ok], collapse = ", "),
+  status_line <- paste0(status_line, sprintf(" · starting QBs checked: %s%s%s%s", paste(nm[qs$ok], collapse = ", "),
                                              if (length(qs$stale)) sprintf(" (last good pull: %s)", paste(qs$stale, collapse = ", ")) else "",
                                              if (length(qs$fail)) sprintf(" (<b>unavailable: %s</b>)", paste(nm[qs$fail], collapse = ", ")) else "",
                                              if (!isTRUE(parts[[1]]$refresh$qb_rescore)) " — QB changes shown but not re-scored until the next weekly model run" else ""))

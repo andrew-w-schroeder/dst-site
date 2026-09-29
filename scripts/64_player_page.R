@@ -35,7 +35,7 @@ PP_TIP <- c(
   "Pass att" = "Expected pass attempts (volume; doesn't score).", "Rush att" = "Expected rushing attempts (volume; doesn't score).",
   Pos = "FLEX tab: the player's rank at his own position in this format.",
   "\u00b1" = "Model uncertainty of the projection, like the kicker and D/ST pages: half the width of its 90% bootstrap interval. Each of 60 draws resamples the sportsbooks behind the median lines (with replacement, per game) and uses one of 100 bootstrap refits of the props-to-stats calibration; the interval is the 5th to 95th percentile of the projections. Wide = books disagree, thin markets or lines far from typical. Hover for the interval. It measures how sure we are of the projection, not how much the player's score can swing (that is the range bar).",
-  "Range bar" = "How much his score can swing: light band = 80% of outcomes (10th to 90th percentile), dark band = 50% (25th to 75th), line = projection. From quantile regression on 2023+ player-games with the same projection (adding the TD price, implied total or spread didn't help). Same scale within a table.",
+  "Range bar" = "How much his score can swing: light band = 80% of outcomes (10th to 90th percentile), dark band = 50% (25th to 75th), line = projection; the small orange band around the line = the \u00b1 (90% interval of the projection itself). From quantile regression on 2023+ player-games with the same projection (adding the TD price, implied total or spread didn't help). Same scale within a table.",
   "Injury" = "(Q) Questionable, (D) Doubtful, (O) Out, IR / PUP / NFI / SUS after the name: the official NFL injury report's game status once it is out (Friday), before that Sleeper's status; IR / PUP / suspensions from either. Checked at every refresh and frozen at kickoff. Hover the player for practice participation and the injury. Red = ruled out or doubtful.",
   ECR = "FantasyPros expert consensus rank at the position (via DynastyProcess, updated about 10 am / 10 pm ET; the last one before kickoff). RB / WR / TE ranks are PPR in every format. Hover for the average rank, spread across experts and FantasyPros' projected PPR points. Amber when we rank the player a start but ECR has him as a sit: light = just outside the start line, dark = well outside (start lines: QB 12, RB 24, WR 36, TE 12).",
   "ESPN rank" = "ESPN's projected stats scored in this format, ranked at the position (last pull before kickoff); projected points in brackets. Amber as for ECR.",
@@ -103,10 +103,15 @@ pp_player_tip <- function(p, fmt) {
 ##   and only when the gap is at least PP_LOVE_MIN spots (so 1–2 spot swaps at the very top are not flagged)
 PP_LOVE_PCT <- 0.25; PP_LOVE_MIN <- 3   # Andrew 2026-09-29: 3 spots minimum
 PP_FLAME <- "\U0001F525"; PP_SKULL <- "\u2620\uFE0F"
-pp_range_bar <- function(q10, q25, q75, q90, pj, lo = -2, hi = 35) {
+## range bar: light = 80% of outcomes, dark = 50%, line = projection; orange band around the line = the ± (90% interval of
+## the projection itself, Andrew 2026-09-29), drawn at least 2 px wide
+pp_range_bar <- function(q10, q25, q75, q90, pj, lo = -2, hi = 35, ci_lo = NA, ci_hi = NA) {
   sc <- function(v) round(100 * (pmin(pmax(v, lo), hi) - lo) / (hi - lo), 1)
-  ifelse(is.na(q10), "", sprintf('<div class="rb" title="80%%: %.1f to %.1f \u00b7 50%%: %.1f to %.1f \u00b7 proj %.2f"><span class="r80" style="left:%s%%;width:%s%%"></span><span class="r50" style="left:%s%%;width:%s%%"></span><span class="pj" style="left:%s%%"></span></div>',
-          q10, q90, q25, q75, pj, sc(q10), sc(q90) - sc(q10), sc(q25), sc(q75) - sc(q25), sc(pj)))
+  ci_lo <- rep_len(ci_lo, length(pj)); ci_hi <- rep_len(ci_hi, length(pj)); has <- !is.na(ci_lo) & !is.na(ci_hi)
+  ci <- ifelse(has, sprintf('<span class="ci" style="left:%s%%;width:max(2px,%s%%)"></span>', sc(ci_lo), sc(ci_hi) - sc(ci_lo)), "")
+  ifelse(is.na(q10), "", sprintf('<div class="rb" title="80%%: %.1f to %.1f \u00b7 50%%: %.1f to %.1f \u00b7 proj %.2f%s"><span class="r80" style="left:%s%%;width:%s%%"></span><span class="r50" style="left:%s%%;width:%s%%"></span>%s<span class="pj" style="left:%s%%"></span></div>',
+          q10, q90, q25, q75, pj, ifelse(has, sprintf(" (\u00b1 %.2f: %.2f to %.2f)", (ci_hi - ci_lo) / 2, ci_lo, ci_hi), ""),
+          sc(q10), sc(q90) - sc(q10), sc(q25), sc(q75) - sc(q25), ci, sc(pj)))
 }
 pp_player_cell <- function(d, prk) {
   ecr <- if ("ecr_rank" %in% names(d)) d$ecr_rank else rep(NA_real_, nrow(d))
@@ -164,7 +169,8 @@ pp_pos_table <- function(P, pos, fmt) {
   if (paste0("q10_", fmt) %in% names(d)) {
     q <- function(k) d[[paste0("q", k, "_", fmt)]]
     hi <- max(35, ceiling(max(q(90), na.rm = TRUE) / 5) * 5)
-    t <- t |> mutate("Range bar" = pp_range_bar(q(10), q(25), q(75), q(90), v, lo = min(-2, floor(min(q(10), na.rm = TRUE))), hi = hi), .after = Trend)
+    cl <- if (paste0("ci_lo_", fmt) %in% names(d)) d[[paste0("ci_lo_", fmt)]] else NA; ch <- if (paste0("ci_hi_", fmt) %in% names(d)) d[[paste0("ci_hi_", fmt)]] else NA
+    t <- t |> mutate("Range bar" = pp_range_bar(q(10), q(25), q(75), q(90), v, lo = min(-2, floor(min(q(10), na.rm = TRUE))), hi = hi, ci_lo = cl, ci_hi = ch), .after = Trend)
   }
   if (paste0("ci_lo_", fmt) %in% names(d)) {                      # model uncertainty (bootstrap), as on the kicker page
     lo <- d[[paste0("ci_lo_", fmt)]]; hi <- d[[paste0("ci_hi_", fmt)]]
@@ -280,7 +286,7 @@ th{background:var(--th);cursor:pointer;position:sticky;top:0}td.l{text-align:lef
 .bar button{background:none;border:1px solid var(--bd);color:var(--fg);padding:6px 12px;border-radius:6px;cursor:pointer;min-height:36px}
 .bar button.on{background:var(--acc);color:#fff;border-color:var(--acc)}.pane{display:none}.pane.on{display:block}
 i.fill{color:var(--mut)}:root{--r80:#c9dcf2;--r50:#6f9fd8}@media (prefers-color-scheme:dark){:root{--r80:#2a3f5c;--r50:#4f78ad}}
-.rb{position:relative;width:150px;height:12px}.rb span{position:absolute;top:0;height:12px}.r80{background:var(--r80)}.r50{background:var(--r50)}.pj{width:2px;background:var(--fg)}.sw{display:inline-block;width:12px;height:12px;border:1px solid var(--bd);vertical-align:middle;border-radius:2px}
+.rb{position:relative;width:150px;height:12px}.rb span{position:absolute;top:0;height:12px}.r80{background:var(--r80)}.r50{background:var(--r50)}.pj{width:2px;background:var(--fg)}.rb span.ci{top:3px;height:6px;background:#dd6b20;border-radius:2px}.sw{display:inline-block;width:12px;height:12px;border:1px solid var(--bd);vertical-align:middle;border-radius:2px}
 tr.nop td{font-style:italic}span.nop{font-style:normal;border:1px solid var(--bd);border-radius:4px;padding:0 4px;font-size:11px}
 span.inj{color:#c05621;font-weight:700;font-size:12px}span.inj.out{color:#c53030}
 @media (prefers-color-scheme:dark){span.inj{color:#f6ad55}span.inj.out{color:#fc8181}}

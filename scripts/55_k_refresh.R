@@ -133,6 +133,13 @@ if (file.exists(ext_f) && file.exists(file.path(PROJ_DIR, "scripts/ext_utils.R")
   for (src in c("ESPN", "Sleeper")) { e <- en[en$source == src, ]; i <- match(P$pred$team, e$team)
     P$pred[[paste0(tolower(src), "_rank")]] <- e$rank[i]; P$pred[[paste0(tolower(src), "_pts")]] <- e$pts[i] }
 }, error = function(e) message("kickers: Sleeper / ESPN ranks — ", conditionMessage(e)))
+# FantasyPros kicker ECR (snapshot taken by the D/ST refresh, data/lines/ecr_history.csv; frozen at kickoff)
+tryCatch({ if (!exists("ecr_now")) source(file.path(PROJ_DIR, "scripts/ext_utils.R"))
+  kt <- bind_rows(lines %>% transmute(team = home_team, ko), lines %>% transmute(team = away_team, ko))
+  ek <- ecr_now(file.path(PROJ_DIR, "data/lines/ecr_history.csv"), SEASON, WEEK, kt, "K")
+  if (!is.null(ek) && nrow(ek)) { i <- match(P$pred$team, ek$team)
+    P$pred$ecr_rank <- ek$rank[i]; P$pred$ecr_avg <- ek$ecr_avg[i]; P$pred$ecr_sd <- ek$ecr_sd[i]; P$pred$ecr_name <- ek$name[i] }
+}, error = function(e) message("kickers: ECR — ", conditionMessage(e)))
 P$refresh <- list(time = NOW, n_priced = sum(lines$src == "sportsbooks"), n_locked = sum(lines$locked), n_games = nrow(lines),
                   books = if (any(!is.na(lines$n_books))) median(lines$n_books, na.rm = TRUE) else NA,
                   weather = if (nrow(wx_use)) sprintf("Open-Meteo forecasts for %d outdoor games", nrow(wx_use)) else "weekly-run values",

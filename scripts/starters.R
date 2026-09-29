@@ -157,8 +157,8 @@ starter_sources <- function(season, week, teams, cache = NULL, max_age_min = 120
 st_match <- function(tab, team, key, id) {                 # rows of a source table for this player on this team
   if (is.null(tab) || !nrow(tab)) return(tab[0, ])
   k <- st_norm(tab$name); t <- tab$team == team
-  m <- (!is.na(id) & !is.na(tab$gsis_id) & tab$gsis_id == id) | (t & k == key)
-  if (!any(m) && nzchar(key)) { l <- t & st_last(k) == st_last(key); if (sum(l) == 1) m <- l }
+  m <- (!is.na(id) & !is.na(tab$gsis_id) & tab$gsis_id == id) | (t & k == key); m[is.na(m)] <- FALSE   # NA names / teams in a source
+  if (!any(m) && !is.na(key) && nzchar(key)) { l <- t & st_last(k) == st_last(key); l[is.na(l)] <- FALSE; if (sum(l) == 1) m <- l }
   tab[m, ]
 }
 player_status <- function(S, team, name, id = NA, pos = "QB") {
