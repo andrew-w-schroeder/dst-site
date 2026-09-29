@@ -51,6 +51,20 @@ PP_AMBER <- paste0("<p class='s legend'><span class='sw fl1'></span> <b>Light am
   "<p class='s legend'>\U0001F525 <b>Vegas love</b>: our Vegas-only projection ranks him at least 25% higher at his position than FantasyPros ECR ",
   "(the gap \u00f7 the better of the two ranks, and at least 3 spots: WR12 vs WR15 = 25%, WR40 vs WR50 = 25%). ",
   "\u2620\uFE0F <b>Vegas fade</b>: at least 25% (and 3 spots) lower. Hover a player for the exact difference.</p>")
+## glossary text for rows without props (back-test numbers from 79 via the bundle)
+pp_fb_note <- function(sk) {
+  x <- ""
+  if (!is.null(sk) && nrow(sk)) { w <- tidyr::pivot_wider(sk, names_from = spec, values_from = wk_spearman)
+    fb <- setdiff(names(w), c("pos", "V"))[1]
+    x <- paste0(" In the 2023\u201325 back-test it ranks players less well than the props (half PPR weekly rank correlation with results, same players: ",
+                paste(sprintf("%s %.2f vs %.2f", w$pos, w[[fb]], w$V), collapse = ", "), ").") }
+  paste0("Games whose props aren't posted yet (usually Tuesday–Wednesday). Every stat is the player's recent history ",
+         "(recency-weighted, \u00d70.9 per game, \u00d70.5 per offseason, shrunk toward his position), scored in the format and adjusted ",
+         "for this game's implied team total vs his team's recent scoring and for the spread (fit on 2019\u201325). Players shown: ",
+         "active-roster players with enough recent production, the team's latest starting QB, and nobody ruled out or doubtful. ",
+         "No \u00b1, love / fade or amber flags, since those are Vegas calls. The TD% is implied by his expected TDs. ",
+         "Each player switches to props as soon as his game has them.", x)
+}
 pp_rank_pts <- function(rk, pts) ifelse(is.na(rk), "", ifelse(is.na(pts), as.character(rk), sprintf("%d (%.1f)", as.integer(rk), pts)))
 PP_FILL_NOTE <- "Italic* = no prop for this stat: receptions from the receiving-yards prop and the player's yards per catch (or the reverse); otherwise his recency-weighted career average per game, shrunk toward players at his position without that prop."
 
@@ -96,8 +110,9 @@ pp_range_bar <- function(q10, q25, q75, q90, pj, lo = -2, hi = 35) {
 }
 pp_player_cell <- function(d, prk) {
   ecr <- if ("ecr_rank" %in% names(d)) d$ecr_rank else rep(NA_real_, nrow(d))
+  fb <- d$fallback %in% TRUE
   gap <- ecr - prk; pc <- gap / pmin(ecr, prk)
-  sym <- ifelse(is.na(pc), "", ifelse(pc >= PP_LOVE_PCT & gap >= PP_LOVE_MIN, paste0(" ", PP_FLAME),
+  sym <- ifelse(is.na(pc) | fb, "", ifelse(pc >= PP_LOVE_PCT & gap >= PP_LOVE_MIN, paste0(" ", PP_FLAME),
                ifelse(pc <= -PP_LOVE_PCT & -gap >= PP_LOVE_MIN, paste0(" ", PP_SKULL), "")))
   what <- ifelse(is.na(ecr), "No FantasyPros ECR for this player this week.",
     ifelse(gap == 0, "Same rank as ECR.",
@@ -108,11 +123,14 @@ pp_player_cell <- function(d, prk) {
   badge <- ifelse(is.na(st), "", sprintf(" <span class='inj%s'>(%s)</span>", ifelse(d$inj_out %in% TRUE, " out", ""), d$inj_badge))
   injl <- ifelse(is.na(st), "", paste0("\n<b>Injury: ", st, "</b>", ifelse(nzchar(coalesce(d$inj_detail, "")), paste0(" \u2014 ", pp_esc(d$inj_detail)), ""),
                                        ifelse(d$inj_out %in% TRUE, "\n\u26A0 Ruled out or unlikely to play: books usually pull his props, so this line is his last pre-report projection.", "")))
+  what <- ifelse(fb, paste0("<b>No props posted yet for this game.</b> Projection = his recent history (every stat), adjusted for ",
+                            "the team's implied total and the spread; no Vegas love / fade until props post.",
+                            ifelse(is.na(ecr), "", sprintf("\nHistory rank %s%d vs ECR %s%d.", d$pos, as.integer(prk), d$pos, as.integer(ecr)))), what)
   tip <- paste0("<b>", pp_esc(d$player_name), " (", d$team, ", ", d$pos, ")</b>",
                 ifelse(d$td_keep %in% TRUE, " TD-only", ""), injl,
-                "\nVegas ", d$pos, as.integer(prk), ifelse(is.na(ecr), "", sprintf(" · ECR %s%d (average expert rank %.1f)", d$pos, as.integer(ecr), d$ecr_avg)),
+                ifelse(fb, "", paste0("\nVegas ", d$pos, as.integer(prk), ifelse(is.na(ecr), "", sprintf(" · ECR %s%d (average expert rank %.1f)", d$pos, as.integer(ecr), d$ecr_avg)))),
                 "\n", what)
-  tip_span(paste0(pp_esc(d$player_name), badge, ifelse(d$td_keep, " <span class='s'>(TD)</span>", ""), sym), tip)
+  tip_span(paste0(pp_esc(d$player_name), badge, ifelse(d$td_keep, " <span class='s'>(TD)</span>", ""), ifelse(fb, " <span class='s nop'>no props yet</span>", ""), sym), tip)
 }
 
 pp_pos_table <- function(P, pos, fmt) {
@@ -120,12 +138,14 @@ pp_pos_table <- function(P, pos, fmt) {
   flex <- pos == "FLEX"
   d <- P$cur |> filter(include, if (flex) pos %in% c("RB", "WR", "TE") else pos == !!pos)
   if (!nrow(d)) return("<p class='s'>No props posted yet for this position.</p>")
-  v <- d[[paste0("vfp_", fmt)]]; o <- order(-v); d <- d[o, ]; v <- v[o]
+  if (!"fallback" %in% names(d)) d$fallback <- FALSE
+  v <- d[[paste0("vfp_", fmt)]]; o <- order(-v); d <- d[o, ]; v <- v[o]; fb <- d$fallback %in% TRUE
   prk <- ave(-v, d$pos, FUN = \(x) rank(x, ties.method = "first"))          # rank within the player's position
   k <- max(5, min(10, ceiling(nrow(d) / 10)))
   tr <- tiers(v, k = min(k, nrow(d)), clear = 1.5)
   ## trend + change since the first pull with props for this player
-  h <- P$hist |> filter(gsis_id %in% d$gsis_id) |> select(gsis_id, game_id, t, proj = !!paste0("vfp_", fmt)) |> arrange(t)
+  hh <- if (nrow(P$hist)) P$hist else tibble(gsis_id = character(), game_id = character(), t = as.POSIXct(character(), tz = "UTC"), !!paste0("vfp_", fmt) := numeric())
+  h <- hh |> filter(gsis_id %in% d$gsis_id) |> select(gsis_id, game_id, t, proj = !!paste0("vfp_", fmt)) |> arrange(t)
   first <- h |> group_by(gsis_id) |> slice_min(t, n = 1, with_ties = FALSE) |> ungroup()
   spark <- vapply(d$gsis_id, \(g) { x <- h[h$gsis_id == g, ]
     if (nrow(x) < 1) return("")
@@ -138,7 +158,7 @@ pp_pos_table <- function(P, pos, fmt) {
   t <- tibble(Rank = seq_len(nrow(d)), Tier = tr$tier,
               Player = pp_player_cell(d, prk),
               Team = d$team, Opp = paste0(ifelse(d$home == 1, "vs ", "@ "), d$opp), Kickoff = ko, Imp = pp_f(d$implied),
-              Proj = pp_f(v, 2), "\u0394" = pp_sg(v - first$proj[match(d$gsis_id, first$gsis_id)]),
+              Proj = pp_f(v, 2), "\u0394" = ifelse(fb, "", pp_sg(v - first$proj[match(d$gsis_id, first$gsis_id)])),
               Trend = spark, "P(boom)" = pp_pct(d[[paste0("p_boom_", fmt)]]), "P(bust)" = pp_pct(d[[paste0("p_bust_", fmt)]]))
   if (paste0("q10_", fmt) %in% names(d)) {
     q <- function(k) d[[paste0("q", k, "_", fmt)]]
@@ -160,18 +180,19 @@ pp_pos_table <- function(P, pos, fmt) {
       ifelse(is.na(d$ecr_pts), "", sprintf("\nFantasyPros projection %.1f PPR points", d$ecr_pts)), d$ecr_date,
       ifelse(d$pos == "QB", "", "\nPPR ranks (the same in every format)")))
     t$ECR <- ifelse(is.na(d$ecr_rank), "", tip_span(lab(d$ecr_rank), ecr_tip))
-    ext_c$ECR <- pp_flag(prk, d$ecr_rank, d$pos)
+    ext_c$ECR <- ifelse(fb, "", pp_flag(prk, d$ecr_rank, d$pos))
   }
   for (src in c("ESPN", "Sleeper")) { lo <- tolower(src); rk <- d[[paste0(lo, "_rk_", fmt)]]
     if (!is.null(rk) && any(!is.na(rk))) { cn <- paste(src, "rank")
       pts <- d[[paste0(lo, "_pts_", fmt)]]
       t[[cn]] <- ifelse(is.na(rk), "", ifelse(is.na(pts), lab(rk), sprintf("%s (%.1f)", lab(rk), pts)))
-      ext_c[[cn]] <- pp_flag(prk, rk, d$pos) } }
+      ext_c[[cn]] <- ifelse(fb, "", pp_flag(prk, rk, d$pos)) } }
   if (length(ext_c)) t <- t |> relocate(any_of(c("ECR", "ESPN rank", "Sleeper rank")), .after = any_of(c("Proj", "\u00b1")))
   t <- bind_cols(t, as_tibble(stat_cells), tibble("TD%" = pp_pct(d$p_td_raw),
-    Books = do.call(pmax, c(map(grep("^n_books\\.", names(d), value = TRUE), \(c) coalesce(d[[c]], 0)), na.rm = TRUE))))
+    Books = ifelse(fb, "", do.call(pmax, c(map(grep("^n_books\\.", names(d), value = TRUE), \(c) coalesce(d[[c]], 0)), na.rm = TRUE)))))
   brk <- c(FALSE, tr$tier[-1] != tr$tier[-length(tr$tier)])
-  row_cls <- trimws(paste(ifelse(tr$tier %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tr$tier] %in% TRUE, "tb-clear", "tb-soft"), "")))
+  row_cls <- trimws(paste(ifelse(tr$tier %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tr$tier] %in% TRUE, "tb-clear", "tb-soft"), ""),
+                          ifelse(fb, "nop", "")))
   tc <- tier_cls(tr$tier, k = max(tr$tier))
   pp_table(t, raw = c("Player", "Trend", "ECR", "Range bar", "\u00b1", unname(scols)), id = paste0("t_", pos, "_", fmt), row_cls = row_cls,
            cell_cls = c(list(Rank = tc, Player = tc, Proj = tc), ext_c))
@@ -233,15 +254,18 @@ player_page <- function(P) {
   pos_l <- c(PS_POS, "FLEX"); fmts <- names(PS_FORMATS)
   panes <- unlist(lapply(pos_l, \(p) lapply(fmts, \(f) sprintf('<div class="pane" data-pos="%s" data-fmt="%s">%s</div>', p, f, pp_pos_table(P, p, f)))))
   gl <- tibble(Term = names(PP_TIP), Definition = unname(PP_TIP)) |>
-    bind_rows(tibble(Term = c("Italic*", "(TD)", "Formats"), Definition = c(PP_FILL_NOTE,
+    bind_rows(tibble(Term = c("Italic*", "Italic row: no props yet", "(TD)", "Formats"), Definition = c(PP_FILL_NOTE, pp_fb_note(P$fb_skill),
       "TD-only player: no yardage or receptions prop, shown because his anytime-TD price is at or above the median of players at his position with full props.",
       "Standard / Half PPR / PPR: ESPN defaults (0.04 per pass yard, pass TD 4, INT −2, fumble lost −2, 0 / 0.5 / 1 per catch). FFPC: 0.05 per pass yard, INT −1, fumble lost −1, 1 per catch, 1.5 per TE catch.")))
   gl_html <- paste0('<div class="tw"><table><thead><tr><th>Term</th><th>Definition</th></tr></thead><tbody>',
                     paste0("<tr><td class='l'><b>", pp_esc(gl$Term), "</b></td><td class='l wrap'>", pp_esc(gl$Definition), "</td></tr>", collapse = ""), "</tbody></table></div>")
-  status <- if (is.na(P$last_pull)) "<b>No props pulled yet this week.</b> Sportsbooks usually post player props from Tuesday–Thursday; the page updates with each refresh." else
+  nfb <- if (is.null(P$n_fallback)) 0L else P$n_fallback
+  fb_note <- if (nfb > 0) sprintf(" <b>Italic rows</b> (%d game%s without props yet): recent history adjusted for the implied total and spread, until that game's props post; see the Glossary.",
+                                   nfb, if (nfb == 1) "" else "s") else ""
+  status <- if (is.na(P$last_pull)) paste0("<b>No props pulled yet this week.</b> Sportsbooks usually post player props from Tuesday–Thursday; the page updates with each refresh.", fb_note) else
     sprintf("<b>Props updated %s ET</b> (median of up to %.0f sportsbooks; %d of %d games with props%s) · weekly bundle %s.",
             pp_et(P$last_pull, "%a %b %d %I:%M %p"), P$books, P$n_priced, P$n_games,
-            if (P$n_locked > 0) sprintf(", %d started and locked", P$n_locked) else "", format(P$bundle_time, "%a %b %d"))
+            if (P$n_locked > 0) sprintf(", %d started and locked", P$n_locked) else "", format(P$bundle_time, "%a %b %d")) |> paste0(fb_note)
   b <- P$site_base
   paste0('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
   sprintf("<title>Player projections %d wk %d</title>", P$season, P$week),
@@ -256,6 +280,7 @@ th{background:var(--th);cursor:pointer;position:sticky;top:0}td.l{text-align:lef
 .bar button.on{background:var(--acc);color:#fff;border-color:var(--acc)}.pane{display:none}.pane.on{display:block}
 i.fill{color:var(--mut)}:root{--r80:#c9dcf2;--r50:#6f9fd8}@media (prefers-color-scheme:dark){:root{--r80:#2a3f5c;--r50:#4f78ad}}
 .rb{position:relative;width:150px;height:12px}.rb span{position:absolute;top:0;height:12px}.r80{background:var(--r80)}.r50{background:var(--r50)}.pj{width:2px;background:var(--fg)}.sw{display:inline-block;width:12px;height:12px;border:1px solid var(--bd);vertical-align:middle;border-radius:2px}
+tr.nop td{font-style:italic}span.nop{font-style:normal;border:1px solid var(--bd);border-radius:4px;padding:0 4px;font-size:11px}
 span.inj{color:#c05621;font-weight:700;font-size:12px}span.inj.out{color:#c53030}
 @media (prefers-color-scheme:dark){span.inj{color:#f6ad55}span.inj.out{color:#fc8181}}
 .sw.fl1{background:var(--fl1)}.sw.fl2{background:var(--fl2)}p.legend{margin:.2rem 0}', SITE_CSS, '</style></head><body>',

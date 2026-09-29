@@ -172,6 +172,55 @@ ps_ranges <- function(vfp, pos, p_td, imp, sp, R, bb) {
   as_tibble(out)
 }
 
+## ---- Games without props yet (Andrew 2026-09-29; spec from 79_player_fallback.R, packed by 63 as B$fallback) ----
+## Every stat = the player's recency-weighted history (x0.9 per game, x0.5 per offseason), shrunk toward the
+## position average (2 games; 8 for fumbles / 2-pt), scored in each format (h); then the back-tested adjustment
+## for this game's implied team total and spread: proj = b0 + b1 h + b2 h (implied - team's recent points per
+## game) + b3 h spread, per position x format. Stats shown are the history scaled to the half-PPR projection.
+## Pool: active-roster players whose half-PPR history is at or above the position floor (79: as many per team as
+## the Vegas-only page shows), QB = the team's passer in its latest game. teams: tibble(game_id, team) needing it;
+## ctx: tibble(game_id, team, implied, spread) (NA when no line yet: then no adjustment).
+ps_fallback <- function(B, teams, ctx) {
+  F <- B$fallback
+  if (is.null(F) || !nrow(teams)) return(tibble())
+  p <- B$players |> filter(roster_status %in% "ACT") |> inner_join(teams, by = "team") |>
+    left_join(B$career, by = "gsis_id") |> mutate(across(starts_with("S_"), \(x) coalesce(x, 0))) |> filter(S_n > 0.3)
+  if (!nrow(p)) return(tibble())
+  e <- p |> select(game_id, gsis_id)
+  for (s in PS_STATS) {
+    g <- F$gm[[s]][match(p$pos, F$gm$pos)]; K <- if (s %in% F$rare) F$K[["rare"]] else F$K[["career"]]
+    e[[paste0("e.", s)]] <- (p[[paste0("S_", s)]] + K * g) / (p$S_n + K)
+    e[[paste0("src.", s)]] <- "history (no props yet)"
+  }
+  h <- ps_points(e, p$pos)
+  ## pool: half-PPR history at or above the position floor; one QB per team (latest passer, else most history)
+  p$h_half <- h$vfp_half
+  keep <- p$pos != "QB" & p$h_half >= unname(F$floors[p$pos])
+  qb <- p |> mutate(i = row_number(), last = gsis_id %in% F$last_qb$gsis_id) |> filter(pos == "QB") |>
+    group_by(game_id, team) |> arrange(desc(last), desc(S_pass_att), .by_group = TRUE) |> slice_head(n = 2) |>
+    mutate(fb_qb = row_number()) |> ungroup()
+  keep[qb$i] <- TRUE; p$fb_qb <- NA_integer_; p$fb_qb[qb$i] <- qb$fb_qb   # 2 = backup: shown only if the starter is ruled out (65)
+  p <- p[keep, ]; e <- e[keep, ]; h <- h[keep, ]
+  if (!nrow(p)) return(tibble())
+  cx <- p |> select(game_id, team) |> left_join(ctx, by = c("game_id", "team")) |>
+    left_join(F$t_pts, by = "team")
+  rel <- ifelse(is.na(cx$implied), 0, cx$implied - coalesce(cx$t_pts_g, F$league_imp)); sp <- coalesce(cx$spread, 0)
+  out <- p |> transmute(game_id, gsis_id, player_name, pos, team, core = FALSE, td_only = FALSE, td_keep = FALSE, fallback = TRUE, fb_qb)
+  for (f in names(PS_FORMATS)) {
+    hv <- h[[paste0("vfp_", f)]]; cf <- F$coef
+    b <- t(vapply(p$pos, \(q) { k <- cf[[q]][[f]]; c(k[["(Intercept)"]], k[["h"]], coalesce(k["h:rel"], 0), coalesce(k["h:sp"], 0)) }, numeric(4)))
+    out[[paste0("vfp_", f)]] <- pmax(b[, 1] + b[, 2] * hv + b[, 3] * hv * rel + b[, 4] * hv * sp, 0)
+  }
+  ## stats: history scaled to the half-PPR projection (so they add up to it); TD price implied by the expected TDs
+  r <- ifelse(h$vfp_half > 0, out$vfp_half / h$vfp_half, 1)
+  for (s in PS_STATS) out[[paste0("e.", s)]] <- pmax(e[[paste0("e.", s)]], 0) * if (s %in% c("fum_lost", "two_pt")) 1 else r
+  for (s in PS_STATS) out[[paste0("src.", s)]] <- e[[paste0("src.", s)]]
+  td <- B$conv$tds$coef                                         # E[TDs] = exp(b0 + b1 log(lambda_raw))
+  lam <- exp((log(pmax(out$e.tds, 1e-4)) - td[[1]]) / td[[2]])
+  out$p_td_raw <- 1 - exp(-lam)
+  bind_cols(out, ps_bb(out |> select(starts_with("vfp_")), out$p_td_raw, out$pos, B$bb))
+}
+
 ## ---- Model uncertainty of the Vegas-only projection (the page's "±"), like the kicker / D/ST bootstrap ----
 ## Two sources, drawn together nboot times: (1) which sportsbooks: each game's books are resampled with
 ## replacement and the median consensus is rebuilt (books that disagree widen it); (2) the conversion from props

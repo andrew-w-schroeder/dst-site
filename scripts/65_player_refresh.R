@@ -160,9 +160,29 @@ imp <- tryCatch({
   bind_rows(g |> transmute(game_id, team = home_team, implied = (total + sp) / 2, spread = sp),
             g |> transmute(game_id, team = away_team, implied = (total - sp) / 2, spread = -sp))
 }, error = function(e) tibble(game_id = character(), team = character(), implied = numeric(), spread = numeric()))
+## ---- 4a. Games without (enough) props yet: history x implied total and spread (ps_fallback, spec from 79;
+##          Andrew 2026-09-29). A game counts as priced once its newest pre-kickoff pull has FB_MIN_CORE core
+##          players; until then its pool players without a yardage / receptions prop get the fallback
+##          (players with one keep their props). Shown in italics, without ± or love / fade flags. ----
+FB_MIN_CORE <- as.integer(Sys.getenv("FB_MIN_CORE", "6"))
+if (nrow(cur)) cur$fallback <- FALSE
+n_core <- if (nrow(cur)) cur |> group_by(game_id) |> summarise(n = sum(core), .groups = "drop") else tibble(game_id = character(), n = integer())
+thin <- setdiff(games$game_id, n_core$game_id[n_core$n >= FB_MIN_CORE])
+n_fb <- 0L
+if (length(thin)) {
+  fbr <- tryCatch(ps_fallback(B, gl |> filter(game_id %in% thin) |> select(game_id, team), imp),
+                  error = function(e) { message("players: fallback — ", conditionMessage(e)); tibble() })
+  if (nrow(fbr)) {
+    has_core <- if (nrow(cur)) cur |> filter(core) |> select(game_id, gsis_id) else tibble(game_id = character(), gsis_id = character())
+    fbr <- fbr |> anti_join(has_core, by = c("game_id", "gsis_id")) |> mutate(t = as.POSIXct(NA, tz = "UTC"))
+    if (nrow(cur)) cur <- cur |> anti_join(fbr |> select(game_id, gsis_id), by = c("game_id", "gsis_id"))   # TD-only rows give way
+    cur <- bind_rows(cur, fbr); n_fb <- nrow(fbr)
+  }
+  message(sprintf("players: %d games without enough props yet: %d players projected from history x implied total", length(thin), n_fb))
+}
 if (nrow(cur)) {
   cur <- cur |> left_join(gl, by = c("game_id", "team")) |> left_join(imp, by = c("game_id", "team")) |>
-    mutate(locked = NOW >= ko, include = core | td_keep)
+    mutate(locked = NOW >= ko, include = core | td_keep | fallback)
   ## "±" from the same pull as each game's projection
   if (file.exists(CI_CSV)) {
     ci <- read.csv(CI_CSV, stringsAsFactors = FALSE) |> mutate(t = utc(pulled_at)) |> select(-pulled_at) |>
@@ -191,6 +211,7 @@ if (nrow(cur)) {
   if (!is.null(ij) && nrow(ij)) {
     cur <- cur |> select(-any_of(c("inj_status", "inj_out", "inj_badge", "inj_detail"))) |>
       left_join(ij |> select(gsis_id, inj_status, inj_out, inj_badge, inj_detail), by = "gsis_id")
+    cur <- cur |> mutate(include = include & !(fallback & inj_out %in% TRUE))   # no props yet and ruled out: not shown
     message(sprintf("players: injury status for %d shown players (%s)", sum(!is.na(cur$inj_status[cur$include])),
                     paste(names(table(cur$inj_badge[cur$include & nzchar(coalesce(cur$inj_badge, ""))])), table(cur$inj_badge[cur$include & nzchar(coalesce(cur$inj_badge, ""))]), collapse = ", ")))
   }
@@ -211,9 +232,15 @@ if (nrow(cur)) {
   }
 }
 
+## no-props QBs: the team's starter; his backup (fb_qb 2) only when the starter is ruled out or doubtful
+if (nrow(cur) && "fb_qb" %in% names(cur)) {
+  out1 <- if ("inj_out" %in% names(cur)) cur |> filter(fallback, fb_qb %in% 1, inj_out %in% TRUE) |> distinct(game_id, team) else tibble(game_id = character(), team = character())
+  cur <- cur |> mutate(include = include & !(fallback & fb_qb %in% 2 & !paste(game_id, team) %in% paste(out1$game_id, out1$team)))
+}
+
 ## ---- 5. Page ----
 P <- list(season = SEASON, week = WEEK, now = NOW, cur = cur, hist = hist, games = games, bundle_time = B$created,
-          n_games = nrow(games), n_priced = if (nrow(cur)) n_distinct(cur$game_id) else 0L,
+          n_games = nrow(games), n_priced = nrow(games) - length(thin), n_fallback = length(thin), fb_skill = B$fallback$skill,
           n_locked = sum(NOW >= games$ko), books = if (nrow(live)) median(live$n_books[live$t == max(live$t)], na.rm = TRUE) else NA,
           last_pull = if (nrow(live)) max(live$t) else as.POSIXct(NA), bb = B$bb, site_base = SITE_BASE, unmatched = nrow(unm),
           track = { tf <- file.path(PROJ_DIR, "output/players_site/track_players.rds"); if (file.exists(tf)) readRDS(tf) })
