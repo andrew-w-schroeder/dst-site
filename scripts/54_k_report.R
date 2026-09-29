@@ -36,10 +36,13 @@ f1 <- function(x, d = 1) formatC(x, format = "f", digits = d)
 pct <- function(x) ifelse(is.na(x), "", paste0(round(100 * x), "%"))
 signed <- function(x, d = 2) ifelse(is.na(x) | abs(x) < 0.5 * 10^-d, "0", sprintf(paste0("%+.", d, "f"), x))
 et <- function(x, f) ifelse(is.na(x), NA_character_, sub(" 0", " ", format(x, f, tz = "America/New_York")))
-range_bar <- function(q10, q25, q75, q90, pj, lo = -2, hi = 22) {
+range_bar <- function(q10, q25, q75, q90, pj, lo = -2, hi = 22, ci_lo = NA, ci_hi = NA) {   # orange band = the ± (Andrew 2026-09-29)
   sc <- function(v) round(100 * (pmin(pmax(v, lo), hi) - lo) / (hi - lo), 1)
-  sprintf('<div class="rb" title="80%%: %.1f to %.1f · 50%%: %.1f to %.1f · proj %.2f"><span class="r80" style="left:%s%%;width:%s%%"></span><span class="r50" style="left:%s%%;width:%s%%"></span><span class="pj" style="left:%s%%"></span></div>',
-          q10, q90, q25, q75, pj, sc(q10), sc(q90) - sc(q10), sc(q25), sc(q75) - sc(q25), sc(pj))
+  ci_lo <- rep_len(ci_lo, length(pj)); ci_hi <- rep_len(ci_hi, length(pj)); has <- !is.na(ci_lo) & !is.na(ci_hi)
+  ci <- ifelse(has, sprintf('<span class="ci" style="left:%s%%;width:max(2px,%s%%)"></span>', sc(ci_lo), sc(ci_hi) - sc(ci_lo)), "")
+  sprintf('<div class="rb" title="80%%: %.1f to %.1f · 50%%: %.1f to %.1f · proj %.2f%s"><span class="r80" style="left:%s%%;width:%s%%"></span><span class="r50" style="left:%s%%;width:%s%%"></span>%s<span class="pj" style="left:%s%%"></span></div>',
+          q10, q90, q25, q75, pj, ifelse(has, sprintf(" (± %.2f: %.2f to %.2f)", (ci_hi - ci_lo) / 2, ci_lo, ci_hi), ""),
+          sc(q10), sc(q90) - sc(q10), sc(q25), sc(q75) - sc(q25), ci, sc(pj))
 }
 html_table <- function(df, raw = character(), id = "", row_cls = NULL, cell_cls = list(), stick = 0) {
   hdr <- paste0("<tr>", paste0(sprintf('<th title="%s" onclick="srt(this)">%s</th>', esc(coalesce(tip[names(df)], "")), esc(names(df))), collapse = ""), "</tr>")
@@ -113,7 +116,8 @@ sys_table <- function(sy) {
   attr(t, "cell_cls") <- c(list(Rank = tc, Kicker = tc, Proj = tc), ext_c)   # Proj coloured like Rank; weather highlights sit inside the Weather cell
   t %>% mutate(
     `±` = f1(p[[paste0("pm_", sy)]], 2), `90% CI` = paste0(f1(p[[paste0("ci_lo_", sy)]]), "–", f1(p[[paste0("ci_hi_", sy)]])),
-    `Range bar` = range_bar(p[[paste0("q10_", sy)]], p[[paste0("q25_", sy)]], p[[paste0("q75_", sy)]], p[[paste0("q90_", sy)]], p[[paste0("proj_", sy)]]),
+    `Range bar` = range_bar(p[[paste0("q10_", sy)]], p[[paste0("q25_", sy)]], p[[paste0("q75_", sy)]], p[[paste0("q90_", sy)]], p[[paste0("proj_", sy)]],
+                            ci_lo = p[[paste0("ci_lo_", sy)]] %||% NA, ci_hi = p[[paste0("ci_hi_", sy)]] %||% NA),
     `P(boom)` = pct(p[[paste0("p_boom_", sy)]]), `P(bust)` = pct(p[[paste0("p_bust_", sy)]]),
     `P(15+)` = if (paste0("p_ceiling_", sy) %in% names(p)) pct(p[[paste0("p_ceiling_", sy)]]) else NA_character_, `P(top N)` = pct(p[[paste0("p_top_", sy)]]),
     `E[FGA]` = f1(p$e_fga, 2), `E[50+]` = f1(p$e_a_50p, 2), `E[XP]` = f1(p$e_xp, 2), `P(make) 40s / 50+` = paste0(pct(p$p_40s), " / ", pct(p$p_50p)),
@@ -190,7 +194,7 @@ th{background:var(--th);cursor:pointer;position:sticky;top:0}td.l{text-align:lef
 .tabs button{background:none;border:1px solid var(--bd);color:var(--fg);padding:6px 12px;margin:0 4px 4px 0;border-radius:6px 6px 0 0;cursor:pointer}
 .tabs button.on{background:var(--acc);color:#fff;border-color:var(--acc)}.pane{display:none}.pane.on{display:block}
 .rb{position:relative;width:150px;height:12px}.rb span{position:absolute;top:0;height:12px}.r80{background:var(--r80)}.r50{background:var(--r50)}
-.pj{width:2px;background:var(--fg)}
+.pj{width:2px;background:var(--fg)}.rb span.ci{top:3px;height:6px;background:#dd6b20;border-radius:2px}
 td.top{background:#e3f4e8;font-weight:600}td.bot{background:#fbe6e6}
 @media (prefers-color-scheme:dark){td.top{background:#17351f}td.bot{background:#3a1a1a}}', SITE_CSS, '</style></head><body>',
   if (!is.null(P$nav)) P$nav else "",

@@ -117,7 +117,7 @@ compare_gloss <- tribble(~term, ~definition,
   "<System> proj", "projected D/ST fantasy points under that scoring system (each system has its own model, tuning and feature selection)",
   "<System> rank", "rank of that projection among this week's 32 D/STs (1 = best)",
   "<System> P(top 8)", "chance the D/ST finishes as a top-8 scorer this week under that scoring system (4,000 simulated weeks using back-test errors)",
-  "Range", "bar: light = 80% range of the actual score, dark = 50% range, tick = projection; axis −5 to 25 points",
+  "Range", "bar: light = 80% range of the actual score, dark = 50% range, tick = projection, small orange band = the ± (90% CI of the projection); axis −5 to 25 points",
   "±", "half-width of the projection's 90% CI: how sure the model is about the projection itself. The one uncertainty measure that differs by team beyond the projection level; widest when the opponent has a new QB or the inputs are unusual",
   "Kickoff", "kickoff time (Eastern); \U0001F512 = game has started, so its projection is frozen at the last pre-kickoff line",
   "Tier", "natural-break tier of the projection (optimal 1-D grouping into 6 tiers; 1 = best). A solid line above a tier = the drop into it is larger than the model's typical ± (a clear break); dashed = a softer break",
@@ -170,8 +170,9 @@ gloss_table <- function(df) html_table(df %>% select(Term = term, Definition = d
 ## ---- 5. Tabs ----
 range_bar <- function(proj, q10, q25, q75, q90, ci_lo, ci_hi, lo = -5, hi = 25) {
   pos <- function(x) round(100 * (min(max(x, lo), hi) - lo) / (hi - lo), 1)
-  sprintf('<div class="rb" title="80%%: %.0f to %.0f · 50%%: %.0f to %.0f · proj %.1f (90%% CI %.1f–%.1f)"><span class="r80" style="left:%s%%;width:%s%%"></span><span class="r50" style="left:%s%%;width:%s%%"></span><span class="pt" style="left:%s%%"></span><span class="zero" style="left:%s%%"></span></div>',
-          round(q10) + 0, round(q90) + 0, round(q25) + 0, round(q75) + 0, proj, ci_lo, ci_hi, pos(q10), pos(q90) - pos(q10), pos(q25), pos(q75) - pos(q25), pos(proj), pos(0))
+  ci <- if (is.na(ci_lo) || is.na(ci_hi)) "" else sprintf('<span class="ci" style="left:%s%%;width:max(2px,%s%%)"></span>', pos(ci_lo), pos(ci_hi) - pos(ci_lo))   # the ± (Andrew 2026-09-29)
+  sprintf('<div class="rb" title="80%%: %.0f to %.0f · 50%%: %.0f to %.0f · proj %.1f (± %.1f: 90%% CI %.1f–%.1f)"><span class="r80" style="left:%s%%;width:%s%%"></span><span class="r50" style="left:%s%%;width:%s%%"></span>%s<span class="pt" style="left:%s%%"></span><span class="zero" style="left:%s%%"></span></div>',
+          round(q10) + 0, round(q90) + 0, round(q25) + 0, round(q75) + 0, proj, (ci_hi - ci_lo) / 2, ci_lo, ci_hi, pos(q10), pos(q90) - pos(q10), pos(q25), pos(q75) - pos(q25), ci, pos(proj), pos(0))
 }
 sys_tab <- function(p) {
   p$pred <- p$pred[order(p$pred$rank), ]
@@ -187,7 +188,7 @@ sys_tab <- function(p) {
   cvt <- p$cv_tbl %>% select(any_of(c("model", "rmse", "mae", "spearman", "top8_avg", "bot8_avg", "edge_top8", "vs_vegas_top8", "t_stat",
                                       "hold_rmse", "hold_spearman", "hold_top8", "hold_vs_vegas_top8", "hold_t", "what")))
   paste0(sprintf("<p class='note'>Feature families in this model: %s.</p>", esc(paste(p$families, collapse = ", "))),
-         "<p class='note'>Range bar: light = where the actual score lands 8 times in 10, dark = 5 times in 10, tick = projection, thin line = 0 points (axis −5 to 25). 90% CI = uncertainty of the projection itself.</p>",
+         "<p class='note'>Range bar: light = where the actual score lands 8 times in 10, dark = 5 times in 10, tick = projection, small orange band = the ± (90% CI of the projection itself), thin line = 0 points (axis −5 to 25).</p>",
          "<p class='note'>Tiers: natural breaks in the projections. A solid line = a clear drop (bigger than the model's typical ±), dashed = a softer break. Tier 1 dark green, tier 2 light green, the bottom two tiers light / dark red. Hover or tap a team for what drives its projection.</p>",
          html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, raw_cols = c("Range", "Trend", "Team", "Opp QB", "Weather", "ECR"),
                     row_cls = row_cls, cell_cls = c(list(Team = team_cls, Rank = team_cls, Proj = team_cls), ext_cls), stick = 4),   # Proj coloured like Rank (Andrew 2026-09-25)
@@ -241,7 +242,7 @@ table.l99 td{text-align:left;white-space:normal}table.l99 td:first-child{font-fa
 td.top{background:var(--top);font-weight:600}td.bot{background:var(--bot)}
 .rb{position:relative;width:170px;height:14px}.rb span{position:absolute;top:0;height:14px}
 .rb .r80{background:var(--rng80);border-radius:3px}.rb .r50{background:var(--rng50);border-radius:3px}
-.rb .pt{width:2px;margin-left:-1px;background:var(--fg);top:-2px;height:18px}.rb .zero{width:1px;background:var(--muted);opacity:.6}
+.rb .pt{width:2px;margin-left:-1px;background:var(--fg);top:-2px;height:18px}.rb span.ci{top:4px;height:6px;background:#dd6b20;border-radius:2px}.rb .zero{width:1px;background:var(--muted);opacity:.6}
 .rules,.note{color:var(--muted);font-size:13.5px;max-width:1000px}details{margin:.4rem 0}summary{cursor:pointer;font-weight:600}'
 css <- paste0(css, SITE_CSS)
 js <- paste0(SITE_JS, 'function show(id){document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("on",p.id===id));

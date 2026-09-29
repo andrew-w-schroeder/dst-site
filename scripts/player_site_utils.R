@@ -222,8 +222,8 @@ ps_fallback <- function(B, teams, ctx) {
 }
 
 ## ---- Model uncertainty of the Vegas-only projection (the page's "±"), like the kicker / D/ST bootstrap ----
-## Two sources, drawn together nboot times: (1) which sportsbooks: each game's books are resampled with
-## replacement and the median consensus is rebuilt (books that disagree widen it); (2) the conversion from props
+## Two sources, drawn together nboot times: (1) which sportsbooks: each line's books (player x market) are resampled
+## with replacement and the median consensus is rebuilt (books that disagree widen it); (2) the conversion from props
 ## to expected stats: one of the bundle's bootstrap refits of 83's calibrations (B$conv_boot). Everything else
 ## (career-average fills, flags) is held fixed. Returns per game x player x format the 5th / 95th percentiles;
 ## "±" = half the 90% interval. long: per-book outcomes (flatten_event_odds) with game_id; B: the bundle.
@@ -237,16 +237,19 @@ ps_ci <- function(long, B, nboot = 60, seed = 1) {
   mp <- match_players(names_all, B$games |> select(game_id, season, week, home_team, away_team), B$roster) |>
     filter(!is.na(gsis_id)) |> select(game_id, player, gsis_id)
   bl <- bl |> inner_join(mp, by = c("game_id", "player")); td <- td |> inner_join(mp, by = c("game_id", "player"))
-  books <- bind_rows(bl |> distinct(game_id, book), td |> distinct(game_id, book)) |> distinct()
   info <- B$players |> select(gsis_id, pos)
-  wmed <- function(x, w) { o <- order(x); x <- x[o]; w <- w[o]; x[which(cumsum(w) >= sum(w) / 2)[1]] }
+  ## resample the books WITHIN each player x market (Andrew 2026-09-29: resampling whole games dropped a line that only
+  ## one or two books posted in ~1/3 of draws; the stat then fell back to the career average and the interval ran far
+  ## below the projection). Now a line never disappears; its spread comes from the books that posted it. Consensus in a
+  ## draw = the median, as for the projection itself.
+  bl <- bl |> arrange(game_id, gsis_id, market, book); td <- td |> arrange(game_id, gsis_id, book)
+  gi <- split(seq_len(nrow(bl)), paste(bl$game_id, bl$gsis_id, bl$market)); ti <- split(seq_len(nrow(td)), paste(td$game_id, td$gsis_id))
+  rs <- function(ix) unlist(lapply(ix, function(i) if (length(i) == 1) i else i[sample.int(length(i), length(i), replace = TRUE)]), use.names = FALSE)
   set.seed(seed); nb <- length(B$conv_boot)
   draws <- lapply(seq_len(nboot), function(b) {
-    smp <- books |> group_by(game_id) |> reframe(book = sample(book, n(), replace = TRUE)) |> count(game_id, book, name = "w")
-    cons <- bl |> inner_join(smp, by = c("game_id", "book")) |> group_by(game_id, gsis_id, market) |>
-      summarise(n_books = sum(w), line = wmed(main_line, w), p_over = wmed(p_over, w), med_est = wmed(med_est, w), .groups = "drop")
-    anyt <- td |> inner_join(smp, by = c("game_id", "book")) |> group_by(game_id, gsis_id) |>
-      summarise(n_books = sum(w), p_td_raw = wmed(p, w), .groups = "drop")
+    cons <- bl[rs(gi), ] |> group_by(game_id, gsis_id, market) |>
+      summarise(n_books = n(), line = median(main_line), p_over = median(p_over), med_est = median(med_est), .groups = "drop")
+    anyt <- td[rs(ti), ] |> group_by(game_id, gsis_id) |> summarise(n_books = n(), p_td_raw = median(p), .groups = "drop")
     d <- ps_inputs(cons, anyt) |> inner_join(info, by = "gsis_id") |> left_join(B$career, by = "gsis_id") |> ps_flags(B$td_bar)
     if (!nrow(d)) return(NULL)
     cb <- B$conv_boot[[(b - 1) %% nb + 1]]                     # coefficients only; terms from the main fits
