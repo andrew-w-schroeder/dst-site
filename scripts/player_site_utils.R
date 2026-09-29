@@ -29,8 +29,17 @@ ps_score <- function(d, fmt) {
 }
 
 ## Poisson mean with P(X > L) / (P(X > L) + P(X < L)) = p  (as 83)
-ps_pois_invert <- function(L, p) {
+.ps_pois_cache <- new.env(hash = TRUE)
+ps_pois_invert <- function(L, p) {                 # memoized: the bootstrap (ps_ci) repeats the same (line, P) many times
   p <- pmin(pmax(p, 0.02), 0.98)
+  k <- paste(L, format(p, digits = 15)); out <- rep(NA_real_, length(k))
+  hit <- vapply(k, \(z) exists(z, envir = .ps_pois_cache, inherits = FALSE), TRUE)
+  if (any(hit)) out[hit] <- vapply(k[hit], \(z) get(z, envir = .ps_pois_cache), 0)
+  if (any(!hit)) { v <- ps_pois_invert0(L[!hit], p[!hit]); out[!hit] <- v
+    for (j in which(!hit)) assign(k[j], out[j], envir = .ps_pois_cache) }
+  out
+}
+ps_pois_invert0 <- function(L, p) {
   mapply(\(L, p) {
     f <- function(lam) {
       over <- ppois(floor(L), lam, lower.tail = FALSE)
@@ -81,11 +90,11 @@ ps_inputs <- function(cons, anyt) {
 
 ## expected stats (83's expect_stats with portable calibrations). d needs pos, core, x.* / z.*,
 ## S_* (recency-weighted career sums) and S_n; B = the bundle
-ps_expect <- function(d, B) {
+ps_expect <- function(d, B, conv = B$conv) {
   st <- B$settings; out <- d |> select(game_id, gsis_id)
   has <- function(s) if (s %in% PS_PROP_STATS) !is.na(d[[paste0("x.", s)]]) else rep(FALSE, nrow(d))
   for (s in PS_PROP_STATS) {
-    h <- has(s); pm <- B$conv[[s]]
+    h <- has(s); pm <- conv[[s]]
     nd <- tibble(x = if (s == "tds") pmax(d$x.tds, 1e-4) else d[[paste0("x.", s)]],
                  z = if (s %in% PS_YARDS) d[[paste0("z.", s)]] else 0)
     v <- if (nrow(d)) ps_predict(pm, nd) else numeric()
@@ -142,4 +151,61 @@ ps_bb <- function(vfp, p_td, pos, bb) {          # bb: pos, fmt, event, b0, b1, 
     out[[paste0("p_", ev, "_", f)]] <- plogis(c$b0 + c$b1 * v + c$b2 * v^2 + c$b3 * t)
   }
   as_tibble(out)
+}
+
+## outcome quantiles (q10, q25, q50, q75, q90) from the bundle's quantile regressions; inputs as in 68:
+## v = projection, t = anytime-TD price, imp = team implied total, sp = spread (+ = favored)
+ps_ranges <- function(vfp, pos, p_td, imp, sp, R, bb) {
+  if (is.null(R)) return(NULL)
+  out <- list()
+  for (f in names(PS_FORMATS)) {
+    v <- vfp[[paste0("vfp_", f)]]
+    tdf <- bb$td_fill[match(paste(pos, f, "boom"), paste(bb$pos, bb$fmt, bb$event))]
+    X <- list(`(Intercept)` = rep(1, length(v)), v = v, t = coalesce(p_td, tdf), imp = coalesce(imp, 22), sp = coalesce(sp, 0))
+    Q <- sapply(c(0.10, 0.25, 0.50, 0.75, 0.90), \(tau) {
+      r <- R[R$fmt == f & R$tau == tau, ]; q <- rep(0, length(v))
+      for (k in unique(r$term)) { cf <- r$coef[r$term == k][match(pos, r$pos[r$term == k])]; q <- q + coalesce(cf, 0) * X[[k]] }
+      q })
+    Q <- t(apply(matrix(Q, ncol = 5), 1, sort))
+    for (j in 1:5) out[[paste0("q", c(10, 25, 50, 75, 90)[j], "_", f)]] <- Q[, j]
+  }
+  as_tibble(out)
+}
+
+## ---- Model uncertainty of the Vegas-only projection (the page's "±"), like the kicker / D/ST bootstrap ----
+## Two sources, drawn together nboot times: (1) which sportsbooks: each game's books are resampled with
+## replacement and the median consensus is rebuilt (books that disagree widen it); (2) the conversion from props
+## to expected stats: one of the bundle's bootstrap refits of 83's calibrations (B$conv_boot). Everything else
+## (career-average fills, flags) is held fixed. Returns per game x player x format the 5th / 95th percentiles;
+## "±" = half the 90% interval. long: per-book outcomes (flatten_event_odds) with game_id; B: the bundle.
+ps_ci <- function(long, B, nboot = 60, seed = 1) {
+  if (!nrow(long) || is.null(B$conv_boot)) return(NULL)
+  long <- long |> filter(!is_team_defense(player))
+  bl <- book_lines(long)                                      # per book: main line, P(over), 50/50 point
+  td <- long |> filter(market == "player_anytime_td", side == "Yes") |> mutate(p = am_to_p(price)) |>
+    group_by(game_id, book, player) |> summarise(p = mean(p), .groups = "drop")
+  names_all <- bind_rows(bl |> distinct(game_id, player), td |> distinct(game_id, player)) |> distinct()
+  mp <- match_players(names_all, B$games |> select(game_id, season, week, home_team, away_team), B$roster) |>
+    filter(!is.na(gsis_id)) |> select(game_id, player, gsis_id)
+  bl <- bl |> inner_join(mp, by = c("game_id", "player")); td <- td |> inner_join(mp, by = c("game_id", "player"))
+  books <- bind_rows(bl |> distinct(game_id, book), td |> distinct(game_id, book)) |> distinct()
+  info <- B$players |> select(gsis_id, pos)
+  wmed <- function(x, w) { o <- order(x); x <- x[o]; w <- w[o]; x[which(cumsum(w) >= sum(w) / 2)[1]] }
+  set.seed(seed); nb <- length(B$conv_boot)
+  draws <- lapply(seq_len(nboot), function(b) {
+    smp <- books |> group_by(game_id) |> reframe(book = sample(book, n(), replace = TRUE)) |> count(game_id, book, name = "w")
+    cons <- bl |> inner_join(smp, by = c("game_id", "book")) |> group_by(game_id, gsis_id, market) |>
+      summarise(n_books = sum(w), line = wmed(main_line, w), p_over = wmed(p_over, w), med_est = wmed(med_est, w), .groups = "drop")
+    anyt <- td |> inner_join(smp, by = c("game_id", "book")) |> group_by(game_id, gsis_id) |>
+      summarise(n_books = sum(w), p_td_raw = wmed(p, w), .groups = "drop")
+    d <- ps_inputs(cons, anyt) |> inner_join(info, by = "gsis_id") |> left_join(B$career, by = "gsis_id") |> ps_flags(B$td_bar)
+    if (!nrow(d)) return(NULL)
+    cb <- B$conv_boot[[(b - 1) %% nb + 1]]                     # coefficients only; terms from the main fits
+    e <- ps_expect(d, B, conv = Map(function(pm, cf) { pm$coef <- cf[names(pm$coef)]; pm }, B$conv, cb[names(B$conv)]))
+    bind_cols(d |> select(game_id, gsis_id), ps_points(e, d$pos))
+  })
+  bind_rows(draws) |> group_by(game_id, gsis_id) |>
+    summarise(across(starts_with("vfp_"), list(lo = \(v) unname(quantile(v, 0.05)), hi = \(v) unname(quantile(v, 0.95)))),
+              draws = n(), .groups = "drop") |>
+    rename_with(\(v) sub("^vfp_(\\w+)_(lo|hi)$", "ci_\\2_\\1", v))
 }

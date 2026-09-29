@@ -46,6 +46,7 @@ key <- max(sub("bundle_(\\d{4})_wk(\\d{2}).*", "\\1\\2", bf)); SEASON <- as.inte
 B <- readRDS(file.path(PROJ_DIR, "output/players_site", sprintf("bundle_%d_wk%02d.rds", SEASON, WEEK)))
 games <- B$games |> mutate(ko = utc(kickoff_utc))
 LIVE_CSV <- file.path(PROJ_DIR, sprintf("data/players/props_live_%d_wk%02d.csv", SEASON, WEEK))
+CI_CSV <- file.path(PROJ_DIR, sprintf("data/players/props_ci_%d_wk%02d.csv", SEASON, WEEK))
 LIVE_COLS <- c("pulled_at", "game_id", "event_id", "commence_time", "market", "player", "n_books", "line", "p_over", "med_est",
                "line_min", "line_max", "p_td_raw")
 message(sprintf("players: %d week %d, %d games, %d started", SEASON, WEEK, nrow(games), sum(NOW >= games$ko)))
@@ -75,7 +76,7 @@ if (nzchar(KEY) || nzchar(MOCK)) tryCatch({
     mutate(ct = utc(commence_time)) |> filter(abs(as.numeric(difftime(ct, ko, units = "days"))) <= 2) |>
     distinct(game_id, .keep_all = TRUE) |> filter(ct > NOW)
   message(sprintf("players: %d events listed, %d of this week's games not started", nrow(evt), nrow(m)))
-  rows <- list()
+  rows <- list(); longs <- list()
   for (i in seq_len(nrow(m))) {
     if (!is.na(left) && left < MIN_LEFT) { message(sprintf("players: stopping, %s credits left (< %s)", left, MIN_LEFT)); break }
     r <- tryCatch(get_json(sprintf("/events/%s/odds", m$event_id[i]),
@@ -86,6 +87,7 @@ if (nzchar(KEY) || nzchar(MOCK)) tryCatch({
     long <- flatten_event_odds(r$body)
     if (!nrow(long)) next
     long$game_id <- m$game_id[i]
+    longs[[length(longs) + 1]] <- long
     ou <- props_consensus(book_lines(long))
     td <- props_anytime(long)
     rows[[length(rows) + 1]] <- bind_rows(
@@ -101,6 +103,14 @@ if (nzchar(KEY) || nzchar(MOCK)) tryCatch({
     write.table(new[LIVE_COLS], LIVE_CSV, sep = ",", row.names = FALSE, col.names = !file.exists(LIVE_CSV), append = file.exists(LIVE_CSV), qmethod = "double")
   }
   message(sprintf("players: pulled props for %d games (%s credits used, %s left)", pulled, credits, left))
+  ## "±": resample the books and the calibration refits (player_site_utils.R ps_ci), stored per pull
+  if (length(longs)) tryCatch({
+    t1 <- Sys.time(); ci <- ps_ci(bind_rows(longs), B, nboot = as.integer(Sys.getenv("CI_BOOT", "60")))
+    if (!is.null(ci) && nrow(ci)) {
+      ci <- ci |> mutate(pulled_at = isoz(NOW)) |> relocate(pulled_at)
+      write.table(ci, CI_CSV, sep = ",", row.names = FALSE, col.names = !file.exists(CI_CSV), append = file.exists(CI_CSV), qmethod = "double")
+      message(sprintf("players: 90%% intervals for %d players (%.0f s)", nrow(ci), as.numeric(difftime(Sys.time(), t1, units = "secs"))))
+    } }, error = function(e) message("players: intervals — ", conditionMessage(e)))
 }, error = function(e) message("players: props pull failed — ", conditionMessage(e), " (using stored pulls)"))
 if (!nzchar(KEY) && !nzchar(MOCK)) message("players: PROPS_API_KEY not set — using stored pulls only")
 
@@ -147,12 +157,21 @@ imp <- tryCatch({
     group_by(game_id) |> slice_max(t, n = 1, with_ties = FALSE) |> ungroup()
   g <- games |> select(game_id, home_team, away_team) |> inner_join(lx |> select(game_id, sp, total), by = "game_id")
   ## line_history's home_spread is + when the home team is favored (as nflverse spread_line; see 45)
-  bind_rows(g |> transmute(game_id, team = home_team, implied = (total + sp) / 2),
-            g |> transmute(game_id, team = away_team, implied = (total - sp) / 2))
-}, error = function(e) tibble(game_id = character(), team = character(), implied = numeric()))
+  bind_rows(g |> transmute(game_id, team = home_team, implied = (total + sp) / 2, spread = sp),
+            g |> transmute(game_id, team = away_team, implied = (total - sp) / 2, spread = -sp))
+}, error = function(e) tibble(game_id = character(), team = character(), implied = numeric(), spread = numeric()))
 if (nrow(cur)) {
   cur <- cur |> left_join(gl, by = c("game_id", "team")) |> left_join(imp, by = c("game_id", "team")) |>
     mutate(locked = NOW >= ko, include = core | td_keep)
+  ## "±" from the same pull as each game's projection
+  if (file.exists(CI_CSV)) {
+    ci <- read.csv(CI_CSV, stringsAsFactors = FALSE) |> mutate(t = utc(pulled_at)) |> select(-pulled_at) |>
+      distinct(game_id, gsis_id, t, .keep_all = TRUE)
+    cur <- cur |> select(-any_of(grep("^ci_", names(cur), value = TRUE))) |> left_join(ci |> select(-any_of("draws")), by = c("game_id", "gsis_id", "t"))
+  }
+  rg <- tryCatch(ps_ranges(cur |> select(starts_with("vfp_")), cur$pos, cur$p_td_raw, cur$implied, cur$spread, B$ranges, B$bb),
+                 error = function(e) { message("players: ranges — ", conditionMessage(e)); NULL })
+  if (!is.null(rg)) cur <- bind_cols(cur |> select(-any_of(names(rg))), rg)
 }
 
 ## ---- 4b. ESPN / Sleeper projections and FantasyPros ECR (ext_player_utils.R): snapshot, then each player's
@@ -164,6 +183,18 @@ if (!nzchar(Sys.getenv("NO_EXT")) && (any(games$ko > NOW) || !file.exists(XP_CSV
 ## file's version from just before kickoff, from its git history
 if (!nzchar(Sys.getenv("NO_EXT")))
   tryCatch(xp_ecr_backfill(XP_CSV, gl |> distinct(team, ko), NOW, games$ko), error = function(e) message("players: ECR history — ", conditionMessage(e)))
+INJ_CSV <- file.path(PROJ_DIR, sprintf("data/players/injury_%d_wk%02d.csv", SEASON, WEEK))
+if (!nzchar(Sys.getenv("NO_EXT")) && (any(games$ko > NOW) || !file.exists(INJ_CSV)))
+  tryCatch(inj_snapshot(INJ_CSV, SEASON, WEEK, NOW), error = function(e) message("players: injuries — ", conditionMessage(e)))
+if (nrow(cur)) {
+  ij <- tryCatch(inj_attach(INJ_CSV, cur |> distinct(gsis_id, player_name, team, ko)), error = function(e) { message("players: injury attach — ", conditionMessage(e)); NULL })
+  if (!is.null(ij) && nrow(ij)) {
+    cur <- cur |> select(-any_of(c("inj_status", "inj_out", "inj_badge", "inj_detail"))) |>
+      left_join(ij |> select(gsis_id, inj_status, inj_out, inj_badge, inj_detail), by = "gsis_id")
+    message(sprintf("players: injury status for %d shown players (%s)", sum(!is.na(cur$inj_status[cur$include])),
+                    paste(names(table(cur$inj_badge[cur$include & nzchar(coalesce(cur$inj_badge, ""))])), table(cur$inj_badge[cur$include & nzchar(coalesce(cur$inj_badge, ""))]), collapse = ", ")))
+  }
+}
 if (nrow(cur)) {
   xa <- tryCatch(xp_attach(XP_CSV, cur |> distinct(gsis_id, player_name, pos, team), gl |> distinct(team, ko)),
                  error = function(e) { message("players: ESPN / Sleeper / ECR attach — ", conditionMessage(e)); NULL })
@@ -184,7 +215,8 @@ if (nrow(cur)) {
 P <- list(season = SEASON, week = WEEK, now = NOW, cur = cur, hist = hist, games = games, bundle_time = B$created,
           n_games = nrow(games), n_priced = if (nrow(cur)) n_distinct(cur$game_id) else 0L,
           n_locked = sum(NOW >= games$ko), books = if (nrow(live)) median(live$n_books[live$t == max(live$t)], na.rm = TRUE) else NA,
-          last_pull = if (nrow(live)) max(live$t) else as.POSIXct(NA), bb = B$bb, site_base = SITE_BASE, unmatched = nrow(unm))
+          last_pull = if (nrow(live)) max(live$t) else as.POSIXct(NA), bb = B$bb, site_base = SITE_BASE, unmatched = nrow(unm),
+          track = { tf <- file.path(PROJ_DIR, "output/players_site/track_players.rds"); if (file.exists(tf)) readRDS(tf) })
 html <- player_page(P)
 dir.create(file.path(SITE_DIR, "players", "archive"), recursive = TRUE, showWarnings = FALSE)
 arch_name <- sprintf("players_%d_wk%02d.html", SEASON, WEEK)

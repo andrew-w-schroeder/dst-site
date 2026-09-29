@@ -22,7 +22,7 @@ PP_PROP_LAB <- c(pass_yds = "Pass yds", pass_td = "Pass TD", pass_int = "INT", p
 PP_TIP <- c(
   Rank = "Rank at the position in this format.",
   Tier = "Natural-break tier of the projections (optimal 1-D grouping; 1 = best). Solid line = a gap of 1.5+ points between tiers; dashed = a smaller gap.",
-  Player = "\U0001F525 = Vegas love: our Vegas-only projection ranks him at least 25% higher at his position than FantasyPros ECR (and at least 2 spots). \u2620\uFE0F = Vegas fade: at least 25% (and 2 spots) lower. The % is the gap divided by the better of the two ranks, so 2 spots matters more near the top (WR8 vs WR10 = 25%) than further down. Hover or tap a player for the exact difference.",
+  Player = "\U0001F525 = Vegas love: our Vegas-only projection ranks him at least 25% higher at his position than FantasyPros ECR (and at least 3 spots). \u2620\uFE0F = Vegas fade: at least 25% (and 3 spots) lower. The % is the gap divided by the better of the two ranks, so 2 spots matters more near the top (WR8 vs WR10 = 25%) than further down. Hover or tap a player for the exact difference.",
   Kickoff = "Kickoff (Eastern). \U0001F512 = game started: frozen at the last props pulled before kickoff.",
   Imp = "Team implied points from the latest pre-kickoff spread and total (median of sportsbooks, from the D/ST page's line pulls).",
   Proj = "Vegas-only projection: the sportsbook props converted to expected stats (yardage medians corrected for skew, counts via a Poisson fit to line and odds, anytime-TD price calibrated on 2023+ results) and scored in this format.",
@@ -34,6 +34,9 @@ PP_TIP <- c(
   Books = "Sportsbooks behind the median lines (most for any one of this player's markets).",
   "Pass att" = "Expected pass attempts (volume; doesn't score).", "Rush att" = "Expected rushing attempts (volume; doesn't score).",
   Pos = "FLEX tab: the player's rank at his own position in this format.",
+  "\u00b1" = "Model uncertainty of the projection, like the kicker and D/ST pages: half the width of its 90% bootstrap interval. Each of 60 draws resamples the sportsbooks behind the median lines (with replacement, per game) and uses one of 100 bootstrap refits of the props-to-stats calibration; the interval is the 5th to 95th percentile of the projections. Wide = books disagree, thin markets or lines far from typical. Hover for the interval. It measures how sure we are of the projection, not how much the player's score can swing (that is the range bar).",
+  "Range bar" = "How much his score can swing: light band = 80% of outcomes (10th to 90th percentile), dark band = 50% (25th to 75th), line = projection. From quantile regression on 2023+ player-games with the same projection (adding the TD price, implied total or spread didn't help). Same scale within a table.",
+  "Injury" = "(Q) Questionable, (D) Doubtful, (O) Out, IR / PUP / NFI / SUS after the name: the official NFL injury report's game status once it is out (Friday), before that Sleeper's status; IR / PUP / suspensions from either. Checked at every refresh and frozen at kickoff. Hover the player for practice participation and the injury. Red = ruled out or doubtful.",
   ECR = "FantasyPros expert consensus rank at the position (via DynastyProcess, updated about 10 am / 10 pm ET; the last one before kickoff). RB / WR / TE ranks are PPR in every format. Hover for the average rank, spread across experts and FantasyPros' projected PPR points. Amber when we rank the player a start but ECR has him as a sit: light = just outside the start line, dark = well outside (start lines: QB 12, RB 24, WR 36, TE 12).",
   "ESPN rank" = "ESPN's projected stats scored in this format, ranked at the position (last pull before kickoff); projected points in brackets. Amber as for ECR.",
   "Sleeper rank" = "Sleeper's projected stats (Rotowire) scored in this format, ranked at the position (last pull before kickoff); projected points in brackets. Amber as for ECR.")
@@ -46,8 +49,8 @@ PP_AMBER <- paste0("<p class='s legend'><span class='sw fl1'></span> <b>Light am
   "<span class='sw fl2'></span> <b>Dark amber</b>: that source ranks him well outside, beyond 1.5\u00d7 the start line (e.g. WR 55+). ",
   "Compared on position ranks, also on FLEX.</p>",
   "<p class='s legend'>\U0001F525 <b>Vegas love</b>: our Vegas-only projection ranks him at least 25% higher at his position than FantasyPros ECR ",
-  "(the gap \u00f7 the better of the two ranks, and at least 2 spots: WR8 vs WR10 = 25%, WR40 vs WR50 = 25%). ",
-  "\u2620\uFE0F <b>Vegas fade</b>: at least 25% (and 2 spots) lower. Hover a player for the exact difference.</p>")
+  "(the gap \u00f7 the better of the two ranks, and at least 3 spots: WR12 vs WR15 = 25%, WR40 vs WR50 = 25%). ",
+  "\u2620\uFE0F <b>Vegas fade</b>: at least 25% (and 3 spots) lower. Hover a player for the exact difference.</p>")
 pp_rank_pts <- function(rk, pts) ifelse(is.na(rk), "", ifelse(is.na(pts), as.character(rk), sprintf("%d (%.1f)", as.integer(rk), pts)))
 PP_FILL_NOTE <- "Italic* = no prop for this stat: receptions from the receiving-yards prop and the player's yards per catch (or the reverse); otherwise his recency-weighted career average per game, shrunk toward players at his position without that prop."
 
@@ -83,9 +86,14 @@ pp_player_tip <- function(p, fmt) {
 ## 2-spot gap inside the top 10 counts more than the same gap outside the top 25.
 ##   diff % = (ECR rank - our rank) / the better (smaller) of the two ranks   (symmetric: 8 vs 10 = +25%, 10 vs 8 = -25%)
 ##   flame when we rank him at least PP_LOVE_PCT higher, skull and crossbones at least that much lower,
-##   and only when the gap is at least PP_LOVE_MIN spots (so RB2 vs RB3 at the very top is not flagged)
-PP_LOVE_PCT <- 0.25; PP_LOVE_MIN <- 2
+##   and only when the gap is at least PP_LOVE_MIN spots (so 1–2 spot swaps at the very top are not flagged)
+PP_LOVE_PCT <- 0.25; PP_LOVE_MIN <- 3   # Andrew 2026-09-29: 3 spots minimum
 PP_FLAME <- "\U0001F525"; PP_SKULL <- "\u2620\uFE0F"
+pp_range_bar <- function(q10, q25, q75, q90, pj, lo = -2, hi = 35) {
+  sc <- function(v) round(100 * (pmin(pmax(v, lo), hi) - lo) / (hi - lo), 1)
+  ifelse(is.na(q10), "", sprintf('<div class="rb" title="80%%: %.1f to %.1f \u00b7 50%%: %.1f to %.1f \u00b7 proj %.2f"><span class="r80" style="left:%s%%;width:%s%%"></span><span class="r50" style="left:%s%%;width:%s%%"></span><span class="pj" style="left:%s%%"></span></div>',
+          q10, q90, q25, q75, pj, sc(q10), sc(q90) - sc(q10), sc(q25), sc(q75) - sc(q25), sc(pj)))
+}
 pp_player_cell <- function(d, prk) {
   ecr <- if ("ecr_rank" %in% names(d)) d$ecr_rank else rep(NA_real_, nrow(d))
   gap <- ecr - prk; pc <- gap / pmin(ecr, prk)
@@ -96,11 +104,15 @@ pp_player_cell <- function(d, prk) {
       sprintf("%d spot%s %s than ECR (%+.0f%%)%s", as.integer(abs(gap)), ifelse(abs(gap) == 1, "", "s"),
               ifelse(gap > 0, "higher", "lower"), 100 * pc,
               ifelse(nzchar(sym), ifelse(gap > 0, paste0(": Vegas love ", PP_FLAME), paste0(": Vegas fade ", PP_SKULL)), ""))))
+  st <- if ("inj_status" %in% names(d)) d$inj_status else rep(NA_character_, nrow(d))
+  badge <- ifelse(is.na(st), "", sprintf(" <span class='inj%s'>(%s)</span>", ifelse(d$inj_out %in% TRUE, " out", ""), d$inj_badge))
+  injl <- ifelse(is.na(st), "", paste0("\n<b>Injury: ", st, "</b>", ifelse(nzchar(coalesce(d$inj_detail, "")), paste0(" \u2014 ", pp_esc(d$inj_detail)), ""),
+                                       ifelse(d$inj_out %in% TRUE, "\n\u26A0 Ruled out or unlikely to play: books usually pull his props, so this line is his last pre-report projection.", "")))
   tip <- paste0("<b>", pp_esc(d$player_name), " (", d$team, ", ", d$pos, ")</b>",
-                ifelse(d$td_keep %in% TRUE, " TD-only", ""),
+                ifelse(d$td_keep %in% TRUE, " TD-only", ""), injl,
                 "\nVegas ", d$pos, as.integer(prk), ifelse(is.na(ecr), "", sprintf(" · ECR %s%d (average expert rank %.1f)", d$pos, as.integer(ecr), d$ecr_avg)),
                 "\n", what)
-  tip_span(paste0(pp_esc(d$player_name), ifelse(d$td_keep, " <span class='s'>(TD)</span>", ""), sym), tip)
+  tip_span(paste0(pp_esc(d$player_name), badge, ifelse(d$td_keep, " <span class='s'>(TD)</span>", ""), sym), tip)
 }
 
 pp_pos_table <- function(P, pos, fmt) {
@@ -128,6 +140,16 @@ pp_pos_table <- function(P, pos, fmt) {
               Team = d$team, Opp = paste0(ifelse(d$home == 1, "vs ", "@ "), d$opp), Kickoff = ko, Imp = pp_f(d$implied),
               Proj = pp_f(v, 2), "\u0394" = pp_sg(v - first$proj[match(d$gsis_id, first$gsis_id)]),
               Trend = spark, "P(boom)" = pp_pct(d[[paste0("p_boom_", fmt)]]), "P(bust)" = pp_pct(d[[paste0("p_bust_", fmt)]]))
+  if (paste0("q10_", fmt) %in% names(d)) {
+    q <- function(k) d[[paste0("q", k, "_", fmt)]]
+    hi <- max(35, ceiling(max(q(90), na.rm = TRUE) / 5) * 5)
+    t <- t |> mutate("Range bar" = pp_range_bar(q(10), q(25), q(75), q(90), v, lo = min(-2, floor(min(q(10), na.rm = TRUE))), hi = hi), .after = Trend)
+  }
+  if (paste0("ci_lo_", fmt) %in% names(d)) {                      # model uncertainty (bootstrap), as on the kicker page
+    lo <- d[[paste0("ci_lo_", fmt)]]; hi <- d[[paste0("ci_hi_", fmt)]]
+    t <- t |> mutate("\u00b1" = ifelse(is.na(lo), "", tip_span(pp_f((hi - lo) / 2, 2),
+                       sprintf("90%% interval of the projection: %.2f to %.2f (resampled sportsbooks + calibration refits)", lo, hi))), .after = Proj)
+  }
   if (flex) t <- t |> mutate(Pos = paste0(d$pos, prk), .after = Player)
   lab <- function(r) if (flex) ifelse(is.na(r), NA_character_, paste0(d$pos, as.integer(r))) else as.character(as.integer(r))
   ## other rankings this week (ext_player_utils.R via 65); flags compare position ranks, also on FLEX
@@ -145,14 +167,66 @@ pp_pos_table <- function(P, pos, fmt) {
       pts <- d[[paste0(lo, "_pts_", fmt)]]
       t[[cn]] <- ifelse(is.na(rk), "", ifelse(is.na(pts), lab(rk), sprintf("%s (%.1f)", lab(rk), pts)))
       ext_c[[cn]] <- pp_flag(prk, rk, d$pos) } }
-  if (length(ext_c)) t <- t |> relocate(any_of(c("ECR", "ESPN rank", "Sleeper rank")), .after = Proj)
+  if (length(ext_c)) t <- t |> relocate(any_of(c("ECR", "ESPN rank", "Sleeper rank")), .after = any_of(c("Proj", "\u00b1")))
   t <- bind_cols(t, as_tibble(stat_cells), tibble("TD%" = pp_pct(d$p_td_raw),
     Books = do.call(pmax, c(map(grep("^n_books\\.", names(d), value = TRUE), \(c) coalesce(d[[c]], 0)), na.rm = TRUE))))
   brk <- c(FALSE, tr$tier[-1] != tr$tier[-length(tr$tier)])
   row_cls <- trimws(paste(ifelse(tr$tier %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tr$tier] %in% TRUE, "tb-clear", "tb-soft"), "")))
   tc <- tier_cls(tr$tier, k = max(tr$tier))
-  pp_table(t, raw = c("Player", "Trend", "ECR", unname(scols)), id = paste0("t_", pos, "_", fmt), row_cls = row_cls,
+  pp_table(t, raw = c("Player", "Trend", "ECR", "Range bar", "\u00b1", unname(scols)), id = paste0("t_", pos, "_", fmt), row_cls = row_cls,
            cell_cls = c(list(Rank = tc, Player = tc, Proj = tc), ext_c))
+}
+
+## ---- Track record tab (69_player_track.R -> output/players_site/track_players.rds) ----
+pp_simple <- function(df, bold = NULL, raw = character()) {         # plain table; bold: logical matrix like df
+  hdr <- paste0("<tr>", paste0(sprintf("<th>%s</th>", pp_esc(names(df))), collapse = ""), "</tr>")
+  M <- as.matrix(df)
+  body <- vapply(seq_len(nrow(df)), \(i) paste0("<tr>", paste0(vapply(seq_along(df), \(j) {
+    v <- if (names(df)[j] %in% raw) M[i, j] else pp_esc(M[i, j]); cls <- if (j <= 2) " class='l'" else ""
+    if (!is.null(bold) && isTRUE(bold[i, j])) v <- paste0("<b>", v, "</b>"); sprintf("<td%s>%s</td>", cls, v) }, ""), collapse = ""), "</tr>"), "")
+  sprintf("<div class='tw'><table>%s%s</table></div>", hdr, paste(body, collapse = ""))
+}
+pp_track <- function(TR, fmt) {
+  if (is.null(TR)) return("<p class='s'>No track record yet: run 69_player_track.R (89 does it each Tuesday).</p>")
+  m <- TR$metrics[TR$metrics$fmt == fmt, ]; ss <- TR$startsit[TR$startsit$fmt == fmt, ]; lf <- TR$lovefade[TR$lovefade$fmt == fmt, ]
+  POSO <- c("QB", "RB", "WR", "TE"); SRCO <- c("Vegas-only", "ECR", "ESPN", "Sleeper")
+  out <- c(sprintf("<p class='s'>How each ranking did once the games were played, on the <b>same players</b> each week (those with a Vegas projection that every source ranked; each source re-ranked within them). Vegas-only = our projection from the props 60 minutes before kickoff (calibrations fit on other seasons). ECR = FantasyPros expert consensus, the last version before kickoff (PPR ranks in every format). ESPN / Sleeper = their projected stats scored in this format%s. Seasons %d\u2013%d, through %d week %d.</p>",
+                       if (isTRUE(TR$notes$ext_after > 0)) " (weeks before the site started: their projections pulled after the week)" else "",
+                       TR$seasons[1], TR$seasons[2], TR$last_week$season, TR$last_week$week),
+           "<p class='s'><b>Rank corr</b> = Spearman correlation with actual points. <b>NDCG</b> = top-weighted ranking score (1 = perfect order; mistakes near the top cost most). <b>Top-N pts</b> = average actual points of the source's top N (QB 12, RB 24, WR 36, TE 12). <b>RMSE</b> = projection error in points (ECR has none except FantasyPros' projection in PPR). Bold = best at the position.</p>")
+  for (per in unique(m$period)) {
+    d <- m[m$period == per, ]; d <- d[order(match(d$pos, POSO), match(d$source, SRCO)), ]
+    tb <- tibble(Position = d$pos, Source = d$source, Weeks = d$weeks, Players = sprintf("%.0f", d$players),
+                 `Rank corr` = sprintf("%.3f", d$rank_corr), NDCG = sprintf("%.3f", d$ndcg),
+                 `Top-N pts` = sprintf("%.2f (N %d)", d$top_n, as.integer(d$n_top)), RMSE = ifelse(is.na(d$rmse), "\u2014", sprintf("%.2f", d$rmse)))
+    best <- function(v, hi = TRUE) ave(v, d$pos, FUN = \(x) if (all(is.na(x))) FALSE else (if (hi) x == max(x, na.rm = TRUE) else x == min(x, na.rm = TRUE)))
+    B <- matrix(FALSE, nrow(tb), ncol(tb)); B[, 5] <- best(d$rank_corr) == 1; B[, 6] <- best(d$ndcg) == 1; B[, 7] <- best(d$top_n) == 1; B[, 8] <- best(d$rmse, FALSE) == 1
+    out <- c(out, sprintf("<h3>%s</h3>", pp_esc(per)), pp_simple(tb, B))
+  }
+  if (nrow(ss)) {
+    ss <- ss[order(ss$period, match(ss$pos, POSO), match(ss$source, SRCO)), ]
+    out <- c(out, "<h3>Start / sit calls: Vegas-only vs each ranking</h3>",
+             "<p class='s'>Every pair of players (both inside the top 2N of either ranking) that the two rankings order differently is one call. <b>Vegas right</b> = share of calls where Vegas-only's pick scored more; <b>pts per call</b> = average points gained by following Vegas-only (+ = Vegas better).</p>",
+             pp_simple(tibble(Period = ss$period, Position = ss$pos, `vs` = ss$source, Calls = format(ss$calls, big.mark = ","),
+                              `Vegas right` = sprintf("%.1f%%", 100 * ss$vegas_right), `Pts per call` = sprintf("%+.2f", ss$pts_per_call))))
+  }
+  if (nrow(lf)) {
+    lf <- lf[order(lf$period, match(lf$pos, POSO), lf$flag != "love"), ]
+    out <- c(out, "<h3>Vegas love \U0001F525 / fade \u2620\uFE0F vs ECR</h3>",
+             "<p class='s'>The page's flags (position ranks \u2265 25% and \u2265 3 spots apart, both ranked within the same players). A love says \u201cstart him over the players ECR ranks between our rank and theirs\u201d; a fade says the reverse. <b>Right</b> = share of flags where he outscored (love) or was outscored by (fade) the average of those players; <b>pts per flag</b> = the average margin (+ = the flag paid off).</p>",
+             pp_simple(tibble(Period = lf$period, Position = lf$pos, Flag = ifelse(lf$flag == "love", "\U0001F525 love", "\u2620\uFE0F fade"), Flags = lf$n,
+                              Right = sprintf("%.0f%%", 100 * lf$right), `Pts per flag` = sprintf("%+.2f", lf$margin), `Avg pts` = sprintf("%.1f", lf$pts),
+                              `Median ranks: Vegas / ECR / finish` = sprintf("%g / %g / %g", lf$vegas_rank, lf$ecr_rank, lf$finish))))
+    fc <- TR$flags_current[TR$flags_current$fmt == fmt, ]
+    if (nrow(fc)) {
+      fc <- fc[order(-fc$week, match(fc$pos, POSO), fc$vrank), ]
+      out <- c(out, sprintf("<details><summary class='s'>This season's flags, player by player (%d)</summary>%s</details>", nrow(fc),
+        pp_simple(tibble(Week = fc$week, Pos = fc$pos, Player = paste0(pp_esc(fc$player_name), " (", fc$team, ")"),
+                         Flag = ifelse(fc$flag == "love", "\U0001F525", "\u2620\uFE0F"), `Vegas rank` = fc$vrank, `ECR rank` = fc$ecr_rank,
+                         Finish = fc$finish, Pts = sprintf("%.1f", fc$pts), `vs others` = ifelse(is.na(fc$margin), "", sprintf("%+.1f", fc$margin))), raw = "Player")))
+    }
+  }
+  paste(out, collapse = "")
 }
 
 player_page <- function(P) {
@@ -180,20 +254,25 @@ th{background:var(--th);cursor:pointer;position:sticky;top:0}td.l{text-align:lef
 .bar{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;margin:.6rem 0}
 .bar button{background:none;border:1px solid var(--bd);color:var(--fg);padding:6px 12px;border-radius:6px;cursor:pointer;min-height:36px}
 .bar button.on{background:var(--acc);color:#fff;border-color:var(--acc)}.pane{display:none}.pane.on{display:block}
-i.fill{color:var(--mut)}.sw{display:inline-block;width:12px;height:12px;border:1px solid var(--bd);vertical-align:middle;border-radius:2px}
+i.fill{color:var(--mut)}:root{--r80:#c9dcf2;--r50:#6f9fd8}@media (prefers-color-scheme:dark){:root{--r80:#2a3f5c;--r50:#4f78ad}}
+.rb{position:relative;width:150px;height:12px}.rb span{position:absolute;top:0;height:12px}.r80{background:var(--r80)}.r50{background:var(--r50)}.pj{width:2px;background:var(--fg)}.sw{display:inline-block;width:12px;height:12px;border:1px solid var(--bd);vertical-align:middle;border-radius:2px}
+span.inj{color:#c05621;font-weight:700;font-size:12px}span.inj.out{color:#c53030}
+@media (prefers-color-scheme:dark){span.inj{color:#f6ad55}span.inj.out{color:#fc8181}}
 .sw.fl1{background:var(--fl1)}.sw.fl2{background:var(--fl2)}p.legend{margin:.2rem 0}', SITE_CSS, '</style></head><body>',
   if (exists("site_nav")) site_nav("players", b) else sprintf("<p class='s'><a href='%s'>D/ST</a> · <a href='%sk/'>Kickers</a> · <b>Players</b></p>", b, b),
   sprintf("<h1>Player projections — %d week %d</h1><p class='s'>%s Vegas-only: sportsbook player props (pass / rush / receiving yards, attempts, receptions, pass TDs, INTs, anytime TD) converted to expected stats and scored in your format. In back-tests (2024–26) no model or extra stats beat these at kickoff. Hover a column header for its definition; click to sort.</p>",
           P$season, P$week, status),
-  '<div class="bar"><div id="posb">', paste0(sprintf('<button data-pos="%s">%s</button>', c(pos_l, "GL"), c(pos_l, "Glossary")), collapse = ""), '</div>',
+  '<div class="bar"><div id="posb">', paste0(sprintf('<button data-pos="%s">%s</button>', c(pos_l, "TR", "GL"), c(pos_l, "Track record", "Glossary")), collapse = ""), '</div>',
   '<div id="fmtb">', paste0(sprintf('<button data-fmt="%s">%s</button>', fmts, unname(PS_FORMATS)), collapse = ""), '</div></div>',
-  PP_AMBER, paste0(panes, collapse = ""), sprintf('<div class="pane" data-pos="GL" data-fmt="*">%s<p class="s">%s</p></div>', gl_html, PP_FILL_NOTE),
+  PP_AMBER, paste0(panes, collapse = ""), paste0(sprintf('<div class="pane" data-pos="TR" data-fmt="%s">%s</div>', fmts, vapply(fmts, \(f) pp_track(P$track, f), "")), collapse = ""),
+  sprintf('<div class="pane" data-pos="GL" data-fmt="*">%s<p class="s">%s</p></div>', gl_html, PP_FILL_NOTE),
   sprintf("<p class='s'>%s</p>", PP_FILL_NOTE),
   '<script>', SITE_JS, '
 let st={pos:"QB",fmt:"half"};try{const s=JSON.parse(localStorage.getItem("pp_state")||"{}");if(s.pos)st.pos=s.pos;if(s.fmt)st.fmt=s.fmt}catch(e){}
 function show(){document.querySelectorAll(".pane").forEach(p=>p.classList.toggle("on",p.dataset.pos==st.pos&&(p.dataset.fmt==st.fmt||p.dataset.fmt=="*")));
 document.querySelectorAll("#posb button").forEach(b=>b.classList.toggle("on",b.dataset.pos==st.pos));
 document.querySelectorAll("#fmtb button").forEach(b=>b.classList.toggle("on",b.dataset.fmt==st.fmt));
+document.querySelectorAll("p.legend").forEach(l=>l.style.display=(st.pos=="TR"||st.pos=="GL")?"none":"");
 try{localStorage.setItem("pp_state",JSON.stringify(st))}catch(e){};stickCols()}
 document.querySelectorAll("#posb button").forEach(b=>b.onclick=()=>{st.pos=b.dataset.pos;show()});
 document.querySelectorAll("#fmtb button").forEach(b=>b.onclick=()=>{st.fmt=b.dataset.fmt;show()});show();

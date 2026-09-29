@@ -192,3 +192,94 @@ xp_attach <- function(file, players, team_ko) {
   m2 <- h |> dplyr::anti_join(m1, by = c("source", "key", "team")) |> dplyr::inner_join(uniq |> dplyr::select(gsis_id, key, pos), by = c("key", "pos"))
   dplyr::bind_rows(m1, m2) |> dplyr::distinct(source, gsis_id, .keep_all = TRUE)
 }
+
+# ==============================================================================
+# Injury report for QB / RB / WR / TE (Andrew 2026-09-29), same sources and rule as starters.R (QBs, kickers):
+#   report  : nflverse injuries_<season>.rds, the official NFL injury report (practice Wed-Fri, game status Fri/Sat)
+#   sleeper : api.sleeper.app/v1/players/nfl, injury status for every player (one call)
+# Status: IR / PUP / NFI / suspended from any source; otherwise the official game status once it exists this
+# week; before that Out / Doubtful from Sleeper; otherwise Questionable if either says so. Each refresh appends a
+# snapshot to data/players/injury_<season>_wk<ww>.csv; each player keeps his last status before kickoff (a game
+# with no pre-kickoff snapshot, e.g. a week published late, uses the official report only).
+# ==============================================================================
+INJ_COLS <- c("pulled_at", "source", "gsis_id", "name", "team", "pos", "status", "practice", "injury")
+INJ_HARD <- c("IR", "PUP", "NFI", "Suspended")
+inj_canon <- function(x) {
+  u <- toupper(trimws(as.character(x)))
+  dplyr::case_when(is.na(u) | u %in% c("", "NA", "P", "PROBABLE", "ACTIVE", "HEALTHY", "NULL") ~ NA_character_,
+                   u %in% c("O", "OUT", "COV", "DNR", "INACTIVE") ~ "Out", u %in% c("D", "DOUBTFUL") ~ "Doubtful",
+                   u %in% c("Q", "QUESTIONABLE", "GTD") ~ "Questionable",
+                   u %in% c("IR", "IR-R", "INJURED RESERVE", "INJURED_RESERVE", "RESERVE/INJURED") ~ "IR",
+                   u %in% c("PUP", "PHYSICALLY UNABLE TO PERFORM") ~ "PUP", u %in% c("NFI", "NON-FOOTBALL INJURY") ~ "NFI",
+                   u %in% c("SUS", "SUSP", "SUSPENDED", "SUSPENSION") ~ "Suspended", TRUE ~ NA_character_)
+}
+INJ_ABBR <- c(Out = "O", Doubtful = "D", Questionable = "Q", Suspended = "SUS", IR = "IR", PUP = "PUP", NFI = "NFI")
+inj_report <- function(season, week) {
+  md <- Sys.getenv("EXT_MOCK_DIR")
+  d <- if (nzchar(md)) { f <- file.path(md, "injuries.rds"); if (file.exists(f)) readRDS(f) else NULL } else {
+    tmp <- tempfile(fileext = ".rds")
+    ok <- tryCatch(utils::download.file(sprintf("https://github.com/nflverse/nflverse-data/releases/download/injuries/injuries_%d.rds", season),
+                                        tmp, mode = "wb", quiet = TRUE) == 0, error = function(e) FALSE)
+    if (ok) readRDS(tmp) else NULL }
+  if (is.null(d)) return(NULL)
+  d <- tibble::as_tibble(d); d <- d[d$week == week & d$position %in% c("QB", "RB", "WR", "TE", "FB"), ]
+  if (!nrow(d)) return(NULL)
+  tibble::tibble(source = "report", gsis_id = d$gsis_id, name = d$full_name, team = xp_team(d$team),
+                 pos = ifelse(d$position == "FB", "RB", d$position), status = inj_canon(d$report_status),
+                 practice = d$practice_status, injury = dplyr::coalesce(d$report_primary_injury, d$practice_primary_injury))
+}
+inj_sleeper <- function() {
+  txt <- xp_get("https://api.sleeper.app/v1/players/nfl", mock = "sleeper_players.json"); if (is.null(txt)) return(NULL)
+  js <- jsonlite::fromJSON(txt, simplifyVector = FALSE)
+  g <- function(p, f) { v <- p[[f]]; if (is.null(v) || !length(v)) NA_character_ else as.character(v[[1]]) }
+  js <- Filter(function(p) !is.null(p$team) && !is.null(p$position) && p$position %in% c("QB", "RB", "WR", "TE", "FB") &&
+                 (!is.null(p$injury_status) || identical(g(p, "status"), "Injured Reserve")), js)
+  if (!length(js)) return(NULL)
+  tibble::tibble(source = "sleeper", gsis_id = trimws(vapply(js, g, "", "gsis_id")),
+                 name = dplyr::coalesce(vapply(js, g, "", "full_name"), paste(vapply(js, g, "", "first_name"), vapply(js, g, "", "last_name"))),
+                 team = xp_team(vapply(js, g, "", "team")), pos = ifelse(vapply(js, g, "", "position") == "FB", "RB", vapply(js, g, "", "position")),
+                 status = dplyr::coalesce(inj_canon(vapply(js, g, "", "injury_status")), inj_canon(vapply(js, g, "", "status"))),
+                 practice = vapply(js, g, "", "practice_participation"), injury = vapply(js, g, "", "injury_body_part")) |>
+    dplyr::mutate(gsis_id = ifelse(grepl("^00-", gsis_id), gsis_id, NA_character_)) |> dplyr::filter(!is.na(status))
+}
+inj_snapshot <- function(file, season, week, now) {
+  x <- dplyr::bind_rows(tryCatch(inj_report(season, week), error = function(e) { message("  injury report: ", conditionMessage(e)); NULL }),
+                        tryCatch(inj_sleeper(), error = function(e) { message("  Sleeper injuries: ", conditionMessage(e)); NULL }))
+  if (!nrow(x)) { message("players: injury report / Sleeper: nothing pulled"); return(invisible(NULL)) }
+  x$pulled_at <- format(now, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+  dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
+  utils::write.table(x[INJ_COLS], file, sep = ",", row.names = FALSE, col.names = !file.exists(file), append = file.exists(file), qmethod = "double")
+  tb <- table(x$source); message("players: injury snapshot: ", paste(names(tb), tb, collapse = ", "))
+  invisible(x)
+}
+## per player (gsis_id, player_name, team, ko): status, badge, ruled-out flag and a detail line for the hover
+inj_attach <- function(file, players) {
+  if (!file.exists(file) || !nrow(players)) return(NULL)
+  h <- tibble::as_tibble(utils::read.csv(file, stringsAsFactors = FALSE, colClasses = "character"))
+  h$t <- as.POSIXct(sub("Z$", "", h$pulled_at), format = "%Y-%m-%dT%H:%M:%S", tz = "UTC"); h$key <- name_key(h$name)
+  pl <- players |> dplyr::mutate(key = name_key(player_name))
+  m <- dplyr::bind_rows(h |> dplyr::filter(!is.na(gsis_id), nzchar(gsis_id)) |> dplyr::inner_join(pl |> dplyr::select(pid = gsis_id, ko), by = c("gsis_id" = "pid")),
+                        h |> dplyr::inner_join(pl |> dplyr::select(pid = gsis_id, key, team, ko), by = c("key", "team")) |> dplyr::mutate(gsis_id = pid) |> dplyr::select(-pid)) |>
+    dplyr::distinct(source, gsis_id, pulled_at, .keep_all = TRUE)
+  if (!nrow(m)) return(NULL)
+  pre <- m |> dplyr::filter(t < ko)
+  ## a team's latest pre-kickoff pull counts as a whole (a player missing from it has no status any more)
+  last_pull <- pre |> dplyr::group_by(source, gsis_id) |> dplyr::summarise(tl = max(t), .groups = "drop")
+  pre <- pre |> dplyr::inner_join(last_pull, by = c("source", "gsis_id")) |> dplyr::filter(t == tl)
+  post_rep <- m |> dplyr::filter(t >= ko, source == "report") |> dplyr::anti_join(pre |> dplyr::distinct(gsis_id), by = "gsis_id") |>
+    dplyr::group_by(gsis_id) |> dplyr::slice_min(t, n = 1, with_ties = FALSE) |> dplyr::ungroup()
+  x <- dplyr::bind_rows(pre, post_rep)
+  x |> dplyr::group_by(gsis_id) |> dplyr::summarise(
+    rep = dplyr::first(status[source == "report"]), slp = dplyr::first(status[source == "sleeper"]),
+    prac = dplyr::first(practice[source == "report"]), inj = dplyr::coalesce(dplyr::first(injury[source == "report"]), dplyr::first(injury[source == "sleeper"])),
+    .groups = "drop") |>
+    dplyr::mutate(inj_status = dplyr::case_when(rep %in% INJ_HARD ~ rep, slp %in% INJ_HARD ~ slp, !is.na(rep) ~ rep,
+                                                slp %in% c("Out", "Doubtful") ~ slp, slp %in% "Questionable" ~ "Questionable", TRUE ~ NA_character_),
+                  inj_out = inj_status %in% c("Out", "Doubtful", INJ_HARD),
+                  inj_badge = ifelse(is.na(inj_status), "", unname(INJ_ABBR[inj_status])),
+                  inj_detail = paste0(ifelse(is.na(rep) & is.na(prac), "", paste0("Official report: ", dplyr::coalesce(rep, "no game status yet"),
+                                                                                  ifelse(is.na(prac) | !nzchar(prac), "", paste0(" (practice: ", prac, ")")))),
+                                      ifelse(is.na(slp), "", paste0(ifelse(is.na(rep) & is.na(prac), "", "; "), "Sleeper: ", slp)),
+                                      ifelse(is.na(inj) | !nzchar(inj), "", paste0(" · ", inj)))) |>
+    dplyr::filter(!is.na(inj_status) | nzchar(inj_detail))
+}
