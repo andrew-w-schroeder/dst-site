@@ -8,7 +8,7 @@ pp_esc <- function(x) { x <- as.character(x); x[is.na(x)] <- ""; x <- gsub("&", 
 pp_f <- function(x, d = 1) ifelse(is.na(x), "", formatC(x, format = "f", digits = d))
 pp_pct <- function(x) ifelse(is.na(x), "", paste0(round(100 * x), "%"))
 pp_sg <- function(x, d = 1) ifelse(is.na(x) | abs(x) < 0.5 * 10^-d, "0", sprintf(paste0("%+.", d, "f"), x))
-pp_et <- function(x, f) sub(" 0", " ", format(x, f, tz = "America/New_York"))
+pp_et <- function(x, f) gsub(" 0", " ", format(x, f, tz = "America/New_York"))
 
 PP_STAT_COLS <- list(
   QB = c(pass_att = "Pass att", pass_yds = "Pass yds", pass_td = "Pass TD", pass_int = "INT", rush_yds = "Rush yds"),
@@ -109,9 +109,9 @@ pp_range_bar <- function(q10, q25, q75, q90, pj, lo = -2, hi = 35, ci_lo = NA, c
   sc <- function(v) round(100 * (pmin(pmax(v, lo), hi) - lo) / (hi - lo), 1)
   ci_lo <- rep_len(ci_lo, length(pj)); ci_hi <- rep_len(ci_hi, length(pj)); has <- !is.na(ci_lo) & !is.na(ci_hi)
   ci <- ifelse(has, sprintf('<span class="ci" style="left:%s%%;width:max(2px,%s%%)"></span>', sc(ci_lo), sc(ci_hi) - sc(ci_lo)), "")
-  ifelse(is.na(q10), "", sprintf('<div class="rb" title="80%%: %.1f to %.1f \u00b7 50%%: %.1f to %.1f \u00b7 proj %.2f%s"><span class="r80" style="left:%s%%;width:%s%%"></span><span class="r50" style="left:%s%%;width:%s%%"></span>%s<span class="pj" style="left:%s%%"></span></div>',
+  ifelse(is.na(q10), "", sprintf('<div class="rb" title="80%%: %.1f to %.1f \u00b7 50%%: %.1f to %.1f \u00b7 proj %.2f%s"><span class="r80" style="left:%s%%;width:%s%%"></span><span class="r50" style="left:%s%%;width:%s%%"></span>%s<span class="pt" style="left:%s%%"></span><span class="zero" style="left:%s%%"></span></div>',
           q10, q90, q25, q75, pj, ifelse(has, sprintf(" (\u00b1 %.2f: %.2f to %.2f)", (ci_hi - ci_lo) / 2, ci_lo, ci_hi), ""),
-          sc(q10), sc(q90) - sc(q10), sc(q25), sc(q75) - sc(q25), ci, sc(pj)))
+          sc(q10), sc(q90) - sc(q10), sc(q25), sc(q75) - sc(q25), ci, sc(pj), sc(0)))
 }
 pp_player_cell <- function(d, prk) {
   ecr <- if ("ecr_rank" %in% names(d)) d$ecr_rank else rep(NA_real_, nrow(d))
@@ -200,7 +200,9 @@ pp_pos_table <- function(P, pos, fmt) {
   brk <- c(FALSE, tr$tier[-1] != tr$tier[-length(tr$tier)])
   row_cls <- trimws(paste(ifelse(tr$tier %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tr$tier] %in% TRUE, "tb-clear", "tb-soft"), ""),
                           ifelse(fb, "nop", "")))
-  tc <- tier_cls(tr$tier, k = max(tr$tier))
+  ng <- c(QB = 2, RB = 3, WR = 3, TE = 2, FLEX = 4)[[pos]]                 # green tiers (Andrew 2026-10-01: RB / WR 3, FLEX 4)
+  tc <- if (ng <= 2) tier_cls(tr$tier, k = max(tr$tier)) else
+    ifelse(tr$tier <= ng, paste0("g", ng, "_", tr$tier), tier_cls(tr$tier, k = max(tr$tier)))
   pp_table(t, raw = c("Player", "Trend", "ECR", "Range bar", "\u00b1", "TD%", unname(scols)), id = paste0("t_", pos, "_", fmt), row_cls = row_cls,
            cell_cls = c(list(Rank = tc, Player = tc, Proj = tc), ext_c))
 }
@@ -259,11 +261,12 @@ pp_track <- function(TR, fmt) {
 
 player_page <- function(P) {
   pos_l <- c(PS_POS, "FLEX"); fmts <- names(PS_FORMATS)
-  panes <- unlist(lapply(pos_l, \(p) lapply(fmts, \(f) sprintf('<div class="pane" data-pos="%s" data-fmt="%s">%s</div>', p, f, pp_pos_table(P, p, f)))))
+  fpos <- function(p) if (p == "QB") PS_FMT_POS$QB else PS_FMT_POS$other      # QB: Standard / FFPC / 6-pt pass TD
+  panes <- unlist(lapply(pos_l, \(p) lapply(fpos(p), \(f) sprintf('<div class="pane" data-pos="%s" data-fmt="%s">%s</div>', p, f, pp_pos_table(P, p, f)))))
   gl <- tibble(Term = names(PP_TIP), Definition = unname(PP_TIP)) |>
     bind_rows(tibble(Term = c("Italic*", "Italic row: no props yet", "(TD)", "Formats"), Definition = c(PP_FILL_NOTE, pp_fb_note(P$fb_skill),
       "TD-only player: no yardage or receptions prop, shown because his anytime-TD price is at or above the median of players at his position with full props.",
-      "Standard / Half PPR / PPR: ESPN defaults (0.04 per pass yard, pass TD 4, INT −2, fumble lost −2, 0 / 0.5 / 1 per catch). FFPC: 0.05 per pass yard, INT −1, fumble lost −1, 1 per catch, 1.5 per TE catch.")))
+      "Standard / Half PPR / PPR: ESPN defaults (0.04 per pass yard, pass TD 4, INT −2, fumble lost −2, 0 / 0.5 / 1 per catch). FFPC: 0.05 per pass yard, INT −1, fumble lost −1, 1 per catch, 1.5 per TE catch. 6-pt pass TD (QB tab): Standard with 6 points per passing TD. The QB tab shows Standard / FFPC / 6-pt pass TD only: Half PPR and PPR score QBs the same as Standard.")))
   gl_html <- paste0('<div class="tw"><table><thead><tr><th>Term</th><th>Definition</th></tr></thead><tbody>',
                     paste0("<tr><td class='l'><b>", pp_esc(gl$Term), "</b></td><td class='l wrap'>", pp_esc(gl$Definition), "</td></tr>", collapse = ""), "</tbody></table></div>")
   nfb <- if (is.null(P$n_fallback)) 0L else P$n_fallback
@@ -285,8 +288,12 @@ th{background:var(--th);cursor:pointer;position:sticky;top:0}td.l{text-align:lef
 .bar{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;margin:.6rem 0}
 .bar button{background:none;border:1px solid var(--bd);color:var(--fg);padding:6px 12px;border-radius:6px;cursor:pointer;min-height:36px}
 .bar button.on{background:var(--acc);color:#fff;border-color:var(--acc)}.pane{display:none}.pane.on{display:block}
-i.fill{color:var(--mut)}:root{--r80:#c9dcf2;--r50:#6f9fd8}@media (prefers-color-scheme:dark){:root{--r80:#2a3f5c;--r50:#4f78ad}}
-.rb{position:relative;width:150px;height:12px}.rb span{position:absolute;top:0;height:12px}.r80{background:var(--r80)}.r50{background:var(--r50)}.pj{width:2px;background:var(--fg)}.rb span.ci{top:3px;height:6px;background:#dd6b20;border-radius:2px}.sw{display:inline-block;width:12px;height:12px;border:1px solid var(--bd);vertical-align:middle;border-radius:2px}
+i.fill{color:var(--mut)}', RB_CSS, '.sw{display:inline-block;width:12px;height:12px;border:1px solid var(--bd);vertical-align:middle;border-radius:2px}
+td.g3_1,td.g4_1{font-weight:700}td.g3_2,td.g4_2{font-weight:600}
+:root{--g3_1:#8fd0a3;--g3_2:#c1e7cc;--g3_3:#e6f5ea;--g4_1:#7cc795;--g4_2:#a8ddb8;--g4_3:#cdecd6;--g4_4:#ebf7ee}
+@media (prefers-color-scheme:dark){:root{--g3_1:#1f6b3a;--g3_2:#1a5230;--g3_3:#153a23;--g4_1:#1f6b3a;--g4_2:#1b5a33;--g4_3:#17472a;--g4_4:#123320}}
+td.g3_1{background:var(--g3_1)!important}td.g3_2{background:var(--g3_2)!important}td.g3_3{background:var(--g3_3)!important}
+td.g4_1{background:var(--g4_1)!important}td.g4_2{background:var(--g4_2)!important}td.g4_3{background:var(--g4_3)!important}td.g4_4{background:var(--g4_4)!important}
 tr.nop td{font-style:italic}span.nop{font-style:normal;border:1px solid var(--bd);border-radius:4px;padding:0 4px;font-size:11px}
 span.inj{color:#c05621;font-weight:700;font-size:12px}span.inj.out{color:#c53030}
 @media (prefers-color-scheme:dark){span.inj{color:#f6ad55}span.inj.out{color:#fc8181}}
@@ -296,14 +303,17 @@ span.inj{color:#c05621;font-weight:700;font-size:12px}span.inj.out{color:#c53030
           P$season, P$week, status),
   '<div class="bar"><div id="posb">', paste0(sprintf('<button data-pos="%s">%s</button>', c(pos_l, "TR", "GL"), c(pos_l, "Track record", "Glossary")), collapse = ""), '</div>',
   '<div id="fmtb">', paste0(sprintf('<button data-fmt="%s">%s</button>', fmts, unname(PS_FORMATS)), collapse = ""), '</div></div>',
-  PP_AMBER, paste0(panes, collapse = ""), paste0(sprintf('<div class="pane" data-pos="TR" data-fmt="%s">%s</div>', fmts, vapply(fmts, \(f) pp_track(P$track, f), "")), collapse = ""),
+  PP_AMBER, paste0(panes, collapse = ""), paste0(sprintf('<div class="pane" data-pos="TR" data-fmt="%s">%s</div>', PS_FMT_POS$other, vapply(PS_FMT_POS$other, \(f) pp_track(P$track, f), "")), collapse = ""),
   sprintf('<div class="pane" data-pos="GL" data-fmt="*">%s<p class="s">%s</p></div>', gl_html, PP_FILL_NOTE),
   sprintf("<p class='s'>%s</p>", PP_FILL_NOTE),
   '<script>', SITE_JS, '
 let st={pos:"QB",fmt:"half"};try{const s=JSON.parse(localStorage.getItem("pp_state")||"{}");if(s.pos)st.pos=s.pos;if(s.fmt)st.fmt=s.fmt}catch(e){}
-function show(){document.querySelectorAll(".pane").forEach(p=>p.classList.toggle("on",p.dataset.pos==st.pos&&(p.dataset.fmt==st.fmt||p.dataset.fmt=="*")));
+const FQB=["std","ffpc","pt6"],FOT=["std","half","ppr","ffpc"];
+function eff(){const a=st.pos=="QB"?FQB:FOT;return a.includes(st.fmt)?st.fmt:"std"}   /* QB: Half / PPR = Standard; others: 6-pt = Standard */
+function show(){const f=eff(),a=st.pos=="QB"?FQB:(st.pos=="GL"?[]:FOT);
+document.querySelectorAll(".pane").forEach(p=>p.classList.toggle("on",p.dataset.pos==st.pos&&(p.dataset.fmt==f||p.dataset.fmt=="*")));
 document.querySelectorAll("#posb button").forEach(b=>b.classList.toggle("on",b.dataset.pos==st.pos));
-document.querySelectorAll("#fmtb button").forEach(b=>b.classList.toggle("on",b.dataset.fmt==st.fmt));
+document.querySelectorAll("#fmtb button").forEach(b=>{b.classList.toggle("on",b.dataset.fmt==f);b.style.display=a.includes(b.dataset.fmt)?"":"none"});
 document.querySelectorAll("p.legend").forEach(l=>l.style.display=(st.pos=="TR"||st.pos=="GL")?"none":"");
 try{localStorage.setItem("pp_state",JSON.stringify(st))}catch(e){};stickCols()}
 document.querySelectorAll("#posb button").forEach(b=>b.onclick=()=>{st.pos=b.dataset.pos;show()});

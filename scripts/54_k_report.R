@@ -40,9 +40,9 @@ range_bar <- function(q10, q25, q75, q90, pj, lo = -2, hi = 22, ci_lo = NA, ci_h
   sc <- function(v) round(100 * (pmin(pmax(v, lo), hi) - lo) / (hi - lo), 1)
   ci_lo <- rep_len(ci_lo, length(pj)); ci_hi <- rep_len(ci_hi, length(pj)); has <- !is.na(ci_lo) & !is.na(ci_hi)
   ci <- ifelse(has, sprintf('<span class="ci" style="left:%s%%;width:max(2px,%s%%)"></span>', sc(ci_lo), sc(ci_hi) - sc(ci_lo)), "")
-  sprintf('<div class="rb" title="80%%: %.1f to %.1f · 50%%: %.1f to %.1f · proj %.2f%s"><span class="r80" style="left:%s%%;width:%s%%"></span><span class="r50" style="left:%s%%;width:%s%%"></span>%s<span class="pj" style="left:%s%%"></span></div>',
+  sprintf('<div class="rb" title="80%%: %.1f to %.1f · 50%%: %.1f to %.1f · proj %.2f%s"><span class="r80" style="left:%s%%;width:%s%%"></span><span class="r50" style="left:%s%%;width:%s%%"></span>%s<span class="pt" style="left:%s%%"></span><span class="zero" style="left:%s%%"></span></div>',
           q10, q90, q25, q75, pj, ifelse(has, sprintf(" (± %.2f: %.2f to %.2f)", (ci_hi - ci_lo) / 2, ci_lo, ci_hi), ""),
-          sc(q10), sc(q90) - sc(q10), sc(q25), sc(q75) - sc(q25), ci, sc(pj))
+          sc(q10), sc(q90) - sc(q10), sc(q25), sc(q75) - sc(q25), ci, sc(pj), sc(0))
 }
 html_table <- function(df, raw = character(), id = "", row_cls = NULL, cell_cls = list(), stick = 0) {
   hdr <- paste0("<tr>", paste0(sprintf('<th title="%s" onclick="srt(this)">%s</th>', esc(coalesce(tip[names(df)], "")), esc(names(df))), collapse = ""), "</tr>")
@@ -193,8 +193,7 @@ table{border-collapse:collapse;font-size:13px;margin:.6rem 0;white-space:nowrap}
 th{background:var(--th);cursor:pointer;position:sticky;top:0}td.l{text-align:left}
 .tabs button{background:none;border:1px solid var(--bd);color:var(--fg);padding:6px 12px;margin:0 4px 4px 0;border-radius:6px 6px 0 0;cursor:pointer}
 .tabs button.on{background:var(--acc);color:#fff;border-color:var(--acc)}.pane{display:none}.pane.on{display:block}
-.rb{position:relative;width:150px;height:12px}.rb span{position:absolute;top:0;height:12px}.r80{background:var(--r80)}.r50{background:var(--r50)}
-.pj{width:2px;background:var(--fg)}.rb span.ci{top:3px;height:6px;background:#dd6b20;border-radius:2px}
+', RB_CSS, '
 td.top{background:#e3f4e8;font-weight:600}td.bot{background:#fbe6e6}
 @media (prefers-color-scheme:dark){td.top{background:#17351f}td.bot{background:#3a1a1a}}', SITE_CSS, '</style></head><body>',
   if (!is.null(P$nav)) P$nav else "",

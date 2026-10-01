@@ -14,16 +14,20 @@ PS_STATS <- c("pass_att", "pass_yds", "pass_td", "pass_int", "rush_att", "rush_y
               "tds", "fum_lost", "two_pt")
 PS_RARE  <- c("fum_lost", "two_pt")
 PS_POS   <- c("QB", "RB", "WR", "TE")
-PS_FORMATS <- c(std = "Standard", half = "Half PPR", ppr = "PPR", ffpc = "FFPC")
+PS_FORMATS <- c(std = "Standard", half = "Half PPR", ppr = "PPR", ffpc = "FFPC", pt6 = "6-pt pass TD")
+## formats shown per position tab (Andrew 2026-10-01): QBs score the same in Standard / Half / PPR, so their tab shows
+## Standard, FFPC and 6-pt pass TD (Standard with 6 per passing TD); every other tab shows the four PPR variants
+PS_FMT_POS <- list(QB = c("std", "ffpc", "pt6"), other = c("std", "half", "ppr", "ffpc"))
 
 ## scoring (same as player_utils.R): ESPN defaults for std / half / ppr; FFPC 0.05 / pass yd,
-## INT -1, fumble lost -1, 1 per catch (1.5 for TEs)
+## INT -1, fumble lost -1, 1 per catch (1.5 for TEs); pt6 = Standard with 6 points per passing TD
 ps_score <- function(d, fmt) {
   z <- function(v) if (is.null(d[[v]])) 0 else coalesce(d[[v]], 0)
   py  <- if (fmt == "ffpc") 0.05 else 0.04
   neg <- if (fmt == "ffpc") -1 else -2
-  rec <- switch(fmt, std = 0, half = 0.5, ppr = 1, ffpc = ifelse(d$pos == "TE", 1.5, 1))
-  py * z("pass_yds") + 4 * z("pass_td") + neg * z("pass_int") +
+  rec <- switch(fmt, std = 0, pt6 = 0, half = 0.5, ppr = 1, ffpc = ifelse(d$pos == "TE", 1.5, 1))
+  ptd <- if (fmt == "pt6") 6 else 4
+  py * z("pass_yds") + ptd * z("pass_td") + neg * z("pass_int") +
     0.1 * (z("rush_yds") + z("rec_yds")) + 6 * (z("rush_td") + z("rec_td") + z("st_td")) +
     2 * z("two_pt") + neg * z("fum_lost") + rec * z("rec")
 }
@@ -143,7 +147,9 @@ ps_points <- function(e, pos) {
 ps_bb <- function(vfp, p_td, pos, bb) {          # bb: pos, fmt, event, b0, b1, b2, b3, td_fill
   out <- list()
   for (f in names(PS_FORMATS)) for (ev in c("boom", "bust")) {
-    k <- match(paste(pos, f, ev), paste(bb$pos, bb$fmt, bb$event)); c <- bb[k, ]
+    k <- match(paste(pos, f, ev), paste(bb$pos, bb$fmt, bb$event))
+    if (all(is.na(k))) k <- match(paste(pos, "std", ev), paste(bb$pos, bb$fmt, bb$event))   # bundle older than this format
+    c <- bb[k, ]
     v <- vfp[[paste0("vfp_", f)]]; t <- coalesce(p_td, c$td_fill)
     ## the fitted curve bends over at the top (b2 < 0); hold it flat past its peak so a higher projection
     ## never lowers P(boom) (matters for elite TEs: the TE curve peaks near 13 half-PPR points)
@@ -160,10 +166,10 @@ ps_ranges <- function(vfp, pos, p_td, imp, sp, R, bb) {
   out <- list()
   for (f in names(PS_FORMATS)) {
     v <- vfp[[paste0("vfp_", f)]]
-    tdf <- bb$td_fill[match(paste(pos, f, "boom"), paste(bb$pos, bb$fmt, bb$event))]
+    tdf <- bb$td_fill[match(paste(pos, if (any(bb$fmt == f)) f else "std", "boom"), paste(bb$pos, bb$fmt, bb$event))]
     X <- list(`(Intercept)` = rep(1, length(v)), v = v, t = coalesce(p_td, tdf), imp = coalesce(imp, 22), sp = coalesce(sp, 0))
     Q <- sapply(c(0.10, 0.25, 0.50, 0.75, 0.90), \(tau) {
-      r <- R[R$fmt == f & R$tau == tau, ]; q <- rep(0, length(v))
+      r <- R[R$fmt == (if (any(R$fmt == f)) f else "std") & R$tau == tau, ]; q <- rep(0, length(v))
       for (k in unique(r$term)) { cf <- r$coef[r$term == k][match(pos, r$pos[r$term == k])]; q <- q + coalesce(cf, 0) * X[[k]] }
       q })
     Q <- t(apply(matrix(Q, ncol = 5), 1, sort))
@@ -208,7 +214,8 @@ ps_fallback <- function(B, teams, ctx) {
   out <- p |> transmute(game_id, gsis_id, player_name, pos, team, core = FALSE, td_only = FALSE, td_keep = FALSE, fallback = TRUE, fb_qb)
   for (f in names(PS_FORMATS)) {
     hv <- h[[paste0("vfp_", f)]]; cf <- F$coef
-    b <- t(vapply(p$pos, \(q) { k <- cf[[q]][[f]]; c(k[["(Intercept)"]], k[["h"]], coalesce(k["h:rel"], 0), coalesce(k["h:sp"], 0)) }, numeric(4)))
+    b <- t(vapply(p$pos, \(q) { k <- cf[[q]][[f]] %||% cf[[q]][["std"]]   # a bundle from before a format existed: Standard's fit
+      c(k[["(Intercept)"]], k[["h"]], coalesce(k["h:rel"], 0), coalesce(k["h:sp"], 0)) }, numeric(4)))
     out[[paste0("vfp_", f)]] <- pmax(b[, 1] + b[, 2] * hv + b[, 3] * hv * rel + b[, 4] * hv * sp, 0)
   }
   ## stats: history scaled to the half-PPR projection (so they add up to it); TD price implied by the expected TDs
@@ -225,8 +232,8 @@ ps_fallback <- function(B, teams, ctx) {
 ## Two sources, drawn together nboot times: (1) which sportsbooks: each line's books (player x market) are resampled
 ## with replacement and the median consensus is rebuilt (books that disagree widen it); (2) the conversion from props
 ## to expected stats: one of the bundle's bootstrap refits of 83's calibrations (B$conv_boot). Everything else
-## (career-average fills, flags) is held fixed. Returns per game x player x format the 5th / 95th percentiles;
-## "±" = half the 90% interval. long: per-book outcomes (flatten_event_odds) with game_id; B: the bundle.
+## (career-average fills, flags) is held fixed. Returns per game x player x format the projection -/+ 1.645 x the SD of
+## the draws (a 90% interval if roughly normal); "±" = its half width. long: per-book outcomes (flatten_event_odds) with game_id; B: the bundle.
 ps_ci <- function(long, B, nboot = 60, seed = 1) {
   if (!nrow(long) || is.null(B$conv_boot)) return(NULL)
   long <- long |> filter(!is_team_defense(player))
@@ -246,18 +253,24 @@ ps_ci <- function(long, B, nboot = 60, seed = 1) {
   gi <- split(seq_len(nrow(bl)), paste(bl$game_id, bl$gsis_id, bl$market)); ti <- split(seq_len(nrow(td)), paste(td$game_id, td$gsis_id))
   rs <- function(ix) unlist(lapply(ix, function(i) if (length(i) == 1) i else i[sample.int(length(i), length(i), replace = TRUE)]), use.names = FALSE)
   set.seed(seed); nb <- length(B$conv_boot)
-  draws <- lapply(seq_len(nboot), function(b) {
-    cons <- bl[rs(gi), ] |> group_by(game_id, gsis_id, market) |>
+  draws <- lapply(0:nboot, function(b) {                        # b = 0: every book once + the main calibration = the projection
+    cons <- bl[if (b == 0) seq_len(nrow(bl)) else rs(gi), ] |> group_by(game_id, gsis_id, market) |>
       summarise(n_books = n(), line = median(main_line), p_over = median(p_over), med_est = median(med_est), .groups = "drop")
-    anyt <- td[rs(ti), ] |> group_by(game_id, gsis_id) |> summarise(n_books = n(), p_td_raw = median(p), .groups = "drop")
+    anyt <- td[if (b == 0) seq_len(nrow(td)) else rs(ti), ] |> group_by(game_id, gsis_id) |> summarise(n_books = n(), p_td_raw = median(p), .groups = "drop")
     d <- ps_inputs(cons, anyt) |> inner_join(info, by = "gsis_id") |> left_join(B$career, by = "gsis_id") |> ps_flags(B$td_bar)
     if (!nrow(d)) return(NULL)
-    cb <- B$conv_boot[[(b - 1) %% nb + 1]]                     # coefficients only; terms from the main fits
-    e <- ps_expect(d, B, conv = Map(function(pm, cf) { pm$coef <- cf[names(pm$coef)]; pm }, B$conv, cb[names(B$conv)]))
-    bind_cols(d |> select(game_id, gsis_id), ps_points(e, d$pos))
+    cv <- if (b == 0) B$conv else { cb <- B$conv_boot[[(b - 1) %% nb + 1]]   # coefficients only; terms from the main fits
+      Map(function(pm, cf) { pm$coef <- cf[names(pm$coef)]; pm }, B$conv, cb[names(B$conv)]) }
+    bind_cols(d |> select(game_id, gsis_id), ps_points(ps_expect(d, B, conv = cv), d$pos)) |> mutate(.b = b)
   })
-  bind_rows(draws) |> group_by(game_id, gsis_id) |>
-    summarise(across(starts_with("vfp_"), list(lo = \(v) unname(quantile(v, 0.05)), hi = \(v) unname(quantile(v, 0.95)))),
-              draws = n(), .groups = "drop") |>
-    rename_with(\(v) sub("^vfp_(\\w+)_(lo|hi)$", "ci_\\2_\\1", v))
+  ## the interval: projection +/- 1.645 x the SD of the draws (Andrew 2026-09-29: with 5-8 books the percentiles of a
+  ## resampled median are lumpy and one-sided - two dissenting books on the low side put the 5th percentile at their
+  ## level while the median can't rise above the agreeing books - so the orange band sat left of the line)
+  D <- bind_rows(draws)
+  p0 <- D |> filter(.b == 0) |> select(-.b)
+  sdv <- D |> filter(.b > 0) |> group_by(game_id, gsis_id) |> summarise(across(starts_with("vfp_"), \(v) sd(v)), draws = n(), .groups = "drop")
+  out <- p0 |> inner_join(sdv, by = c("game_id", "gsis_id"), suffix = c("", "_sd"))
+  for (f in names(PS_FORMATS)) { v <- out[[paste0("vfp_", f)]]; h <- 1.645 * out[[paste0("vfp_", f, "_sd")]]
+    out[[paste0("ci_lo_", f)]] <- v - h; out[[paste0("ci_hi_", f)]] <- v + h }
+  out |> select(game_id, gsis_id, starts_with("ci_"), draws)
 }

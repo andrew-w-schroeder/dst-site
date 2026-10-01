@@ -16,7 +16,15 @@
 # ==============================================================================
 
 XP_COLS <- c("pulled_at", "source", "name", "team", "pos", "pts_std", "pts_half", "pts_ppr", "pts_ffpc",
-             "ecr_rank", "ecr_avg", "ecr_sd", "ecr_best", "ecr_worst", "ecr_date")
+             "ecr_rank", "ecr_avg", "ecr_sd", "ecr_best", "ecr_worst", "ecr_date", "pts_pt6")   # pts_pt6 added 2026-10-01
+## append rows to a snapshot file; a file written before a column was added is rewritten with the new header first
+xp_append <- function(x, file) {
+  if (file.exists(file)) { hdr <- names(utils::read.csv(file, nrows = 1, check.names = FALSE))
+    if (!identical(hdr, XP_COLS)) { old <- utils::read.csv(file, stringsAsFactors = FALSE, colClasses = "character")
+      for (c in setdiff(XP_COLS, names(old))) old[[c]] <- NA
+      utils::write.table(old[XP_COLS], file, sep = ",", row.names = FALSE, qmethod = "double") } }
+  utils::write.table(x[XP_COLS], file, sep = ",", row.names = FALSE, col.names = !file.exists(file), append = file.exists(file), qmethod = "double")
+}
 XP_KEEP <- c(QB = 40, RB = 80, WR = 110, TE = 50)               # keep each source's top N per position
 xp_get <- function(url, headers = NULL, mock = NULL) {
   md <- Sys.getenv("EXT_MOCK_DIR")
@@ -35,7 +43,7 @@ xp_points <- function(d) {
   proj <- tibble::tibble(pos = d$pos, pass_yds = d$pass_yds, pass_td = d$pass_td, pass_int = d$pass_int, rush_yds = d$rush_yds,
                          rec = d$rec, rec_yds = d$rec_yds, rush_td = d$rush_td, rec_td = d$rec_td, fum_lost = d$fum_lost, two_pt = d$two_pt)
   proj[is.na(proj)] <- 0
-  for (f in c("std", "half", "ppr", "ffpc")) d[[paste0("pts_", f)]] <- ps_score(proj, f)
+  for (f in c("std", "half", "ppr", "ffpc", "pt6")) d[[paste0("pts_", f)]] <- ps_score(proj, f)
   d
 }
 
@@ -181,7 +189,7 @@ xp_ecr_backfill <- function(file, team_ko, now, ko_all) {
     if (!nrow(x)) next
     x$pulled_at <- format(r$time, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
     for (c in setdiff(XP_COLS, names(x))) x[[c]] <- NA
-    utils::write.table(x[XP_COLS], file, sep = ",", row.names = FALSE, col.names = !file.exists(file), append = file.exists(file), qmethod = "double")
+    xp_append(x, file)
     added <- added + nrow(x)
   }
   if (added) message(sprintf("players: ECR from before kickoff (DynastyProcess history) added for %d players", added))
@@ -204,7 +212,7 @@ xp_snapshot <- function(file, season, week, now, ko) {
   x$pulled_at <- format(now, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
   for (c in setdiff(XP_COLS, names(x))) x[[c]] <- NA
   dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
-  utils::write.table(x[XP_COLS], file, sep = ",", row.names = FALSE, col.names = !file.exists(file), append = file.exists(file), qmethod = "double")
+  xp_append(x, file)
   tb <- table(x$source); message("players: ESPN / Sleeper / ECR snapshot: ", paste(names(tb), tb, collapse = ", "))
   invisible(x)
 }
@@ -224,7 +232,7 @@ xp_attach <- function(file, players, team_ko) {
   h <- h |> dplyr::group_by(source, key, team) |> dplyr::mutate(ord = ifelse(pre, -as.numeric(t), 1e12 + as.numeric(t))) |>
     dplyr::slice_min(ord, n = 1, with_ties = FALSE) |> dplyr::ungroup() |>
     dplyr::group_by(source, pos) |>
-    dplyr::mutate(dplyr::across(c(pts_std, pts_half, pts_ppr, pts_ffpc), \(v) rank(-v, ties.method = "first", na.last = "keep"), .names = "rk_{.col}")) |>
+    dplyr::mutate(dplyr::across(dplyr::any_of(c("pts_std", "pts_half", "pts_ppr", "pts_ffpc", "pts_pt6")), \(v) rank(-v, ties.method = "first", na.last = "keep"), .names = "rk_{.col}")) |>
     dplyr::ungroup()
   pl <- players |> dplyr::mutate(key = name_key(player_name))
   m1 <- h |> dplyr::inner_join(pl |> dplyr::select(gsis_id, key, team), by = c("key", "team"))

@@ -156,8 +156,15 @@ trend_points <- function(ph_team) {
   dplyr::bind_rows(if (nrow(wk) && !is.na(wk$proj)) dplyr::mutate(wk, lab = paste0("weekly run ", format(wk$t, "%a %b %d", tz = "America/New_York"))),
                    dplyr::mutate(rf, lab = sub(" 0", " ", format(t, "%a %b %d %I:%M %p", tz = "America/New_York"))))
 }
+## trend lines show two points per day: each day's first and last (most recent) refresh (Andrew 2026-10-01)
+thin_daily <- function(pts) {
+  if (is.null(pts) || nrow(pts) < 3 || !"t" %in% names(pts)) return(pts)
+  pts <- pts[order(pts$t), ]; day <- format(pts$t, "%Y-%m-%d", tz = "America/New_York")
+  pts[!duplicated(day) | !duplicated(day, fromLast = TRUE), ]
+}
 sparkline <- function(pts, w = NULL, h = 24, min_span = 1) {
   if (is.null(pts) || nrow(pts) < 1) return("")
+  pts <- thin_daily(pts)
   v <- pts$proj; n <- length(v); lo <- min(v); hi <- max(v)
   if (is.null(w)) w <- max(96, min(180, 10 + 7 * (n - 1)))            # grows with the number of refreshes
   if (hi - lo < min_span) { mid <- (hi + lo) / 2; lo <- mid - min_span / 2; hi <- mid + min_span / 2 }
@@ -297,6 +304,13 @@ RANKCOL_TIP <- "this week's rank on that site in ESPN standard scoring (their pr
 # Vegas-only projection from lm coefficients stored in the weekly bundle (re-scored with the refreshed lines)
 vegas_proj <- function(cf, df) { if (is.null(cf)) return(rep(NA_real_, nrow(df))); cf[is.na(cf)] <- 0; v <- setdiff(names(cf), "(Intercept)")   # NA = aliased term (implied points = total/2 ± spread/2), as predict.lm treats it
   as.numeric(cf["(Intercept)"] + as.matrix(df[v]) %*% cf[v]) }
+## range bar styling shared by the three pages (the D/ST page's look; Andrew 2026-10-01): light = 80%, dark = 50%, tick =
+## projection, orange = the ±, thin line = 0 points
+RB_CSS <- ':root{--rng80:#c9dcf5;--rng50:#6f9ee0}@media (prefers-color-scheme: dark){:root{--rng80:#26395a;--rng50:#4f7fc4}}
+.rb{position:relative;width:170px;height:14px}.rb span{position:absolute;top:0;height:14px}
+.rb .r80{background:var(--rng80);border-radius:3px}.rb .r50{background:var(--rng50);border-radius:3px}
+.rb .pt{width:2px;margin-left:-1px;background:var(--fg);top:-2px;height:18px}.rb .zero{width:1px;background:var(--muted,var(--mut,#888));opacity:.6}
+.rb span.ci{top:4px;height:6px;background:#dd6b20;border-radius:2px}'
 ## love / fade vs FantasyPros ECR (D/ST and kicker pages; Andrew 2026-09-29; same rule as the Players page): % = (ECR rank - our rank) / the better of the two, flame at +25% and 3+ spots
 LOVE_PCT <- 0.25; LOVE_MIN <- 3
 love_fade <- function(ours, ecr, what = "team") {

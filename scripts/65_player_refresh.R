@@ -262,7 +262,7 @@ if (nrow(cur)) {
   if (!is.null(ij) && nrow(ij)) {
     cur <- cur |> select(-any_of(c("inj_status", "inj_out", "inj_badge", "inj_detail"))) |>
       left_join(ij |> select(gsis_id, inj_status, inj_out, inj_badge, inj_detail), by = "gsis_id")
-    cur <- cur |> mutate(include = include & !(fallback & inj_out %in% TRUE))   # no props yet and ruled out: not shown
+    cur <- cur |> mutate(include = include & !(inj_out %in% TRUE))   # Out / Doubtful / IR: not shown, even with a TD prop still up (Andrew 2026-10-01)
     message(sprintf("players: injury status for %d shown players (%s)", sum(!is.na(cur$inj_status[cur$include])),
                     paste(names(table(cur$inj_badge[cur$include & nzchar(coalesce(cur$inj_badge, ""))])), table(cur$inj_badge[cur$include & nzchar(coalesce(cur$inj_badge, ""))]), collapse = ", ")))
   }

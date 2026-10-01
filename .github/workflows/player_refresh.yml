@@ -7,6 +7,8 @@ name: Player refresh
 on:
   schedule:
     - cron: "10 14 * * 2-6"   # 10:10 ET: daily props movement
+    - cron: "10 22 * * 2-3"   # 18:10 ET: evening look (two trend points a day)
+    - cron: "10 22 * * 5-6"   # 18:10 ET: evening look (two trend points a day)
     - cron: "40 22 * * 4"   # 18:40 ET: before Thursday Night Football
     - cron: "10 13 * * 0"   # 09:10 ET: before London games
     - cron: "55 15 * * 0"   # 11:55 ET: after inactives for the 1 pm games
