@@ -8,8 +8,10 @@ name: DST refresh
 on:
   schedule:
     - cron: "0 14 * * 2-6"  # Tue-Sat 10:00 am EDT: daily line movement
+    - cron: "0 22 * * 2-3"  # Tue-Wed 6:00 pm EDT: evening look (two trend points a day)
+    - cron: "0 22 * * 5-6"  # Fri-Sat 6:00 pm EDT: evening look (two trend points a day)
     - cron: "30 22 * * 4"   # Thu 6:30 pm EDT: before Thursday Night Football
-    - cron: "0 13 * * 0"    # Sun 9:00 am EDT: before London games
+    - cron: "0 12 * * 0"    # Sun 8:00 am EDT: before London games
     - cron: "45 15 * * 0"   # Sun 11:45 am EDT: after inactives for the 1 pm games
     - cron: "35 16 * * 0"   # Sun 12:35 pm EDT: last look before 1 pm kickoffs
     - cron: "5 19 * * 0"    # Sun 3:05 pm EDT: after inactives for the 4:05 / 4:25 games
