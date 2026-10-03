@@ -465,16 +465,16 @@ TRACK_CSS <- '
 .tc-lab{font-size:11px;fill:var(--fg,#222)}'
 SITE_CSS <- paste0(SITE_CSS, TRACK_CSS)
 
-## ---- Site navigation: one headline tab bar on every page (D/ST · Kickers · Players) ----
-# active = "dst" | "k" | "players"; the "past weeks" link goes to that page's own archive
+## ---- Site navigation: one headline tab bar on every page (D/ST · Kickers · ROS · Players) ----
+# active = "dst" | "k" | "ros" | "players"; the "past weeks" link goes to that page's own archive
 site_nav <- function(active, base = Sys.getenv("SITE_BASE", "/dst-site/")) {
-  items <- c(dst = "D/ST", k = "Kickers", players = "Players")
-  href  <- c(dst = base, k = paste0(base, "k/"), players = paste0(base, "players/"))
-  arch  <- c(dst = paste0(base, "archive/"), k = paste0(base, "k/archive/"), players = paste0(base, "players/archive/"))
+  items <- c(dst = "D/ST", k = "Kickers", ros = "ROS", players = "Players")       # ROS = rest of season (49_ros_page.R)
+  href  <- c(dst = base, k = paste0(base, "k/"), ros = paste0(base, "ros/"), players = paste0(base, "players/"))
+  arch  <- c(dst = paste0(base, "archive/"), k = paste0(base, "k/archive/"), ros = NA, players = paste0(base, "players/archive/"))
   paste0('<nav class="topnav" aria-label="Pages">',
          paste0(sprintf('<a class="navtab%s" href="%s"%s>%s</a>', ifelse(names(items) == active, " on", ""), href,
                         ifelse(names(items) == active, ' aria-current="page"', ""), items), collapse = ""),
-         sprintf('<a class="navarch" href="%s">past weeks</a>', arch[[active]]), '</nav>')
+         if (!is.na(arch[[active]])) sprintf('<a class="navarch" href="%s">past weeks</a>', arch[[active]]) else "", '</nav>')
 }
 NAV_CSS <- '
 .topnav{display:flex;flex-wrap:wrap;align-items:flex-end;gap:6px;border-bottom:3px solid var(--acc,var(--accent,#2b6cb0));margin:0 0 16px;padding-top:4px}
