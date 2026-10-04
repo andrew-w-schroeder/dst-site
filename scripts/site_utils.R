@@ -471,12 +471,13 @@ TRACK_CSS <- '
 .tc-lab{font-size:11px;fill:var(--fg,#222)}'
 SITE_CSS <- paste0(SITE_CSS, TRACK_CSS)
 
-## ---- Site navigation: one headline tab bar on every page (D/ST · Kickers · ROS · Players) ----
-# active = "dst" | "k" | "ros" | "players"; the "past weeks" link goes to that page's own archive
+## ---- Site navigation: one headline tab bar on every page (D/ST · Kickers · ROS · Players · DFS) ----
+# active = "dst" | "k" | "ros" | "players" | "dfs"; the "past weeks" link goes to that page's own archive
+# DFS = DraftKings main slate (96_dfs_refresh.R, Andrew 2026-10-03)
 site_nav <- function(active, base = Sys.getenv("SITE_BASE", "/dst-site/")) {
-  items <- c(dst = "D/ST", k = "Kickers", ros = "ROS", players = "Players")       # ROS = rest of season (49_ros_page.R)
-  href  <- c(dst = base, k = paste0(base, "k/"), ros = paste0(base, "ros/"), players = paste0(base, "players/"))
-  arch  <- c(dst = paste0(base, "archive/"), k = paste0(base, "k/archive/"), ros = NA, players = paste0(base, "players/archive/"))
+  items <- c(dst = "D/ST", k = "Kickers", ros = "ROS", players = "Players", dfs = "DFS")       # ROS = rest of season (49_ros_page.R)
+  href  <- c(dst = base, k = paste0(base, "k/"), ros = paste0(base, "ros/"), players = paste0(base, "players/"), dfs = paste0(base, "dfs/"))
+  arch  <- c(dst = paste0(base, "archive/"), k = paste0(base, "k/archive/"), ros = NA, players = paste0(base, "players/archive/"), dfs = paste0(base, "dfs/archive/"))
   paste0('<nav class="topnav" aria-label="Pages">',
          paste0(sprintf('<a class="navtab%s" href="%s"%s>%s</a>', ifelse(names(items) == active, " on", ""), href,
                         ifelse(names(items) == active, ' aria-current="page"', ""), items), collapse = ""),
@@ -489,5 +490,6 @@ NAV_CSS <- '
 .topnav a.navtab:hover{filter:brightness(.95)}
 .topnav a.navtab.on{background:var(--acc,var(--accent,#2b6cb0));border-color:var(--acc,var(--accent,#2b6cb0));color:#fff}
 .topnav a.navarch{margin-left:auto;font-size:13px;padding:0 4px 8px;color:var(--acc,var(--accent,#2b6cb0))}
-@media (max-width:560px){.topnav{gap:4px}.topnav a.navtab{font-size:.98rem;padding:8px 11px}.topnav a.navarch{font-size:12px;padding:0 0 7px}}'
+@media (max-width:560px){.topnav{gap:4px}.topnav a.navtab{font-size:.98rem;padding:8px 11px}.topnav a.navarch{font-size:12px;padding:0 0 7px}}
+@media (max-width:420px){.topnav{gap:3px}.topnav a.navtab{font-size:.9rem;padding:7px 8px}}'
 SITE_CSS <- paste0(SITE_CSS, NAV_CSS)
