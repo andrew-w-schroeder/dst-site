@@ -311,16 +311,22 @@ RB_CSS <- ':root{--rng80:#c9dcf5;--rng50:#6f9ee0}@media (prefers-color-scheme: d
 .rb .r80{background:var(--rng80);border-radius:3px}.rb .r50{background:var(--rng50);border-radius:3px}
 .rb .pt{width:2px;margin-left:-1px;background:var(--fg);top:-2px;height:18px}.rb .zero{width:1px;background:var(--muted,var(--mut,#888));opacity:.6}
 .rb span.ci{top:4px;height:6px;background:#dd6b20;border-radius:2px}'
-## love / fade vs FantasyPros ECR (D/ST and kicker pages; Andrew 2026-09-29; same rule as the Players page): % = (ECR rank - our rank) / the better of the two, flame at +25% and 3+ spots
-LOVE_PCT <- 0.25; LOVE_MIN <- 3
+## Vegas flags vs FantasyPros ECR (D/ST and kicker pages; same rule as the Players page). % = (ECR rank - our rank) / the
+## better of the two ranks, and at least LOVE_MIN spots apart. Four levels (Andrew 2026-10-03; before: flame / skull at 25%):
+##   love 🔥 >= +50%   like 👍 +25% to +50%   dislike 🤔 -25% to -50%   fade ☠️ <= -50%
+LOVE_PCT <- 0.25; LOVE_STRONG <- 0.50; LOVE_MIN <- 3
+LF_SYM <- c(love = "\U0001F525", like = "\U0001F44D", dislike = "\U0001F914", fade = "\u2620\uFE0F")
+lf_level <- function(pc, gap) ifelse(is.na(pc) | is.na(gap) | abs(gap) < LOVE_MIN, "",
+  ifelse(pc >= LOVE_STRONG, "love", ifelse(pc >= LOVE_PCT, "like", ifelse(pc <= -LOVE_STRONG, "fade", ifelse(pc <= -LOVE_PCT, "dislike", "")))))
+lf_symbol <- function(lev) unname(ifelse(lev == "", "", LF_SYM[match(lev, names(LF_SYM))]))
 love_fade <- function(ours, ecr, what = "team") {
   gap <- ecr - ours; pc <- gap / pmin(ecr, ours)
-  sym <- ifelse(is.na(pc), "", ifelse(pc >= LOVE_PCT & gap >= LOVE_MIN, "\U0001F525", ifelse(pc <= -LOVE_PCT & -gap >= LOVE_MIN, "☠️", "")))
-  tip <- ifelse(sym == "", "", sprintf("%s: we rank this %s %d, FantasyPros ECR %d (%d spot%s %s, %+.0f%%)", ifelse(gap > 0, "Love", "Fade"), what,
+  lev <- lf_level(pc, gap); sym <- lf_symbol(lev)
+  tip <- ifelse(sym == "", "", sprintf("%s: we rank this %s %d, FantasyPros ECR %d (%d spot%s %s, %+.0f%%)", tools::toTitleCase(lev), what,
                                        as.integer(ours), as.integer(ecr), as.integer(abs(gap)), ifelse(abs(gap) == 1, "", "s"), ifelse(gap > 0, "higher", "lower"), 100 * pc))
   ifelse(sym == "", "", sprintf(' <span title="%s">%s</span>', tip, sym))
 }
-ECR_TIP <- "FantasyPros expert consensus rank this week (their own weekly page, else DynastyProcess's copy of it; the last update before kickoff). Hover for the average expert rank and the spread across experts. Amber as for the other ranks. \U0001F525 / \u2620\uFE0F after the name: we rank it at least 25% (and 3 spots) higher / lower than ECR (the gap divided by the better of the two ranks)."
+ECR_TIP <- "FantasyPros expert consensus rank this week (their own weekly page, else DynastyProcess's copy of it; the last update before kickoff). Hover for the average expert rank and the spread across experts. Amber as for the other ranks. After the name: \U0001F525 love = we rank it at least 50% higher than ECR, \U0001F44D like = 25–50% higher, \U0001F914 dislike = 25–50% lower, \u2620\uFE0F fade = at least 50% lower (the gap divided by the better of the two ranks; always at least 3 spots)."
 ecr_cell <- function(rk, avg, sd, html = TRUE) ifelse(is.na(rk), "", if (!html) as.character(rk) else
   tip_span(as.character(rk), ifelse(is.na(avg), "FantasyPros ECR", sprintf("FantasyPros ECR %d: average expert rank %.1f (\u00b1 %.1f)", as.integer(rk), avg, sd))))
 rank_pts <- function(rk, pts) ifelse(is.na(rk), "", ifelse(is.na(pts), as.character(rk), sprintf("%d (%.1f)", as.integer(rk), pts)))

@@ -22,7 +22,7 @@ PP_PROP_LAB <- c(pass_yds = "Pass yds", pass_td = "Pass TD", pass_int = "INT", p
 PP_TIP <- c(
   Rank = "Rank at the position in this format.",
   Tier = "Natural-break tier of the projections (optimal 1-D grouping; 1 = best). Solid line = a gap of 1.5+ points between tiers; dashed = a smaller gap.",
-  Player = "\U0001F525 = Vegas love: our Vegas-only projection ranks him at least 25% higher at his position than FantasyPros ECR (and at least 3 spots). \u2620\uFE0F = Vegas fade: at least 25% (and 3 spots) lower. The % is the gap divided by the better of the two ranks, so 2 spots matters more near the top (WR8 vs WR10 = 25%) than further down. Hover or tap a player for the exact difference.",
+  Player = "Vegas flags vs FantasyPros ECR, from our Vegas-only position rank: \U0001F525 love = at least 50% higher than ECR, \U0001F44D like = 25–50% higher, \U0001F914 dislike = 25–50% lower, \u2620\uFE0F fade = at least 50% lower (always at least 3 spots). The % is the gap divided by the better of the two ranks, so 2 spots matters more near the top (WR8 vs WR10 = 25%) than further down. Hover or tap a player for the exact difference.",
   Kickoff = "Kickoff (Eastern). \U0001F512 = game started: frozen at the last props pulled before kickoff.",
   Imp = "Team implied points from the latest pre-kickoff spread and total (median of sportsbooks, from the D/ST page's line pulls).",
   Proj = "Vegas-only projection: the sportsbook props converted to expected stats (yardage medians corrected for skew, counts via a Poisson fit to line and odds, anytime-TD price calibrated on 2023+ results) and scored in this format.",
@@ -48,9 +48,9 @@ PP_AMBER <- paste0("<p class='s legend'><span class='sw fl1'></span> <b>Light am
   "(inside QB 12 / RB 24 / WR 36 / TE 12) but that source ranks him just outside, a borderline sit (e.g. WR 37\u201354). ",
   "<span class='sw fl2'></span> <b>Dark amber</b>: that source ranks him well outside, beyond 1.5\u00d7 the start line (e.g. WR 55+). ",
   "Compared on position ranks, also on FLEX.</p>",
-  "<p class='s legend'>\U0001F525 <b>Vegas love</b>: our Vegas-only projection ranks him at least 25% higher at his position than FantasyPros ECR ",
-  "(the gap \u00f7 the better of the two ranks, and at least 3 spots: WR12 vs WR15 = 25%, WR40 vs WR50 = 25%). ",
-  "\u2620\uFE0F <b>Vegas fade</b>: at least 25% (and 3 spots) lower. Hover a player for the exact difference.</p>")
+  "<p class='s legend'>Vegas vs FantasyPros ECR (our Vegas-only position rank; the gap \u00f7 the better of the two ranks, always at least 3 spots: ",
+  "WR12 vs WR15 = 25%, WR10 vs WR15 = 50%): \U0001F525 <b>love</b> at least 50% higher \u00b7 \U0001F44D <b>like</b> 25\u201350% higher \u00b7 ",
+  "\U0001F914 <b>dislike</b> 25\u201350% lower \u00b7 \u2620\uFE0F <b>fade</b> at least 50% lower. Hover a player for the exact difference.</p>")
 ## glossary text for rows without props (back-test numbers from 79 via the bundle)
 pp_fb_note <- function(sk) {
   x <- ""
@@ -102,7 +102,12 @@ pp_player_tip <- function(p, fmt) {
 ##   flame when we rank him at least PP_LOVE_PCT higher, skull and crossbones at least that much lower,
 ##   and only when the gap is at least PP_LOVE_MIN spots (so 1–2 spot swaps at the very top are not flagged)
 PP_LOVE_PCT <- 0.25; PP_LOVE_MIN <- 3   # Andrew 2026-09-29: 3 spots minimum
-PP_FLAME <- "\U0001F525"; PP_SKULL <- "\u2620\uFE0F"
+PP_LOVE_STRONG <- 0.50                  # Andrew 2026-10-03: four levels, love 🔥 >= 50%, like 👍 25-50%, dislike 🤔 -25 to -50%, fade ☠️ <= -50%
+PP_SYM <- c(love = "\U0001F525", like = "\U0001F44D", dislike = "\U0001F914", fade = "\u2620\uFE0F")
+pp_level <- function(pc, gap) ifelse(is.na(pc) | is.na(gap) | abs(gap) < PP_LOVE_MIN, "",
+  ifelse(pc >= PP_LOVE_STRONG, "love", ifelse(pc >= PP_LOVE_PCT, "like", ifelse(pc <= -PP_LOVE_STRONG, "fade", ifelse(pc <= -PP_LOVE_PCT, "dislike", "")))))
+pp_sym <- function(lev) unname(ifelse(lev %in% names(PP_SYM), PP_SYM[match(lev, names(PP_SYM))], ""))
+PP_LF_LABEL <- c(love = "\U0001F525 love", like = "\U0001F44D like", dislike = "\U0001F914 dislike", fade = "\u2620\uFE0F fade")
 ## range bar: light = 80% of outcomes, dark = 50%, line = projection; orange band around the line = the ± (90% interval of
 ## the projection itself, Andrew 2026-09-29), drawn at least 2 px wide
 pp_range_bar <- function(q10, q25, q75, q90, pj, lo = -2, hi = 35, ci_lo = NA, ci_hi = NA) {
@@ -117,19 +122,18 @@ pp_player_cell <- function(d, prk) {
   ecr <- if ("ecr_rank" %in% names(d)) d$ecr_rank else rep(NA_real_, nrow(d))
   fb <- d$fallback %in% TRUE
   gap <- ecr - prk; pc <- gap / pmin(ecr, prk)
-  sym <- ifelse(is.na(pc) | fb, "", ifelse(pc >= PP_LOVE_PCT & gap >= PP_LOVE_MIN, paste0(" ", PP_FLAME),
-               ifelse(pc <= -PP_LOVE_PCT & -gap >= PP_LOVE_MIN, paste0(" ", PP_SKULL), "")))
+  lev <- ifelse(fb, "", pp_level(pc, gap)); sym <- ifelse(lev == "", "", paste0(" ", pp_sym(lev)))
   what <- ifelse(is.na(ecr), "No FantasyPros ECR for this player this week.",
     ifelse(gap == 0, "Same rank as ECR.",
       sprintf("%d spot%s %s than ECR (%+.0f%%)%s", as.integer(abs(gap)), ifelse(abs(gap) == 1, "", "s"),
               ifelse(gap > 0, "higher", "lower"), 100 * pc,
-              ifelse(nzchar(sym), ifelse(gap > 0, paste0(": Vegas love ", PP_FLAME), paste0(": Vegas fade ", PP_SKULL)), ""))))
+              ifelse(nzchar(sym), paste0(": Vegas ", lev, " ", pp_sym(lev)), ""))))
   st <- if ("inj_status" %in% names(d)) d$inj_status else rep(NA_character_, nrow(d))
   badge <- ifelse(is.na(st), "", sprintf(" <span class='inj%s'>(%s)</span>", ifelse(d$inj_out %in% TRUE, " out", ""), d$inj_badge))
   injl <- ifelse(is.na(st), "", paste0("\n<b>Injury: ", st, "</b>", ifelse(nzchar(coalesce(d$inj_detail, "")), paste0(" \u2014 ", pp_esc(d$inj_detail)), ""),
                                        ifelse(d$inj_out %in% TRUE, "\n\u26A0 Ruled out or unlikely to play: books usually pull his props, so this line is his last pre-report projection.", "")))
   what <- ifelse(fb, paste0("<b>No props posted yet for this game.</b> Projection = his recent history (every stat), adjusted for ",
-                            "the team's implied total and the spread; no Vegas love / fade until props post.",
+                            "the team's implied total and the spread; no Vegas flags (love / like / dislike / fade) until props post.",
                             ifelse(is.na(ecr), "", sprintf("\nHistory rank %s%d vs ECR %s%d.", d$pos, as.integer(prk), d$pos, as.integer(ecr)))), what)
   tip <- paste0("<b>", pp_esc(d$player_name), " (", d$team, ", ", d$pos, ")</b>",
                 ifelse(d$td_keep %in% TRUE, " TD-only", ""), injl,
@@ -241,10 +245,10 @@ pp_track <- function(TR, fmt) {
                               `Vegas right` = sprintf("%.1f%%", 100 * ss$vegas_right), `Pts per call` = sprintf("%+.2f", ss$pts_per_call))))
   }
   if (nrow(lf)) {
-    lf <- lf[order(lf$period, match(lf$pos, POSO), lf$flag != "love"), ]
-    out <- c(out, "<h3>Vegas love \U0001F525 / fade \u2620\uFE0F vs ECR</h3>",
+    lf <- lf[order(lf$period, match(lf$pos, POSO), match(lf$flag, names(PP_SYM))), ]
+    out <- c(out, "<h3>Vegas flags vs ECR: love \U0001F525 \u00b7 like \U0001F44D \u00b7 dislike \U0001F914 \u00b7 fade \u2620\uFE0F</h3>",
              "<p class='s'>The page's flags (position ranks \u2265 25% and \u2265 3 spots apart, both ranked within the same players). A love says \u201cstart him over the players ECR ranks between our rank and theirs\u201d; a fade says the reverse. <b>Right</b> = share of flags where he outscored (love) or was outscored by (fade) the average of those players; <b>pts per flag</b> = the average margin (+ = the flag paid off).</p>",
-             pp_simple(tibble(Period = lf$period, Position = lf$pos, Flag = ifelse(lf$flag == "love", "\U0001F525 love", "\u2620\uFE0F fade"), Flags = lf$n,
+             pp_simple(tibble(Period = lf$period, Position = lf$pos, Flag = unname(PP_LF_LABEL[lf$flag]), Flags = lf$n,
                               Right = sprintf("%.0f%%", 100 * lf$right), `Pts per flag` = sprintf("%+.2f", lf$margin), `Avg pts` = sprintf("%.1f", lf$pts),
                               `Median ranks: Vegas / ECR / finish` = sprintf("%g / %g / %g", lf$vegas_rank, lf$ecr_rank, lf$finish))))
     fc <- TR$flags_current[TR$flags_current$fmt == fmt, ]
@@ -252,7 +256,7 @@ pp_track <- function(TR, fmt) {
       fc <- fc[order(-fc$week, match(fc$pos, POSO), fc$vrank), ]
       out <- c(out, sprintf("<details><summary class='s'>This season's flags, player by player (%d)</summary>%s</details>", nrow(fc),
         pp_simple(tibble(Week = fc$week, Pos = fc$pos, Player = paste0(pp_esc(fc$player_name), " (", fc$team, ")"),
-                         Flag = ifelse(fc$flag == "love", "\U0001F525", "\u2620\uFE0F"), `Vegas rank` = fc$vrank, `ECR rank` = fc$ecr_rank,
+                         Flag = pp_sym(fc$flag), `Vegas rank` = fc$vrank, `ECR rank` = fc$ecr_rank,
                          Finish = fc$finish, Pts = sprintf("%.1f", fc$pts), `vs others` = ifelse(is.na(fc$margin), "", sprintf("%+.1f", fc$margin))), raw = "Player")))
     }
   }
