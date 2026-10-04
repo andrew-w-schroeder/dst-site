@@ -241,7 +241,8 @@ dk_parse_csv <- function(file) {
 ##   value = log(points per $1K), z-scored within the position (the strongest driver in public ownership models);
 ##   proj  = projection, z-scored (studs draw ownership on name / upside even at fair value);
 ##   form  = recent DK points, decay-weighted (x0.5 per game, so last week counts as much as all earlier games
-##           together; Andrew's hypothesis: a big game last week raises ownership), z-scored;
+##           together; Andrew's hypothesis: a big game last week raises ownership), z-scored; weight 0.20 (0.35 first;
+##           Andrew 2026-10-04: it pushed one WR to 51%);
 ##   imp   = team implied total, z-scored (popular games).
 ## The shares are scaled so each position sums to its slots on a DK classic roster (QB 1, RB 2 + FLEX share,
 ## WR 3 + FLEX share, TE 1 + FLEX share, DST 1; 900% in all). How concentrated each position is (the softmax temperature)
@@ -249,42 +250,68 @@ dk_parse_csv <- function(file) {
 ## by the number of games: at 12 games QB 9, RB 14, WR 22, TE 9, D/ST 10 (top QB ~15-20%, top RB ~30-40%). The drivers
 ## decide WHO is popular; the targets only set HOW concentrated. Weights and targets are placeholders until 98 fits
 ## them to real DK ownership (contest standings).
+## Budget: real ownership has to fit under the cap (the field's average lineup uses about $49.7K), which a per-position
+## formula alone ignores (week 4's first version implied $62.5K lineups and 51% on a $9.1K WR). So every player's
+## utility also carries -lambda x salary ($K), with lambda set per slate so that sum(ownership x salary) = $49.7K.
 OWN_BETA <- list(
-  w = c(value = 1.00, proj = 0.55, form = 0.35, imp = 0.20),
+  w = c(value = 1.00, proj = 0.55, form = 0.20, imp = 0.20),
   neff12 = c(QB = 9, RB = 14, WR = 22, TE = 9, DST = 10),
   slots = c(QB = 100, RB = 235, WR = 350, TE = 115, DST = 100),
-  cap = 0.75, fitted = FALSE)
+  avg_salary = 49700, cap = 0.60, fitted = FALSE)
 own_project <- function(d, n_games = 12, spec = OWN_BETA) {
   ## d: pos (QB / RB / WR / TE / DST), salary, proj, form (may be NA), imp (may be NA), avail (FALSE = out)
   zs <- function(x) { m <- mean(x, na.rm = TRUE); s <- sd(x, na.rm = TRUE); if (!is.finite(s) || s == 0) s <- 1; z <- (x - m) / s; z[is.na(z)] <- 0; z }
-  d <- d |> mutate(.r = row_number())
-  out <- d |> group_by(pos) |> group_modify(\(g, k) {
-    ok <- g$avail & !is.na(g$proj) & g$proj > 0 & !is.na(g$salary)
-    sh <- rep(0, nrow(g))
-    if (any(ok)) {
-      gg <- g[ok, ]
-      val <- log(pmax(gg$proj, 0.1) / (gg$salary / 1000))
-      u <- spec$w[["value"]] * zs(val) + spec$w[["proj"]] * zs(gg$proj) + spec$w[["form"]] * zs(gg$form) + spec$w[["imp"]] * zs(gg$imp)
-      target <- min((spec$neff12[[k$pos]] %||% 10) * max(n_games, 2) / 12, sum(ok) * 0.8)
+  ok <- d$avail & !is.na(d$proj) & d$proj > 0 & !is.na(d$salary)
+  u0 <- rep(NA_real_, nrow(d))
+  for (p in unique(d$pos[ok])) { i <- which(ok & d$pos == p)
+    val <- log(pmax(d$proj[i], 0.1) / (d$salary[i] / 1000))
+    u0[i] <- spec$w[["value"]] * zs(val) + spec$w[["proj"]] * zs(d$proj[i]) + spec$w[["form"]] * zs(d$form[i]) + spec$w[["imp"]] * zs(d$imp[i]) }
+  shares <- function(lambda) {
+    own <- rep(0, nrow(d))
+    for (p in unique(d$pos[ok])) { i <- which(ok & d$pos == p); u <- u0[i] - lambda * d$salary[i] / 1000
+      target <- min((spec$neff12[[p]] %||% 10) * max(n_games, 2) / 12, length(i) * 0.8)
       soft <- function(tmp) { e <- exp((u - max(u)) / tmp); e / sum(e) }
-      neff <- function(tmp) 1 / sum(soft(tmp)^2)
-      lo <- 0.02; hi <- 50                                                  # neff rises with the temperature
-      for (it in 1:60) { mid <- sqrt(lo * hi); if (neff(mid) < target) lo <- mid else hi <- mid }
-      sh[ok] <- soft(sqrt(lo * hi)) * (spec$slots[[k$pos]] %||% 100) / 100
-    }
-    ## cap one player's share and hand the excess to the rest in proportion (a few passes)
-    for (it in 1:5) { over <- sh > spec$cap; if (!any(over)) break
-      exc <- sum(sh[over] - spec$cap); sh[over] <- spec$cap; rest <- !over & sh > 0
-      if (any(rest)) sh[rest] <- sh[rest] + exc * sh[rest] / sum(sh[rest]) }
-    tibble(.r = g$.r, own = sh)
-  }) |> ungroup()
-  out$own[match(d$.r, out$.r)]
+      lo <- 0.02; hi <- 50
+      for (it in 1:50) { mid <- sqrt(lo * hi); if (1 / sum(soft(mid)^2) < target) lo <- mid else hi <- mid }
+      sh <- soft(sqrt(lo * hi)) * (spec$slots[[p]] %||% 100) / 100
+      for (it in 1:5) { over <- sh > spec$cap; if (!any(over)) break           # cap one player's share; excess to the rest
+        exc <- sum(sh[over] - spec$cap); sh[over] <- spec$cap; rest <- !over & sh > 0
+        if (any(rest)) sh[rest] <- sh[rest] + exc * sh[rest] / sum(sh[rest]) }
+      own[i] <- sh }
+    own }
+  avg_sal <- function(lambda) sum(shares(lambda) * coalesce(d$salary, 0))
+  lambda <- 0
+  if (avg_sal(0) > spec$avg_salary) { lo <- 0; hi <- 5
+    for (it in 1:40) { mid <- (lo + hi) / 2; if (avg_sal(mid) > spec$avg_salary) lo <- mid else hi <- mid }
+    lambda <- (lo + hi) / 2 }
+  own <- shares(lambda); attr(own, "lambda") <- lambda; attr(own, "avg_salary") <- sum(own * coalesce(d$salary, 0))
+  own
 }
-## decay-weighted recent DK points: weights 1, 0.5, 0.25, ... from his most recent game back (this season only)
 ## hist: gsis_id, week, dk_pts (games played this season); returns one row per player: form, last_pts, last_wk, n_g
 form_points <- function(hist, lambda = 0.5) {
   if (is.null(hist) || !nrow(hist)) return(tibble(gsis_id = character(), form = numeric(), last_pts = numeric(), last_wk = integer(), n_g = integer()))
   hist |> arrange(gsis_id, desc(week)) |> group_by(gsis_id) |>
     summarise(form = sum(dk_pts * lambda^(row_number() - 1)) / sum(lambda^(row_number() - 1)),
               last_pts = first(dk_pts), last_wk = first(week), n_g = n(), .groups = "drop")
+}
+
+## ---- 7. Game correlations (stacks) ----
+## Roles inside a team-game by projection: QB (the top QB), RB1-RB2, WR1-WR3, TE1, DST; anyone else "OTH" (no correlation).
+DFS_ROLE_N <- c(QB = 1, RB = 2, WR = 3, TE = 1)
+dfs_roles <- function(game_id, team, pos, v) {
+  d <- tibble(i = seq_along(pos), game_id, team, pos, v)
+  d <- d |> group_by(game_id, team, pos) |> mutate(k = rank(-v, ties.method = "first")) |> ungroup()
+  role <- ifelse(d$pos == "DST", "DST", ifelse(d$k <= coalesce(DFS_ROLE_N[d$pos], 0), paste0(d$pos, ifelse(d$pos %in% c("QB", "TE"), "", d$k)), "OTH"))
+  role[d$pos %in% c("QB", "TE") & d$k == 1] <- ifelse(d$pos[d$pos %in% c("QB", "TE") & d$k == 1] == "QB", "QB", "TE1")
+  role[order(d$i)]
+}
+## game environment: blowout = |spread| >= 7 (the favourite's side matters), shootout = total >= 49, else normal
+dfs_env <- function(spread, total) ifelse(!is.na(spread) & abs(spread) >= 7, "blow", ifelse(!is.na(total) & total >= 49, "shoot", "norm"))
+## correlation for a pair of players in the same game. cor: 94's table (type, a, b, env, fav, r).
+## same team: a / b sorted; opposing: a = first player's role, fav = whether HIS team is favoured
+dfs_pair_r <- function(cor, same, a, b, env, fav_a) {
+  if (a == "OTH" || b == "OTH") return(0)
+  if (same) { k <- sort(c(a, b)); x <- cor[cor$type == "same" & cor$a == k[1] & cor$b == k[2] & cor$env == env, ] } else
+    x <- cor[cor$type == "opp" & cor$a == a & cor$b == b & cor$env == env & ((is.na(cor$fav) & is.na(fav_a)) | (!is.na(cor$fav) & cor$fav %in% fav_a)), ]
+  if (nrow(x)) x$r[1] else 0
 }

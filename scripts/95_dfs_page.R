@@ -146,7 +146,7 @@ dfs_page <- function(P) {
   unm <- if (P$n_unmatched > 0) sprintf(" %d DK player%s not shown: ruled out on the injury report, or backups with no props and too little history.", P$n_unmatched, if (P$n_unmatched == 1) "" else "s") else ""
   paste0('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
   sprintf("<title>DraftKings DFS %d wk %d</title>", P$season, P$week),
-  '<style>:root{--bg:#fff;--fg:#1d1d1f;--mut:#666;--bd:#ddd;--th:#f3f3f5;--acc:#2b6cb0;--vg2:#8fd0a3;--vg1:#d3eedb;--vb1:#f6d5d5;--vb2:#eba8a8;--ow1:#fdf0d9;--ow2:#f9d9a6;--ow3:#f2b766}
+  '<style>' , DFS_SUBNAV_CSS, ':root{--bg:#fff;--fg:#1d1d1f;--mut:#666;--bd:#ddd;--th:#f3f3f5;--acc:#2b6cb0;--vg2:#8fd0a3;--vg1:#d3eedb;--vb1:#f6d5d5;--vb2:#eba8a8;--ow1:#fdf0d9;--ow2:#f9d9a6;--ow3:#f2b766}
 @media (prefers-color-scheme:dark){:root{--bg:#141416;--fg:#e8e8ea;--mut:#9a9aa0;--bd:#333;--th:#1f1f23;--acc:#7fb0ef;--vg2:#1f6b3a;--vg1:#163d25;--vb1:#4a2323;--vb2:#6b2a2a;--ow1:#3b3020;--ow2:#5a4320;--ow3:#7a5418}}
 body{background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;max-width:1800px;margin:1.5rem auto;padding:0 16px}
 h1{font-size:1.4rem;margin:.2rem 0}.s{color:var(--mut);font-size:13px}.tw{overflow-x:auto}a{color:var(--acc)}
@@ -171,7 +171,7 @@ th[data-tip]{text-decoration:underline dotted;text-underline-offset:3px;text-dec
 .sw{display:inline-block;width:12px;height:12px;border:1px solid var(--bd);vertical-align:middle;border-radius:2px}.sw.vg2{background:var(--vg2)}.sw.vb1{background:var(--vb1)}.sw.ow3{background:var(--ow3)}
 p.legend{margin:.2rem 0}
 @media (max-width:560px){#srch{width:100%}#psearch{flex:1;width:auto}}', RB_CSS, SITE_CSS, '</style></head><body>',
-  site_nav("dfs", b),
+  site_nav("dfs", b), dfs_subnav("players", b),
   sprintf("<h1>DraftKings DFS — %d week %d</h1>", P$season, P$week),
   sprintf("<p class='s'>%s %s%s Vegas-only projections in DK scoring (the Players page's props, plus the odds of DK's yardage bonuses) next to DK salaries. Hover a column header for its definition; click to sort.</p>", slate, props, unm),
   "<p class='s legend'><span class='sw vg2'></span> green = among the best fifth on the tab (Pts/$1K, Value, P(4x)); <span class='sw vb1'></span> red = worst fifth. ",
@@ -207,4 +207,91 @@ window.addEventListener("scroll",tipHide,{passive:true});
 function srt(th){const t=th.closest("table"),b=t.tBodies[0],i=[...th.parentNode.children].indexOf(th),d=th.dataset.d=th.dataset.d=="a"?"d":"a";
 const v=r=>{const s=r.children[i].innerText.replace(/[$,%+*\\u{1F512}]/gu,"").trim();const n=parseFloat(s);return isNaN(n)?s:n};
 [...b.rows].sort((x,y)=>{const a=v(x),c=v(y);return (a>c?1:a<c?-1:0)*(d=="a"?1:-1)}).forEach(r=>b.appendChild(r))}</script></body></html>')
+}
+
+## ---- Sub-navigation of the DFS section and the two lineup pages (Andrew 2026-10-04) ----
+dfs_subnav <- function(active, b) {
+  it <- c(players = "Players", cash = "Cash lineups", gpp = "Tournament lineups")
+  hr <- c(players = paste0(b, "dfs/"), cash = paste0(b, "dfs/cash/"), gpp = paste0(b, "dfs/gpp/"))
+  paste0('<div class="subnav">', paste0(sprintf('<a class="%s" href="%s">%s</a>', ifelse(names(it) == active, "on", ""), hr, it), collapse = ""), '</div>')
+}
+DFS_SUBNAV_CSS <- '.subnav{display:flex;flex-wrap:wrap;gap:6px;margin:.2rem 0 .8rem}.subnav a{padding:6px 14px;border:1px solid var(--bd);border-radius:999px;text-decoration:none;color:var(--fg);font-size:14px}
+.subnav a.on{background:var(--acc);border-color:var(--acc);color:#fff}'
+DFS_LU_CSS <- '.lus{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:14px;margin:.8rem 0}
+@media (max-width:560px){.lus{grid-template-columns:1fr}}
+.lu{border:1px solid var(--bd);border-radius:8px;overflow-x:auto}.lu h3{margin:0;padding:8px 10px;font-size:14px;background:var(--th);display:flex;justify-content:space-between;gap:8px}
+.lu table{margin:0;width:100%;font-size:12.5px}.lu td,.lu th{border:none;border-top:1px solid var(--bd);padding:3px 6px}.lu .ft{padding:6px 10px;font-size:12px;color:var(--mut);border-top:1px solid var(--bd)}
+.kpis{display:flex;flex-wrap:wrap;gap:10px;margin:.6rem 0}.kpi{border:1px solid var(--bd);border-radius:8px;padding:8px 12px;min-width:150px}.kpi b{display:block;font-size:1.3rem}
+.kpi span{font-size:12px;color:var(--mut)}a.btn{display:inline-block;padding:8px 14px;border-radius:6px;background:var(--acc);color:#fff;text-decoration:none;font-weight:600;margin:.4rem 0}
+td.sl{font-weight:700;color:var(--mut);width:1%}'
+dfs_lineup_page <- function(P, kind) {
+  b <- P$site_base; LU <- P$lu; is_gpp <- kind == "gpp"
+  title <- if (is_gpp) "Tournament lineups" else "Cash lineups"
+  head <- paste0('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
+    sprintf("<title>DK %s %d wk %d</title>", title, P$season, P$week),
+    '<style>:root{--bg:#fff;--fg:#1d1d1f;--mut:#666;--bd:#ddd;--th:#f3f3f5;--acc:#2b6cb0}
+@media (prefers-color-scheme:dark){:root{--bg:#141416;--fg:#e8e8ea;--mut:#9a9aa0;--bd:#333;--th:#1f1f23;--acc:#7fb0ef}}
+body{background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;max-width:1500px;margin:1.5rem auto;padding:0 16px}
+h1{font-size:1.4rem;margin:.2rem 0}h2{font-size:1.1rem;margin:1.4rem 0 .4rem}.s{color:var(--mut);font-size:13px}a{color:var(--acc)}.tw{overflow-x:auto}
+table{border-collapse:collapse;font-size:13px;white-space:nowrap}th,td{border:1px solid var(--bd);padding:3px 7px;text-align:right}th{background:var(--th)}td.l,th.l{text-align:left}',
+    DFS_SUBNAV_CSS, DFS_LU_CSS, SITE_CSS, '</style></head><body>', site_nav("dfs", b), dfs_subnav(kind, b),
+    sprintf("<h1>DraftKings %s — %d week %d</h1>", title, P$season, P$week))
+  if (is.null(LU) || !nrow(LU[[kind]])) return(paste0(head, "<p>No lineups yet: they're built once DK salaries for the main slate are in (see the Players tab).</p></body></html>"))
+  L <- LU[[kind]]; nl <- n_distinct(L$lineup)
+  when <- paste0(if (isTRUE(LU$frozen)) "<b>Frozen at the slate's first kickoff</b> (built " else "Built ", pp_et(LU$built, "%a %b %d %I:%M %p"), " ET",
+                 if (isTRUE(LU$frozen)) ")" else "; rebuilt at every refresh until the first kickoff, then frozen", ".")
+  csv <- sprintf("DK_%s_lineups_%d_wk%02d.csv", if (is_gpp) "tournament" else "cash", P$season, P$week)
+  kp <- function(v, l) sprintf('<div class="kpi"><b>%s</b><span>%s</span></div>', v, l)
+  kpis <- if (is_gpp) paste0(kp(dfs_pct(LU$any_top, 1), "P(at least one of the 10 in the top 1%)"),
+                             kp(sprintf("%.2f", sum(distinct(L, lineup, p_top)$p_top)), "expected top-1% lineups (of 10)"),
+                             kp(sprintf("%.0f", LU$lines$top_med), "top-1% line, median DK points")) else
+    paste0(kp(sprintf("%.1f of %d", LU$n_cash, nl), "expected lineups that cash"),
+           kp(dfs_pct(mean(distinct(L, lineup, p_cash)$p_cash), 0), "average P(cash)"),
+           kp(sprintf("%.0f", LU$lines$cash_med), "cash line, median DK points"))
+  how <- if (is_gpp) paste0("Each lineup's P(top 1%) = the share of ", format(LU$S, big.mark = ","), " simulated weeks in which it beats the top-1% score of a simulated field of ",
+      format(LU$F, big.mark = ","), " lineups drawn from projected ownership. The 10 were picked one at a time, each adding the most simulated weeks in which at least one of them reaches the top 1% ",
+      "(so they win in different weeks), each differing by at least 3 players, no player in more than 6. Candidates came from ", format(LU$n_cand, big.mark = ","),
+      " optimised lineups under different stack rules (none; QB + 1 or 2 pass catchers; + a bring-back; RB + his D/ST).") else
+    paste0("Each lineup's P(cash) = the share of ", format(LU$S, big.mark = ","), " simulated weeks in which it beats the field's 55th percentile (double-ups and 50/50s pay roughly the top 45%). ",
+      "The 10 highest, each differing by at least 3 players.")
+  cards <- vapply(sort(unique(L$lineup)), \(k) { x <- L[L$lineup == k, ]
+    rows <- paste0(sprintf("<tr><td class='sl l'>%s</td><td class='l'>%s</td><td class='l'>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
+      x$slot, pp_esc(x$name), paste(x$team, ifelse(is.na(x$opp), "", paste0("v ", x$opp))), dfs_money(x$player_salary), pp_f(x$player_proj, 1), dfs_pct(x$player_own, 0)), collapse = "")
+    sprintf('<div class="lu"><h3><span>#%d</span><span>%s</span></h3><table><thead><tr><th class="l">Slot</th><th class="l">Player</th><th class="l">Team</th><th>Salary</th><th>Proj</th><th>Own</th></tr></thead><tbody>%s</tbody></table><div class="ft">%s · proj %.1f · 90th pct %.1f · own %.0f%% total · %s</div></div>',
+      k, if (is_gpp) sprintf("P(top 1%%) %s · P(cash) %s", dfs_pct(x$p_top[1], 1), dfs_pct(x$p_cash[1])) else sprintf("P(cash) %s · P(top 1%%) %s", dfs_pct(x$p_cash[1]), dfs_pct(x$p_top[1], 1)),
+      rows, dfs_money(x$salary[1]), x$proj[1], x$q90[1], 100 * x$own_sum[1], pp_esc(x$stack[1])) }, "")
+  ex <- L |> count(name, pos, team, wt = NULL, name = "n") |> arrange(desc(n), name)
+  ex_tab <- function(x) paste0('<div class="tw"><table><thead><tr><th class="l">Player</th><th class="l">Pos</th><th class="l">Team</th><th>Lineups</th></tr></thead><tbody>',
+    paste0(sprintf("<tr><td class='l'>%s</td><td class='l'>%s</td><td class='l'>%s</td><td>%d of %d</td></tr>", pp_esc(x$name), x$pos, x$team, x$n, nl), collapse = ""), "</tbody></table></div>")
+  ex_html <- paste0(ex_tab(ex[ex$n >= 2, ]), if (any(ex$n < 2)) sprintf("<details><summary class='s'>%d players in one lineup</summary>%s</details>", sum(ex$n < 2), ex_tab(ex[ex$n < 2, ])) else "")
+  st_html <- ""
+  if (is_gpp && !is.null(LU$stacks) && nrow(LU$stacks)) { st <- head(LU$stacks, 14)
+    st_html <- paste0("<h2>Which stacks the simulations favour this week</h2><p class='s'>Every candidate lineup grouped by the stack it ended up with. ",
+      "Best = its best lineup's P(top 1%); top-10 average = the mean over its 10 best (a fairer comparison for groups with many candidates).</p>",
+      '<div class="tw"><table><thead><tr><th class="l">Stack</th><th>Candidates</th><th>Best P(top 1%)</th><th>Top-10 average</th><th>Best P(cash)</th></tr></thead><tbody>',
+      paste0(sprintf("<tr><td class='l'>%s</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td></tr>", pp_esc(st$stack), st$n, dfs_pct(st$best_top, 1), dfs_pct(st$mean_top10, 1), dfs_pct(st$best_cash)), collapse = ""),
+      "</tbody></table></div>") }
+  cor_html <- ""
+  if (is_gpp && !is.null(P$spec$cor)) { ct <- P$spec$cor
+    g <- function(type, a, b, env, fav = NA) { x <- ct[ct$type == type & ct$a == a & ct$b == b & ct$env == env & ((is.na(ct$fav) & is.na(fav)) | ct$fav %in% fav), ]; if (nrow(x)) c(x$r[1], x$n[1]) else c(NA, NA) }
+    pr <- list(c("QB + his WR1", "same", "QB", "WR1", "norm"), c("QB + his WR2", "same", "QB", "WR2", "norm"), c("QB + his TE1", "same", "QB", "TE1", "norm"),
+               c("WR1 + WR2, same team", "same", "WR1", "WR2", "norm"), c("RB1 + RB2, same team", "same", "RB1", "RB2", "norm"),
+               c("RB1 + his D/ST", "same", "DST", "RB1", "norm"), c("RB1 + his D/ST, blowout", "same", "DST", "RB1", "blow"),
+               c("D/ST + the QB it faces", "opp", "DST", "QB", "norm"), c("QB + opposing WR1 (bring-back)", "opp", "QB", "WR1", "norm"),
+               c("WR1 + opposing WR1, normal game", "opp", "WR1", "WR1", "norm"), c("WR1 + opposing WR1, shootout (total 49+)", "opp", "WR1", "WR1", "shoot"),
+               c("Favourite's RB1 + underdog's WR1, blowout (7+)", "opp", "RB1", "WR1", "blow", TRUE))
+    rr <- vapply(pr, \(z) g(z[2], z[3], z[4], z[5], if (length(z) > 5) as.logical(z[6]) else NA), numeric(2))
+    cor_html <- paste0("<h2>What 2023+ results say about stacks</h2><p class='s'>Correlation of how far each player beat or missed his projection (normal scores), for players in the same game; ",
+      "these drive the simulation. + = they tend to hit together. Blowout / shootout values are shrunk toward the all-games value.</p>",
+      '<div class="tw"><table><thead><tr><th class="l">Pair</th><th>Correlation</th><th>Team-games</th></tr></thead><tbody>',
+      paste0(sprintf("<tr><td class='l'>%s</td><td>%s</td><td>%s</td></tr>", vapply(pr, `[`, "", 1), ifelse(is.na(rr[1, ]), "—", sprintf("%+.2f", rr[1, ])),
+                     ifelse(is.na(rr[2, ]), "", format(rr[2, ], big.mark = ","))), collapse = ""), "</tbody></table></div>") }
+  paste0(head,
+    sprintf("<p class='s'>%s %s</p>", when, how),
+    sprintf('<a class="btn" href="%s" download>Download the %d lineups for DraftKings (CSV)</a> <span class="s">DK: Lineups → Upload lineups → this file (player IDs in QB, RB, RB, WR, WR, WR, TE, FLEX, DST order).</span>', csv, nl),
+    '<div class="kpis">', kpis, '</div>', '<div class="lus">', paste0(cards, collapse = ""), '</div>',
+    "<h2>Exposure across the 10</h2>", ex_html, st_html, cor_html,
+    "<p class='s'>Caveats: the simulation treats our projections as the true averages, so the odds are optimistic in absolute terms; ",
+    "they rank lineups well against each other. Projected ownership (which sets the field) is still a placeholder formula until it is fitted to real DK contests.</p>",
+    "</body></html>")
 }

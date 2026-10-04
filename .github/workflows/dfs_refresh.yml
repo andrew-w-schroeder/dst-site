@@ -9,7 +9,7 @@ on:
     types: [completed]
   push:
     branches: [main]
-    paths: ["output/dfs/**", "scripts/95_dfs_page.R", "scripts/96_dfs_refresh.R", "scripts/dfs_utils.R", "data/dfs/DKSalaries*.csv", "data/dfs/dk_salaries_*.csv"]
+    paths: ["output/dfs/**", "scripts/95_dfs_page.R", "scripts/96_dfs_refresh.R", "scripts/dfs_utils.R", "scripts/dfs_opt.R", "data/dfs/DKSalaries*.csv", "data/dfs/dk_salaries_*.csv"]
   workflow_dispatch:
 
 permissions:
@@ -36,7 +36,7 @@ jobs:
         with:
           use-public-rspm: true
       - name: Install R packages
-        run: Rscript -e 'install.packages(c("dplyr", "tidyr", "purrr", "tibble", "jsonlite", "curl"))'
+        run: Rscript -e 'install.packages(c("dplyr", "tidyr", "purrr", "tibble", "jsonlite", "curl", "lpSolve"))'
       - name: DK salaries and DFS page
         env:
           FF_PROJ_DIR: ${{ github.workspace }}

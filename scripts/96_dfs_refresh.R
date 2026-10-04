@@ -164,7 +164,7 @@ if (!is.null(sal) && nrow(sal)) {
   sk_ <- sk_ |> left_join(mp, by = c("game_id", "name" = "player"))
   sd_ <- sal |> filter(dk_pos == "DST") |> mutate(gsis_id = paste0("DST_", team))
   sj <- bind_rows(sk_, sd_) |> filter(!is.na(gsis_id)) |> distinct(gsis_id, .keep_all = TRUE)
-  rows <- rows |> left_join(sj |> select(gsis_id, salary, dk_status = status, dk_pos), by = "gsis_id")
+  rows <- rows |> left_join(sj |> select(gsis_id, salary, dk_status = status, dk_pos, dk_id), by = "gsis_id")
   ## DK players with a real salary but no projection row (backups without props or history)
   n_unm <- sum(!(sj$gsis_id %in% rows$gsis_id)) + sum(is.na(sk_$gsis_id))
   rows <- rows |> filter(!is.na(salary))                               # the slate: only players DK lists
@@ -200,6 +200,9 @@ rows <- rows |> left_join(fm, by = "gsis_id")
 avail <- !(rows$inj_out %in% TRUE) & !(rows$dk_status %in% c("O", "OUT", "IR", "Out"))
 rows$own <- if (any(!is.na(rows$salary))) own_project(rows |> transmute(pos, salary, proj = dk_proj, form,
               imp = ifelse(pos == "DST", -implied, implied), avail = avail), n_games = max(length(slate_games), 2)) else NA_real_
+rows$own <- as.numeric(rows$own)
+if (any(!is.na(rows$salary))) message(sprintf("dfs: projected ownership implies a $%s average lineup (target $49,700)",
+  format(round(sum(rows$own * coalesce(rows$salary, 0), na.rm = TRUE)), big.mark = ",")))
 rows$lev <- rows$p_4x - rows$own
 rows <- rows |> mutate(player_name = ifelse(pos == "DST", paste(coalesce(unname(DST_NAMES[team]), team), "D/ST"), player_name))
 ## the Vegas-only D/ST tab: same teams, salaries and ownership (ownership from the model tab), its own projection, odds,
@@ -219,14 +222,42 @@ if ("dk_proj_vegas" %in% names(rows) && any(!is.na(rows$dk_proj_vegas))) {
   rows <- bind_rows(rows, dv)
 }
 
+## ---- 5b. Lineup optimizer: 10 cash lineups and 10 tournament lineups (dfs_opt.R; Andrew 2026-10-04) ----
+## Re-optimised at every refresh until the slate's first kickoff, then frozen (data/dfs/lineups_<s>_wk<ww>.rds), so the
+## lineups you entered stay on the page. NO_OPT=1 skips it; OPT_S / OPT_F / OPT_CAND change the simulation sizes.
+OPT_RDS <- file.path(PROJ_DIR, sprintf("data/dfs/lineups_%d_wk%02d.rds", SEASON, WEEK)); LU <- NULL
+slate_ko <- if (length(slate_games)) min(games$ko[games$game_id %in% slate_games]) else as.POSIXct(NA)
+if (file.exists(OPT_RDS) && !is.na(slate_ko) && NOW >= slate_ko) { LU <- readRDS(OPT_RDS); LU$frozen <- TRUE
+  message("dfs: slate started: lineups frozen from ", format(LU$built, tz = "America/New_York", usetz = TRUE))
+} else if (!nzchar(Sys.getenv("NO_OPT")) && !is.null(sal) && nrow(sal) && requireNamespace("lpSolve", quietly = TRUE) && !is.null(S$qgrid)) tryCatch({
+  source(file.path(PROJ_DIR, "scripts/dfs_opt.R"))
+  if (nzchar(Sys.getenv("OPT_S"))) OPT$S <- as.integer(Sys.getenv("OPT_S"))
+  if (nzchar(Sys.getenv("OPT_F"))) OPT$F <- as.integer(Sys.getenv("OPT_F"))
+  if (nzchar(Sys.getenv("OPT_CAND"))) { OPT$n_gpp_cand <- as.integer(Sys.getenv("OPT_CAND")); OPT$n_cash_cand <- round(OPT$n_gpp_cand / 3) }
+  ## game environment from the same lines: blowout |spread| >= 7 (favourite's side), shootout total >= 49
+  tot <- imp |> group_by(game_id) |> summarise(total = sum(implied), .groups = "drop")
+  env_tab <- imp |> left_join(tot, by = "game_id") |> transmute(game_id, team, env = dfs_env(spread, total), fav = spread > 0)
+  if (is.null(S$cor)) message("dfs: no game correlations in this week's DFS fit (rerun 94): players simulated independently")
+  R <- dfs_optimize(rows |> filter(pos != "DSTV"), S, dst_b$unc, env_tab, OPT, say = message)
+  LU <- c(R, list(built = NOW, frozen = FALSE)); saveRDS(LU, OPT_RDS)
+}, error = function(e) message("dfs: optimizer failed — ", conditionMessage(e)))
+if (!is.null(LU)) {
+  dir.create(file.path(SITE_DIR, "dfs", "cash"), recursive = TRUE, showWarnings = FALSE); dir.create(file.path(SITE_DIR, "dfs", "gpp"), recursive = TRUE, showWarnings = FALSE)
+  if (!exists("dk_upload_csv")) source(file.path(PROJ_DIR, "scripts/dfs_opt.R"))
+  dk_upload_csv(LU$cash, file.path(SITE_DIR, "dfs", "cash", sprintf("DK_cash_lineups_%d_wk%02d.csv", SEASON, WEEK)))
+  dk_upload_csv(LU$gpp, file.path(SITE_DIR, "dfs", "gpp", sprintf("DK_tournament_lineups_%d_wk%02d.csv", SEASON, WEEK)))
+}
+
 ## ---- 6. Page + table ----
 slate <- if (length(slate_games)) games |> filter(game_id %in% slate_games) |> arrange(ko) |> transmute(game_id, label = paste0(away_team, "@", home_team), ko) else NULL
 last_pull <- if (nrow(cur) && "t" %in% names(cur) && any(!is.na(cur$t))) max(cur$t, na.rm = TRUE) else as.POSIXct(NA)
 P <- list(season = SEASON, week = WEEK, now = NOW, rows = rows, spec = S, slate = slate, site_base = SITE_BASE,
           sal_time = if (!is.null(sal) && nrow(sal)) utc(max(sal$pulled_at)) else as.POSIXct(NA), sal_src = sal_src,
           last_pull = last_pull, n_locked = if (!is.null(slate)) sum(slate$ko <= NOW) else 0L, n_slate = if (!is.null(slate)) nrow(slate) else nrow(games),
-          n_unmatched = n_unm, dk_err = if (is.null(sal)) dk_err else NA_character_)
+          n_unmatched = n_unm, dk_err = if (is.null(sal)) dk_err else NA_character_, lu = LU)
 html <- dfs_page(P)
+for (kind in c("cash", "gpp")) { dir.create(file.path(SITE_DIR, "dfs", kind), recursive = TRUE, showWarnings = FALSE)
+  writeLines(dfs_lineup_page(P, kind), file.path(SITE_DIR, "dfs", kind, "index.html")) }
 dir.create(file.path(SITE_DIR, "dfs", "archive"), recursive = TRUE, showWarnings = FALSE)
 arch_name <- sprintf("dfs_%d_wk%02d.html", SEASON, WEEK)
 writeLines(html, file.path(SITE_DIR, "dfs", "index.html")); writeLines(html, file.path(SITE_DIR, "dfs", "archive", arch_name))
