@@ -227,8 +227,9 @@ if ("dk_proj_vegas" %in% names(rows) && any(!is.na(rows$dk_proj_vegas))) {
 ## lineups you entered stay on the page. NO_OPT=1 skips it; OPT_S / OPT_F / OPT_CAND change the simulation sizes.
 OPT_RDS <- file.path(PROJ_DIR, sprintf("data/dfs/lineups_%d_wk%02d.rds", SEASON, WEEK)); LU <- NULL
 slate_ko <- if (length(slate_games)) min(games$ko[games$game_id %in% slate_games]) else as.POSIXct(NA)
-if (file.exists(OPT_RDS) && !is.na(slate_ko) && NOW >= slate_ko) { LU <- readRDS(OPT_RDS); LU$frozen <- TRUE
-  message("dfs: slate started: lineups frozen from ", format(LU$built, tz = "America/New_York", usetz = TRUE))
+started <- !is.na(slate_ko) && NOW >= slate_ko
+if (file.exists(OPT_RDS) && (started || nzchar(Sys.getenv("NO_OPT")))) { LU <- readRDS(OPT_RDS); LU$frozen <- started
+  message("dfs: ", if (started) "slate started: lineups frozen" else "NO_OPT: stored lineups", " from ", format(LU$built, tz = "America/New_York", usetz = TRUE))
 } else if (!nzchar(Sys.getenv("NO_OPT")) && !is.null(sal) && nrow(sal) && requireNamespace("lpSolve", quietly = TRUE) && !is.null(S$qgrid)) tryCatch({
   source(file.path(PROJ_DIR, "scripts/dfs_opt.R"))
   if (nzchar(Sys.getenv("OPT_S"))) OPT$S <- as.integer(Sys.getenv("OPT_S"))

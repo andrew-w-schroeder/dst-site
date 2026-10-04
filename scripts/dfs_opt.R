@@ -16,8 +16,11 @@
 ##    for nothing), differing by 3+ players and no player in more than 6 of the 10.
 suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(purrr) })
 
-OPT <- list(S = 4000, F = 4000, cash_q = 0.55, top_q = 0.99, n_gpp_cand = 900, n_cash_cand = 300, n_lineups = 10,
-            min_diff = 3, max_expo_gpp = 6, field_stack = 0.60, cap = 50000, field_min_sal = 48500, seed = 7)
+## Tournament target (Andrew 2026-10-04, NFL $700K Play-Action: $3, 277,447 entries, 20-entry max, $50K to 1st): 20 lineups
+## maximising P(at least one finishes in the top 0.01%, about the top 28 places), which is where the prize money is.
+OPT <- list(S = 10000, F = 20000, cash_q = 0.55, top_q = 0.99, n_gpp_cand = 2400, n_cash_cand = 300, n_lineups = 10,
+            gpp_n = 20, gpp_top = 1e-4, contest_n = 277447, min_diff = 3, max_expo_frac = 0.5, smooth = 2.5,
+            field_stack = 0.60, cap = 50000, field_min_sal = 48500, seed = 7)
 
 ## ---- quantile functions ----
 ## player rows: matrix of quantiles on a fine u grid, from 94's quantile grid (skill) or the D/ST residual kernel
@@ -158,14 +161,17 @@ pick_cash <- function(pc, Lc, n, min_diff) { o <- order(-pc); keep <- integer()
   for (k in o) { if (length(keep) >= n) break
     if (all(vapply(keep, \(j) 9 - length(intersect(Lc[k, ], Lc[j, ])) >= min_diff, TRUE))) keep <- c(keep, k) }
   keep }
-pick_gpp <- function(H, Lc, n, min_diff, max_expo) { keep <- integer(); covered <- rep(FALSE, ncol(H)); expo <- integer()
+## tournament: greedy on P(at least one of the portfolio in the elite band). h = each candidate's (smoothed) chance of
+## clearing the elite line in every simulation; a candidate's gain = sum over sims of P(none so far) x its h, divided by
+## (1 + its expected duplicates in the contest: an elite score shared with copies of the same lineup splits the prize)
+pick_gpp <- function(h, Lc, n, min_diff, max_expo, dup = rep(0, nrow(h))) { keep <- integer(); miss <- rep(1, ncol(h)); expo <- integer()
   for (it in 1:n) {
-    ok <- vapply(seq_len(nrow(H)), \(k) { if (k %in% keep) return(FALSE)
+    ok <- vapply(seq_len(nrow(h)), \(k) { if (k %in% keep) return(FALSE)
       if (length(keep) && !all(vapply(keep, \(j) 9 - length(intersect(Lc[k, ], Lc[j, ])) >= min_diff, TRUE))) return(FALSE)
       if (length(expo) && any(Lc[k, ] %in% as.integer(names(expo)[expo >= max_expo]))) return(FALSE); TRUE }, TRUE)
     if (!any(ok)) break
-    gain <- rowSums(H[, !covered, drop = FALSE]); gain[!ok] <- -1
-    k <- which.max(gain); keep <- c(keep, k); covered <- covered | H[k, ]
+    gain <- drop(h %*% miss) / (1 + dup); gain[!ok] <- -1
+    k <- which.max(gain); keep <- c(keep, k); miss <- miss * (1 - h[k, ])
     tb <- table(c(as.integer(unlist(lapply(keep, \(j) Lc[j, ])))))
     expo <- setNames(as.integer(tb), names(tb)) }
   keep }
@@ -173,7 +179,7 @@ pick_gpp <- function(H, Lc, n, min_diff, max_expo) { keep <- integer(); covered 
 ## ---- main ----
 ## rows: 96's slate table (pos QB/RB/WR/TE/DST, salary, dk_proj, own, team, opp, game_id, ko, dk_id, implied, spread ...)
 dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = message) {
-  t0 <- Sys.time()
+  t0 <- Sys.time(); el <- function() as.numeric(difftime(Sys.time(), t0, units = "secs"))
   P <- rows |> filter(pos %in% c("QB", "RB", "WR", "TE", "DST"), !is.na(salary), !is.na(dk_proj), dk_proj > 0,
                       !(inj_out %in% TRUE), !(dk_status %in% c("O", "OUT", "IR", "Out"))) |>
     mutate(own = coalesce(own, 0)) |> arrange(game_id, team, pos, desc(dk_proj))
@@ -185,57 +191,86 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
   Q[sk, ] <- q_skill(P$dk_proj[sk], P$pos[sk], S_spec$qgrid)
   if (any(!sk)) Q[!sk, ] <- q_dst(P$dk_proj[!sk], dst_unc)
   X <- sim_outcomes(P, Q, S_spec$cor, opt$S, opt$seed)
-  say(sprintf("opt: %d players, %d simulations (%.0f s)", nrow(P), opt$S, as.numeric(difftime(Sys.time(), t0, units = "secs"))))
-  ## field and lines
-  FL <- sim_field(P, opt$F, opt, say = say); FS <- lineup_scores(FL, X)
-  cash_line <- apply(FS, 2, quantile, opt$cash_q, names = FALSE); top_line <- apply(FS, 2, quantile, opt$top_q, names = FALSE)
-  field_own <- tabulate(FL, nrow(P)) / nrow(FL)
-  say(sprintf("opt: field of %d lineups; cash line median %.1f, top-1%% line median %.1f (%.0f s)", nrow(FL), median(cash_line), median(top_line),
-              as.numeric(difftime(Sys.time(), t0, units = "secs"))))
-  ## candidates
-  base <- lp_base(P, opt$cap); cands <- list(); typ <- c()
-  set.seed(opt$seed + 1)
+  say(sprintf("opt: %d players, %d simulations (%.0f s)", nrow(P), opt$S, el()))
+  ## the field; per simulation: cash line (55th pct), top 1%, top 0.1%, and the elite line = the k-th best field score
+  ## with k = F x gpp_top (F = 20,000, top 0.01%: the 2nd best), i.e. "beats all but 0.01% of the field"
+  FL <- sim_field(P, opt$F, opt, say = say); nF <- nrow(FL)
+  kk <- c(cash = round(opt$cash_q * nF), top = round(opt$top_q * nF), top01 = round(0.999 * nF), elite = nF - max(1, round(nF * opt$gpp_top)) + 1)
+  lines <- matrix(NA_real_, opt$S, 4, dimnames = list(NULL, names(kk)))
+  for (ch in split(seq_len(opt$S), ceiling(seq_len(opt$S) / 500))) {
+    FS <- matrix(0, nF, length(ch)); for (j in 1:9) FS <- FS + X[FL[, j], ch, drop = FALSE]
+    lines[ch, ] <- t(apply(FS, 2, \(v) sort(v, partial = kk)[kk])) }
+  field_own <- tabulate(FL, nrow(P)) / nF
+  fkey <- apply(t(apply(FL, 1, sort)), 1, paste, collapse = "-")
+  say(sprintf("opt: field of %s lineups; median lines: cash %.1f, top 1%% %.1f, top 0.1%% %.1f, top %s%% %.1f (%.0f s)", format(nF, big.mark = ","),
+              median(lines[, "cash"]), median(lines[, "top"]), median(lines[, "top01"]), format(100 * opt$gpp_top), median(lines[, "elite"]), el()))
+  ## candidates. Tournament: lineups that are best in one simulated week (with and without an ownership discount), and
+  ## projection / ceiling lineups that pay for ownership (game theory: a player the field owns at 40% lifts 40% of the
+  ## field when he hits, so he barely moves you up; the elite target already rewards being different, this widens the
+  ## search toward low-owned builds). Cash: projection + noise with a small variance penalty.
+  base <- lp_base(P, opt$cap); cands <- list(); typ <- c(); set.seed(opt$seed + 1)
+  q90 <- Q[, which.min(abs(OPT_U - 0.9))]; q25 <- Q[, which.min(abs(OPT_U - 0.25))]
   for (it in seq_len(opt$n_gpp_cand)) {
-    st_n <- names(STACKS)[(it - 1) %% length(STACKS) + 1]
-    w <- if (it %% 2 == 1) X[, sample.int(opt$S, 1)] else P$dk_proj * exp(rnorm(nrow(P), 0, 0.25)) - 8 * P$own * P$dk_proj / 10
+    st_n <- names(STACKS)[(it - 1) %% length(STACKS) + 1]; v <- (it - 1) %% 4
+    w <- switch(v + 1, X[, sample.int(opt$S, 1)],
+                X[, sample.int(opt$S, 1)] * (1 - P$own)^runif(1, 0.3, 1.2),
+                P$dk_proj * exp(rnorm(nrow(P), 0, 0.30)) * (1 - P$own)^runif(1, 0.5, 2),
+                q90 * exp(rnorm(nrow(P), 0, 0.20)) * (1 - P$own)^runif(1, 0.5, 2))
     l <- lp_solve_lineup(w, base, lp_stack(P, STACKS[[st_n]])); if (!is.null(l)) { cands[[length(cands) + 1]] <- l; typ <- c(typ, paste0("gpp_", st_n)) } }
   for (it in seq_len(opt$n_cash_cand)) {
     st_n <- c("none", "qb1")[(it - 1) %% 2 + 1]
-    w <- P$dk_proj + rnorm(nrow(P), 0, 0.8) - (Q[, which.min(abs(OPT_U - 0.9))] - Q[, which.min(abs(OPT_U - 0.25))]) * runif(1, 0, 0.15)
+    w <- P$dk_proj + rnorm(nrow(P), 0, 0.8) - (q90 - q25) * runif(1, 0, 0.15)
     l <- lp_solve_lineup(w, base, lp_stack(P, STACKS[[st_n]])); if (!is.null(l)) { cands[[length(cands) + 1]] <- l; typ <- c(typ, paste0("cash_", st_n)) } }
   Lc <- t(vapply(cands, \(l) sort(l), integer(9)))
-  ## at least two different games (DK rule); drop duplicates
-  ok <- apply(Lc, 1, \(l) length(unique(P$game_id[l])) >= 2) & !duplicated(Lc)
+  ok <- apply(Lc, 1, \(l) length(unique(P$game_id[l])) >= 2) & !duplicated(Lc)        # DK: players from 2+ games
   Lc <- Lc[ok, , drop = FALSE]; typ <- typ[ok]
-  SC <- lineup_scores(Lc, X)
-  Hc <- sweep(SC, 2, cash_line, ">="); Ht <- sweep(SC, 2, top_line, ">=")
-  p_cash <- rowMeans(Hc); p_top <- rowMeans(Ht)
-  say(sprintf("opt: %d distinct candidates (%.0f s)", nrow(Lc), as.numeric(difftime(Sys.time(), t0, units = "secs"))))
+  say(sprintf("opt: %d distinct candidates (%.0f s)", nrow(Lc), el()))
+  ## odds per candidate (scores in chunks of simulations)
+  nC <- nrow(Lc); p_cash <- p_top <- p_top01 <- p_elite <- mean_sc <- q90_sc <- numeric(nC)
+  helite <- matrix(0, nC, opt$S); htop <- matrix(FALSE, nC, opt$S); hcash <- matrix(FALSE, nC, opt$S)
+  for (ch in split(seq_len(opt$S), ceiling(seq_len(opt$S) / 1000))) {
+    SC <- lineup_scores(Lc, X[, ch, drop = FALSE])
+    hcash[, ch] <- sweep(SC, 2, lines[ch, "cash"], ">"); htop[, ch] <- sweep(SC, 2, lines[ch, "top"], ">")
+    p_top01 <- p_top01 + rowSums(sweep(SC, 2, lines[ch, "top01"], ">"))
+    p_elite <- p_elite + rowSums(sweep(SC, 2, lines[ch, "elite"], ">"))
+    helite[, ch] <- plogis(sweep(SC, 2, lines[ch, "elite"], "-") / opt$smooth)
+    mean_sc <- mean_sc + rowSums(SC) }
+  p_cash <- rowMeans(hcash); p_top <- rowMeans(htop); p_top01 <- p_top01 / opt$S; p_elite <- p_elite / opt$S; mean_sc <- mean_sc / opt$S
+  q90_sc <- apply(lineup_scores(Lc, X[, seq_len(min(opt$S, 4000)), drop = FALSE]), 1, quantile, 0.9, names = FALSE)
+  ## expected copies of each lineup among the contest's other entries (exact matches in the simulated field, scaled up)
+  dup <- tabulate(match(fkey, apply(Lc, 1, paste, collapse = "-")), nC) / nF * opt$contest_n
+  say(sprintf("opt: odds computed (%.0f s)", el()))
   kc <- pick_cash(p_cash, Lc, opt$n_lineups, opt$min_diff)
-  kg <- pick_gpp(Ht, Lc, opt$n_lineups, opt$min_diff, opt$max_expo_gpp)
-  lab <- vapply(seq_len(nrow(Lc)), \(k) stack_label(Lc[k, ], P), "")
+  kg <- pick_gpp(helite, Lc, opt$gpp_n, opt$min_diff, ceiling(opt$max_expo_frac * opt$gpp_n), dup)
+  lab <- vapply(seq_len(nC), \(k) stack_label(Lc[k, ], P), "")
   mk <- function(keep, kind) {
     if (!length(keep)) return(tibble())
     bind_rows(lapply(seq_along(keep), \(r) { k <- keep[r]; sl <- dk_slots(Lc[k, ], P)
       tibble(kind = kind, lineup = r, slot = c("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"), idx = sl,
-             p_cash = p_cash[k], p_top = p_top[k], proj = sum(P$dk_proj[sl]), salary = sum(P$salary[sl]),
-             own_sum = sum(P$own[sl]), mean_score = mean(SC[k, ]), q90 = quantile(SC[k, ], 0.9, names = FALSE), stack = lab[k]) })) |>
+             p_cash = p_cash[k], p_top = p_top[k], p_top01 = p_top01[k], p_elite = p_elite[k], dup = dup[k],
+             proj = sum(P$dk_proj[sl]), salary = sum(P$salary[sl]), own_sum = sum(P$own[sl]), own_prod = prod(pmax(P$own[sl], 1e-3)),
+             mean_score = mean_sc[k], q90 = q90_sc[k], stack = lab[k]) })) |>
       mutate(name = P$player_name[idx], pos = P$pos[idx], team = P$team[idx], opp = P$opp[idx], player_salary = P$salary[idx],
              player_proj = P$dk_proj[idx], player_own = P$own[idx], dk_id = P$dk_id[idx], ko = P$ko[idx])
   }
-  ## portfolio-level odds
-  any_top <- if (length(kg)) mean(colSums(Ht[kg, , drop = FALSE]) > 0) else NA
-  n_cash <- if (length(kc)) mean(colSums(Hc[kc, , drop = FALSE])) else NA
-  ## stack exploration: every candidate's P(top 1%) by the stack it ended up with
-  stx <- tibble(stack = lab, p_top = p_top, p_cash = p_cash, src = typ) |> group_by(stack) |>
-    summarise(n = n(), best_top = max(p_top), mean_top10 = mean(sort(p_top, decreasing = TRUE)[1:min(10, n())]), best_cash = max(p_cash), .groups = "drop") |>
-    arrange(desc(mean_top10))
-  say(sprintf("opt: done in %.0f s; tournament P(any of 10 in top 1%%) %.1f%%, cash expected cashes %.1f of 10",
-              as.numeric(difftime(Sys.time(), t0, units = "secs")), 100 * any_top, n_cash))
-  list(cash = mk(kc, "cash"), gpp = mk(kg, "gpp"), any_top = any_top, n_cash = n_cash, stacks = stx,
-       lines = tibble(cash_med = median(cash_line), top_med = median(top_line), cash_q = opt$cash_q, top_q = opt$top_q),
+  ## portfolio-level odds (raw indicators, not smoothed)
+  any_hits <- function(keep, line) { if (!length(keep)) return(NA); hit <- rep(FALSE, opt$S)
+    for (ch in split(seq_len(opt$S), ceiling(seq_len(opt$S) / 2000))) hit[ch] <- colSums(sweep(lineup_scores(Lc[keep, , drop = FALSE], X[, ch, drop = FALSE]), 2, lines[ch, line], ">")) > 0
+    mean(hit) }
+  port <- tibble(any_elite = any_hits(kg, "elite"), any_top01 = any_hits(kg, "top01"), any_top = any_hits(kg, "top"),
+                 exp_elite = sum(p_elite[kg]), mean_own = mean(P$own[c(Lc[kg, ])]), field_mean_own = sum(P$own^2) / sum(P$own))
+  n_cash <- if (length(kc)) mean(colSums(hcash[kc, , drop = FALSE])) else NA
+  ## stack exploration: every tournament candidate's odds by the stack it ended up with
+  stx <- tibble(stack = lab, p_top = p_top, p_elite = p_elite, p_cash = p_cash) |> group_by(stack) |>
+    summarise(n = n(), best_elite = max(p_elite), mean_elite10 = mean(sort(p_elite, decreasing = TRUE)[1:min(10, n())]),
+              best_top = max(p_top), best_cash = max(p_cash), .groups = "drop") |> arrange(desc(mean_elite10))
+  say(sprintf("opt: done in %.0f s; tournament P(any of %d in the top %s%%) %.1f%% (top 0.1%%: %.1f%%, top 1%%: %.1f%%); cash expected cashes %.1f of %d",
+              el(), length(kg), format(100 * opt$gpp_top), 100 * port$any_elite, 100 * port$any_top01, 100 * port$any_top, n_cash, length(kc)))
+  list(cash = mk(kc, "cash"), gpp = mk(kg, "gpp"), any_top = port$any_top, port = port, n_cash = n_cash, stacks = stx,
+       lines = tibble(cash_med = median(lines[, "cash"]), top_med = median(lines[, "top"]), top01_med = median(lines[, "top01"]),
+                      elite_med = median(lines[, "elite"]), cash_q = opt$cash_q, top_q = opt$top_q, gpp_top = opt$gpp_top),
        field_own = tibble(id = P$gsis_id, name = P$player_name, pos = P$pos, own = P$own, field = field_own),
-       n_cand = nrow(Lc), S = opt$S, F = nrow(FL), secs = as.numeric(difftime(Sys.time(), t0, units = "secs")))
+       n_cand = nC, S = opt$S, F = nF, contest_n = opt$contest_n, gpp_n = opt$gpp_n, secs = el())
 }
 ## DK upload file: one row per lineup, columns QB,RB,RB,WR,WR,WR,TE,FLEX,DST holding DK player IDs
 dk_upload_csv <- function(L, file) {

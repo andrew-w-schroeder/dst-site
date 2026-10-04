@@ -236,41 +236,49 @@ h1{font-size:1.4rem;margin:.2rem 0}h2{font-size:1.1rem;margin:1.4rem 0 .4rem}.s{
 table{border-collapse:collapse;font-size:13px;white-space:nowrap}th,td{border:1px solid var(--bd);padding:3px 7px;text-align:right}th{background:var(--th)}td.l,th.l{text-align:left}',
     DFS_SUBNAV_CSS, DFS_LU_CSS, SITE_CSS, '</style></head><body>', site_nav("dfs", b), dfs_subnav(kind, b),
     sprintf("<h1>DraftKings %s — %d week %d</h1>", title, P$season, P$week))
-  if (is.null(LU) || !nrow(LU[[kind]])) return(paste0(head, "<p>No lineups yet: they're built once DK salaries for the main slate are in (see the Players tab).</p></body></html>"))
+  if (is.null(LU) || is.null(LU[[kind]]) || !nrow(LU[[kind]])) return(paste0(head, "<p>No lineups yet: they're built once DK salaries for the main slate are in (see the Players tab).</p></body></html>"))
   L <- LU[[kind]]; nl <- n_distinct(L$lineup)
   when <- paste0(if (isTRUE(LU$frozen)) "<b>Frozen at the slate's first kickoff</b> (built " else "Built ", pp_et(LU$built, "%a %b %d %I:%M %p"), " ET",
                  if (isTRUE(LU$frozen)) ")" else "; rebuilt at every refresh until the first kickoff, then frozen", ".")
   csv <- sprintf("DK_%s_lineups_%d_wk%02d.csv", if (is_gpp) "tournament" else "cash", P$season, P$week)
   kp <- function(v, l) sprintf('<div class="kpi"><b>%s</b><span>%s</span></div>', v, l)
-  kpis <- if (is_gpp) paste0(kp(dfs_pct(LU$any_top, 1), "P(at least one of the 10 in the top 1%)"),
-                             kp(sprintf("%.2f", sum(distinct(L, lineup, p_top)$p_top)), "expected top-1% lineups (of 10)"),
-                             kp(sprintf("%.0f", LU$lines$top_med), "top-1% line, median DK points")) else
+  pt <- LU$port; et <- format(100 * (LU$lines$gpp_top %||% 0.01))
+  kpis <- if (is_gpp && !is.null(pt)) paste0(kp(dfs_pct(pt$any_elite, 1), sprintf("P(at least one of the %d in the top %s%%)", nl, et)),
+                             kp(dfs_pct(pt$any_top01, 1), "… in the top 0.1%"), kp(dfs_pct(pt$any_top, 0), "… in the top 1%"),
+                             kp(sprintf("%.0f", LU$lines$elite_med), sprintf("top-%s%% line, median DK points", et)),
+                             kp(sprintf("%.0f%% vs %.0f%%", 100 * pt$mean_own, 100 * pt$field_mean_own), "average ownership of our players vs the field's")) else if (is_gpp)
+    paste0(kp(dfs_pct(LU$any_top, 1), "P(at least one in the top 1%)"), kp(sprintf("%.0f", LU$lines$top_med), "top-1% line, median DK points")) else
     paste0(kp(sprintf("%.1f of %d", LU$n_cash, nl), "expected lineups that cash"),
            kp(dfs_pct(mean(distinct(L, lineup, p_cash)$p_cash), 0), "average P(cash)"),
            kp(sprintf("%.0f", LU$lines$cash_med), "cash line, median DK points"))
-  how <- if (is_gpp) paste0("Each lineup's P(top 1%) = the share of ", format(LU$S, big.mark = ","), " simulated weeks in which it beats the top-1% score of a simulated field of ",
-      format(LU$F, big.mark = ","), " lineups drawn from projected ownership. The 10 were picked one at a time, each adding the most simulated weeks in which at least one of them reaches the top 1% ",
-      "(so they win in different weeks), each differing by at least 3 players, no player in more than 6. Candidates came from ", format(LU$n_cand, big.mark = ","),
-      " optimised lineups under different stack rules (none; QB + 1 or 2 pass catchers; + a bring-back; RB + his D/ST).") else
+  how <- if (is_gpp) paste0("Built for one large tournament (the NFL $700K Play-Action: ", format(LU$contest_n %||% 277447, big.mark = ","), " entries, 20 max), where the money is in the top 0.01% ",
+      "(about the top 28). Each lineup's P(top 0.01%) = the share of ", format(LU$S, big.mark = ","), " simulated weeks in which it beats all but 0.01% of a simulated field of ",
+      format(LU$F, big.mark = ","), " lineups drawn from projected ownership (it must be the field's best or 2nd best). The ", nl, " were picked one at a time, each adding the most simulated weeks in ",
+      "which at least one of them gets there, so they win in different weeks; each differs by at least 3 players and no player is in more than half. ",
+      "Ownership matters through the field: a player the field owns at 40% lifts 40% of the field when he hits, so he barely moves you up, while a 3%-owned player who hits ",
+      "jumps you past almost everyone. Candidates (", format(LU$n_cand, big.mark = ","), ") include lineups that are best in one simulated week and builds that pay for ownership; ",
+      "lineups that copies in the field would share a prize with count for less.") else
     paste0("Each lineup's P(cash) = the share of ", format(LU$S, big.mark = ","), " simulated weeks in which it beats the field's 55th percentile (double-ups and 50/50s pay roughly the top 45%). ",
       "The 10 highest, each differing by at least 3 players.")
   cards <- vapply(sort(unique(L$lineup)), \(k) { x <- L[L$lineup == k, ]
     rows <- paste0(sprintf("<tr><td class='sl l'>%s</td><td class='l'>%s</td><td class='l'>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
       x$slot, pp_esc(x$name), paste(x$team, ifelse(is.na(x$opp), "", paste0("v ", x$opp))), dfs_money(x$player_salary), pp_f(x$player_proj, 1), dfs_pct(x$player_own, 0)), collapse = "")
     sprintf('<div class="lu"><h3><span>#%d</span><span>%s</span></h3><table><thead><tr><th class="l">Slot</th><th class="l">Player</th><th class="l">Team</th><th>Salary</th><th>Proj</th><th>Own</th></tr></thead><tbody>%s</tbody></table><div class="ft">%s · proj %.1f · 90th pct %.1f · own %.0f%% total · %s</div></div>',
-      k, if (is_gpp) sprintf("P(top 1%%) %s · P(cash) %s", dfs_pct(x$p_top[1], 1), dfs_pct(x$p_cash[1])) else sprintf("P(cash) %s · P(top 1%%) %s", dfs_pct(x$p_cash[1]), dfs_pct(x$p_top[1], 1)),
-      rows, dfs_money(x$salary[1]), x$proj[1], x$q90[1], 100 * x$own_sum[1], pp_esc(x$stack[1])) }, "")
+      k, if (is_gpp && "p_elite" %in% names(x)) sprintf("top 0.01%% %s · 0.1%% %s · 1%% %s", dfs_pct(x$p_elite[1], 2), dfs_pct(x$p_top01[1], 1), dfs_pct(x$p_top[1], 1)) else
+         if (is_gpp) sprintf("P(top 1%%) %s · P(cash) %s", dfs_pct(x$p_top[1], 1), dfs_pct(x$p_cash[1])) else sprintf("P(cash) %s · P(top 1%%) %s", dfs_pct(x$p_cash[1]), dfs_pct(x$p_top[1], 1)),
+      rows, dfs_money(x$salary[1]), x$proj[1], x$q90[1], 100 * x$own_sum[1],
+      paste0(pp_esc(x$stack[1]), if (is_gpp && "dup" %in% names(x)) (if (x$dup[1] < 1) " · unlikely to be duplicated" else sprintf(" · ~%.0f copies expected in the contest", x$dup[1])) else "")) }, "")
   ex <- L |> count(name, pos, team, wt = NULL, name = "n") |> arrange(desc(n), name)
   ex_tab <- function(x) paste0('<div class="tw"><table><thead><tr><th class="l">Player</th><th class="l">Pos</th><th class="l">Team</th><th>Lineups</th></tr></thead><tbody>',
     paste0(sprintf("<tr><td class='l'>%s</td><td class='l'>%s</td><td class='l'>%s</td><td>%d of %d</td></tr>", pp_esc(x$name), x$pos, x$team, x$n, nl), collapse = ""), "</tbody></table></div>")
   ex_html <- paste0(ex_tab(ex[ex$n >= 2, ]), if (any(ex$n < 2)) sprintf("<details><summary class='s'>%d players in one lineup</summary>%s</details>", sum(ex$n < 2), ex_tab(ex[ex$n < 2, ])) else "")
   st_html <- ""
-  if (is_gpp && !is.null(LU$stacks) && nrow(LU$stacks)) { st <- head(LU$stacks, 14)
-    st_html <- paste0("<h2>Which stacks the simulations favour this week</h2><p class='s'>Every candidate lineup grouped by the stack it ended up with. ",
-      "Best = its best lineup's P(top 1%); top-10 average = the mean over its 10 best (a fairer comparison for groups with many candidates).</p>",
-      '<div class="tw"><table><thead><tr><th class="l">Stack</th><th>Candidates</th><th>Best P(top 1%)</th><th>Top-10 average</th><th>Best P(cash)</th></tr></thead><tbody>',
-      paste0(sprintf("<tr><td class='l'>%s</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td></tr>", pp_esc(st$stack), st$n, dfs_pct(st$best_top, 1), dfs_pct(st$mean_top10, 1), dfs_pct(st$best_cash)), collapse = ""),
-      "</tbody></table></div>") }
+  if (is_gpp && !is.null(LU$stacks) && nrow(LU$stacks) && "mean_elite10" %in% names(LU$stacks)) { st <- head(LU$stacks, 14)
+    st_html <- paste0("<h2>Which stacks the simulations favour this week</h2><p class='s'>Every candidate lineup grouped by the stack it ended up with, ranked by the average P(top 0.01%) of its 10 best lineups ",
+      "(a fair comparison for groups with many candidates). With about 10 elite weeks per lineup in the simulation, differences under 0.02 points are noise.</p>",
+      '<div class="tw"><table><thead><tr><th class="l">Stack</th><th>Candidates</th><th>Top-10 avg P(top 0.01%)</th><th>Best P(top 0.01%)</th><th>Best P(top 1%)</th><th>Best P(cash)</th></tr></thead><tbody>',
+      paste0(sprintf("<tr><td class='l'>%s</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>", pp_esc(st$stack), st$n, dfs_pct(st$mean_elite10, 3), dfs_pct(st$best_elite, 2),
+                     dfs_pct(st$best_top, 1), dfs_pct(st$best_cash)), collapse = ""), "</tbody></table></div>") }
   cor_html <- ""
   if (is_gpp && !is.null(P$spec$cor)) { ct <- P$spec$cor
     g <- function(type, a, b, env, fav = NA) { x <- ct[ct$type == type & ct$a == a & ct$b == b & ct$env == env & ((is.na(ct$fav) & is.na(fav)) | ct$fav %in% fav), ]; if (nrow(x)) c(x$r[1], x$n[1]) else c(NA, NA) }
