@@ -224,6 +224,8 @@ dk_pull_main <- function(games, now = Sys.time()) {
   attr(x, "example") <- if (!is.null(mg$example)) mg$example else ""
   x |> mutate(pulled_at = format(now, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"), dg_id = mg$dg_id)
 }
+## a readable reason for a failed pull (DK answers 403 to scripts on GitHub and on Stratus)
+dk_err_text <- function(msg) if (grepl("HTTP 403", msg)) "DraftKings refuses automated salary requests (HTTP 403): export this week's DKSalaries.csv from the DK lobby and upload it" else msg
 ## DKSalaries.csv (lobby export): Position, Name + ID, Name, ID, Roster Position, Salary, Game Info, TeamAbbrev, AvgPointsPerGame
 dk_parse_csv <- function(file) {
   x <- utils::read.csv(file, stringsAsFactors = FALSE, check.names = FALSE)

@@ -89,7 +89,7 @@ if (is.null(sal) && !nzchar(Sys.getenv("NO_DK")) && any(games$ko > NOW)) tryCatc
   x <- dk_pull_main(games, NOW)
   write.csv(x, SAL_CSV, row.names = FALSE)
   message(sprintf("dfs: DK main slate = draft group %s (%s), %d games, %d players", x$dg_id[1], attr(x, "example"), n_distinct(x$game), nrow(x)))
-}, error = function(e) { dk_err <<- conditionMessage(e)
+}, error = function(e) { dk_err <<- dk_err_text(conditionMessage(e))
   message("dfs: DK salaries not pulled — ", conditionMessage(e), if (file.exists(SAL_CSV)) " (using the stored pull)" else "") })
 if (is.null(sal) && file.exists(SAL_CSV)) { sal <- as_tibble(read.csv(SAL_CSV, stringsAsFactors = FALSE, colClasses = c(dk_id = "character", dg_id = "character"))); sal_src <- "dk" }
 ## slate games = this week's games with a team on the salary list
