@@ -132,6 +132,22 @@ if (!is.null(ph) && !is.null(dst_b)) {
                 ci_half = NA_real_, exp_line = NA_character_)
   }
 }
+## Vegas-only D/ST (Andrew 2026-10-04: compare with the model): the Yahoo bundle's Vegas-only fit (spread, total, home)
+## on each game's last pre-kickoff line in the D/ST page's line history, as 45 computes it for the D/ST page
+if (nrow(dst_rows) && !is.null(dst_b$vegas)) tryCatch({
+  lh <- as_tibble(read.csv(file.path(PROJ_DIR, "data/lines/line_history.csv"), stringsAsFactors = FALSE)) |>
+    mutate(t = utc(pulled_at), ct = utc(commence_time)) |> filter(t < ct)
+  lx <- bind_rows(lh |> inner_join(games |> select(game_id, home = home_team, away = away_team, ko), by = c("home", "away")) |> mutate(sp = home_spread),
+                  lh |> inner_join(games |> select(game_id, home = away_team, away = home_team, ko), by = c("home", "away")) |> mutate(sp = -home_spread)) |>
+    filter(abs(as.numeric(difftime(ct, ko, units = "days"))) <= 2, t < ko) |> group_by(game_id) |> slice_max(t, n = 1, with_ties = FALSE) |> ungroup()
+  g2 <- games |> select(game_id, home_team, away_team) |> inner_join(lx |> select(game_id, sp, total), by = "game_id")
+  df <- bind_rows(g2 |> transmute(game_id, team = home_team, spread = sp, total_line = total, home = 1),
+                  g2 |> transmute(game_id, team = away_team, spread = -sp, total_line = total, home = 0)) |>
+    mutate(implied_opp = (total_line - spread) / 2, implied_own = (total_line + spread) / 2)
+  df$vp <- vegas_proj(dst_b$vegas, df)
+  dst_rows$dk_proj_vegas <- df$vp[match(paste(dst_rows$game_id, dst_rows$team), paste(df$game_id, df$team))]
+  message(sprintf("dfs: Vegas-only D/ST for %d of %d teams", sum(!is.na(dst_rows$dk_proj_vegas)), nrow(dst_rows)))
+}, error = function(e) message("dfs: Vegas-only D/ST — ", conditionMessage(e)))
 rows <- bind_rows(rows, dst_rows)
 if (!nrow(rows)) placeholder(sprintf("%d week %d: no projections yet (props not posted and no fallback).", SEASON, WEEK))
 DST_NAMES <- c(ARI = "Cardinals", ATL = "Falcons", BAL = "Ravens", BUF = "Bills", CAR = "Panthers", CHI = "Bears", CIN = "Bengals", CLE = "Browns",
@@ -186,6 +202,22 @@ rows$own <- if (any(!is.na(rows$salary))) own_project(rows |> transmute(pos, sal
               imp = ifelse(pos == "DST", -implied, implied), avail = avail), n_games = max(length(slate_games), 2)) else NA_real_
 rows$lev <- rows$p_4x - rows$own
 rows <- rows |> mutate(player_name = ifelse(pos == "DST", paste(coalesce(unname(DST_NAMES[team]), team), "D/ST"), player_name))
+## the Vegas-only D/ST tab: same teams, salaries and ownership (ownership from the model tab), its own projection, odds,
+## value and leverage; each tab shows the other projection next to its own
+if ("dk_proj_vegas" %in% names(rows) && any(!is.na(rows$dk_proj_vegas))) {
+  dv <- rows |> filter(pos == "DST", !is.na(dk_proj_vegas)) |>
+    mutate(pos = "DSTV", gsis_id = paste0("DSTV_", team), alt_proj = dk_proj, dk_proj = dk_proj_vegas, dk_base = dk_proj_vegas)
+  if (nrow(dv) && !is.null(dst_b$unc)) {
+    dv$p_boom <- dst_odds(dv$dk_proj, rep(10, nrow(dv)), dst_b$unc)
+    dv$p_4x <- ifelse(is.na(dv$salary), NA, dst_odds(dv$dk_proj, coalesce(4 * dv$salary / 1000, 99), dst_b$unc))
+    qq <- dst_quant(dv$dk_proj, dst_b$unc); for (q in names(qq)) dv[[q]] <- qq[[q]]
+  }
+  dv <- dv |> mutate(ppk = ifelse(is.na(salary), NA, dk_proj / (salary / 1000)), lev = p_4x - own)
+  i <- which(!is.na(dv$salary) & dv$dk_proj > 0)
+  dv$value <- NA_real_; if (length(i) >= 5) { m <- lm(dk_proj ~ salary, data = dv[i, ]); dv$value[i] <- dv$dk_proj[i] - predict(m, dv[i, ]) }
+  rows$alt_proj <- ifelse(rows$pos == "DST", rows$dk_proj_vegas, NA_real_)
+  rows <- bind_rows(rows, dv)
+}
 
 ## ---- 6. Page + table ----
 slate <- if (length(slate_games)) games |> filter(game_id %in% slate_games) |> arrange(ko) |> transmute(game_id, label = paste0(away_team, "@", home_team), ko) else NULL
@@ -209,5 +241,5 @@ out <- rows |> transmute(season = SEASON, week = WEEK, refreshed = isoz(NOW), ga
                          q90 = round(q90, 2), ppk = round(ppk, 3), value = round(value, 3), form = round(form, 2), last_pts = last_pts,
                          implied, own = round(own, 4), lev = round(lev, 4), dk_status, inj_status)
 write.csv(out, file.path(PROJ_DIR, sprintf("data/dfs/dfs_proj_%d_wk%02d.csv", SEASON, WEEK)), row.names = FALSE)
-message(sprintf("dfs: page written (%d players: %s; %d slate games; salaries %s)", nrow(rows),
+message(sprintf("dfs: page written (%d rows: %s; %d slate games; salaries %s)", nrow(rows),
                 paste(names(table(rows$pos)), table(rows$pos), collapse = " "), length(slate_games), if (is.na(sal_src)) "none yet" else sal_src))

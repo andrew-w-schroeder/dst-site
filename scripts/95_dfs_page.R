@@ -9,7 +9,7 @@ DFS_TIP <- c(
   Pos = "FLEX tab: the player's rank at his own position by DK projection.",
   Kickoff = "Kickoff (Eastern). \U0001F512 = game started: frozen at its last pre-kickoff props.",
   Salary = "DraftKings salary on the main slate (classic, $50K cap).",
-  Proj = "Vegas-only projection in DK scoring: the Players page's expected stats from sportsbook props, scored 4 per pass TD, 0.04 per pass yard, -1 per INT, 0.1 per rush / receiving yard, 1 per catch, 6 per TD, -1 per fumble lost, plus 3 x the chance of each yardage bonus (300+ pass, 100+ rush, 100+ receiving yards). D/ST: the Yahoo D/ST model (DK's D/ST scoring is Yahoo's).",
+  Proj = "Vegas-only projection in DK scoring: the Players page's expected stats from sportsbook props, scored 4 per pass TD, 0.04 per pass yard, -1 per INT, 0.1 per rush / receiving yard, 1 per catch, 6 per TD, -1 per fumble lost, plus 3 x the chance of each yardage bonus (300+ pass, 100+ rush, 100+ receiving yards). DST (model) tab: your Yahoo D/ST model (DK's D/ST scoring is Yahoo's); DST (Vegas) tab: the Vegas-only D/ST fit (spread, total, home field).",
   "±" = "Model uncertainty of the projection (half of its 90% interval), from the Players page's PPR bootstrap (resampled sportsbooks + calibration refits); DK differs from PPR only by INT / fumble -1 and the bonuses.",
   "Pts/$1K" = "Projection per $1,000 of salary (the usual DFS value number). 4.0 = 4x salary. Cheap players always look good here; see Value.",
   Value = "Projection minus what a typical player at his position and salary on this slate projects for (a straight-line fit of projection on salary per position). + = more points than his price suggests. Unlike Pts/$1K this doesn't favour minimum-price players.",
@@ -22,7 +22,10 @@ DFS_TIP <- c(
   Bonus = "Chance of DK's +3 yardage bonus: QB 300+ passing yards; RB 100+ rushing (and 100+ receiving when higher); WR / TE 100+ receiving. Logistic on the expected yards (tighter when a sportsbook line exists), fit on 2023+ results.",
   Imp = "Team implied points from the latest pre-kickoff spread and total. D/ST: the OPPONENT's implied points (lower = better for a defense).",
   Form = "Recent DK points, decay-weighted (x0.5 per game back, this season); used by the ownership model.",
-  Last = "His DK points in his most recent game this season (week in brackets).")
+  Last = "His DK points in his most recent game this season (week in brackets).",
+  Vegas = "D/ST tab: the Vegas-only D/ST projection (spread, total and home field only, the Yahoo bundle's Vegas fit), for comparison with the model's Proj.",
+  Model = "DST Vegas tab: the D/ST model's projection (the D/ST page's Yahoo model), for comparison with this tab's Vegas-only Proj.",
+  "Model − Vegas" = "The D/ST model's projection minus the Vegas-only projection. + = the model likes this defense more than the betting lines alone do.")
 
 dfs_pct <- function(x, d = 0) ifelse(is.na(x), "", paste0(formatC(100 * x, format = "f", digits = d), "%"))
 dfs_money <- function(x) ifelse(is.na(x), "", paste0("$", formatC(x, format = "d", big.mark = ",")))
@@ -52,7 +55,7 @@ DFS_STAT_COLS <- list(
   WR = c(rec = "Rec", rec_yds = "Rec yds", tds = "TDs"),
   TE = c(rec = "Rec", rec_yds = "Rec yds", tds = "TDs"),
   FLEX = c(rush_yds = "Rush yds", rec = "Rec", rec_yds = "Rec yds", tds = "TDs"),
-  DST = character())
+  DST = character(), DSTV = character())
 
 dfs_pos_table <- function(P, pos) {
   R <- P$rows
@@ -73,7 +76,11 @@ dfs_pos_table <- function(P, pos) {
   hi <- max(35, ceiling(max(d$q90, na.rm = TRUE) / 5) * 5)
   t$`Range bar` <- pp_range_bar(d$q10, d$q25, d$q75, d$q90, v, lo = min(-2, floor(min(d$q10, na.rm = TRUE))), hi = hi,
                                 ci_lo = v - d$ci_half, ci_hi = v + d$ci_half)
-  if (pos != "DST") t$Bonus <- dfs_pct(d$p_bonus)
+  if (pos %in% c("DST", "DSTV") && "alt_proj" %in% names(d)) {         # the other D/ST projection, and model - Vegas
+    mv <- if (pos == "DST") v - d$alt_proj else d$alt_proj - v
+    t <- t |> mutate(!!(if (pos == "DST") "Vegas" else "Model") := pp_f(d$alt_proj, 2), "Model − Vegas" = ifelse(is.na(mv), "", pp_sg(mv, 2)), .after = Proj)
+  }
+  if (!pos %in% c("DST", "DSTV")) t$Bonus <- dfs_pct(d$p_bonus)
   t$Imp <- pp_f(d$implied)
   scols <- DFS_STAT_COLS[[pos]]
   for (s in names(scols)) {
@@ -81,14 +88,31 @@ dfs_pos_table <- function(P, pos) {
     val <- pp_f(x, if (s %in% c("rec", "pass_td", "pass_int", "tds")) 2 else 1)
     t[[scols[[s]]]] <- ifelse(is.na(d[[paste0("e.", s)]]), "", ifelse(d[[paste0("src.", s)]] %in% "prop" | s == "tds", val, paste0("<i class='fill'>", val, "*</i>")))
   }
-  if (pos != "DST") { t$Form <- pp_f(d$form, 1); t$Last <- ifelse(is.na(d$last_pts), "", sprintf("%.1f (wk %d)", d$last_pts, as.integer(d$last_wk))) }
+  if (!pos %in% c("DST", "DSTV")) { t$Form <- pp_f(d$form, 1); t$Last <- ifelse(is.na(d$last_pts), "", sprintf("%.1f (wk %d)", d$last_pts, as.integer(d$last_wk))) }
   if (flex) t <- t |> mutate(Pos = paste0(d$pos, prk), .after = Player)
   cell_cls <- list(`Pts/$1K` = dfs_shade(d$ppk), Value = dfs_shade(d$value), Lev = dfs_lev_cls(d$lev), `Own%` = dfs_own_cls(d$own),
                    `P(4x)` = dfs_shade(d$p_4x))
   if (flex) cell_cls$Pos <- paste0("pz ", tolower(d$pos))
   row_cls <- ifelse(d$fallback %in% TRUE, "nop", "")
-  pp_table(t, raw = c("Player", "Range bar", unname(scols)), id = paste0("d_", pos), row_cls = row_cls, cell_cls = cell_cls,
+  html <- pp_table(t, raw = c("Player", "Range bar", unname(scols)), id = paste0("d_", pos), row_cls = row_cls, cell_cls = cell_cls,
            stick = if (flex) 2 else 1, row_key = pp_search_key(d$player_name, d$team))
+  dfs_header_tips(html, names(t))
+}
+## column headers carry this page's definitions (pp_table puts the Players page's in title=): data-tip, shown by the
+## page's own pop-up on hover or tap (Andrew 2026-10-04); stat columns get a short generic definition
+dfs_header_tips <- function(html, cols) {
+  for (cn in cols) {
+    tip <- DFS_TIP[cn]
+    st <- c("Pass yds" = "passing yards", "Pass TD" = "passing TDs", INT = "interceptions", "Rush yds" = "rushing yards",
+            Rec = "receptions", "Rec yds" = "receiving yards", TDs = "rushing + receiving TDs (from the anytime-TD price)")
+    if (is.na(tip)) tip <- if (cn %in% names(st))
+      paste0("Expected ", st[[cn]], " from the sportsbook props (italic* = no line for this stat: his career average).") else
+      if (cn == "Team") "His team." else if (cn == "Opp") "Opponent (vs = home, @ = away)." else ""
+    esc <- gsub("([][(){}.*+?^$|\\\\])", "\\\\\\1", pp_esc(cn))
+    html <- sub(sprintf('<th title="[^"]*"( onclick="srt\\(this\\)")?([^>]*)>%s</th>', esc),
+                sprintf('<th data-tip="%s"\\1\\2>%s</th>', gsub("\\\\", "\\\\\\\\", pp_esc(tip)), pp_esc(cn)), html)
+  }
+  html
 }
 
 dfs_glossary <- function(P) {
@@ -109,7 +133,8 @@ dfs_glossary <- function(P) {
 }
 
 dfs_page <- function(P) {
-  tabs <- c("QB", "RB", "WR", "TE", "FLEX", "DST")
+  tabs <- c("QB", "RB", "WR", "TE", "FLEX", "DST", "DSTV")
+  tab_lab <- c(QB = "QB", RB = "RB", WR = "WR", TE = "TE", FLEX = "FLEX", DST = "DST (model)", DSTV = "DST (Vegas)")
   panes <- vapply(tabs, \(p) sprintf('<div class="pane" data-pos="%s">%s</div>', p, dfs_pos_table(P, p)), "")
   b <- P$site_base
   slate <- if (is.null(P$slate) || !nrow(P$slate)) paste0("<b>DraftKings main slate not found yet</b> (DK usually posts the next week's salaries Sunday night / Monday); projections below are for every game this week, without salaries.",
@@ -137,7 +162,10 @@ tr.nop td{font-style:italic}span.nop{font-style:normal;border:1px solid var(--bd
 span.dks{font-style:normal;font-size:11px;color:var(--mut)}
 span.inj{color:#c05621;font-weight:700;font-size:12px}span.inj.out{color:#c53030}
 @media (prefers-color-scheme:dark){span.inj{color:#f6ad55}span.inj.out{color:#fc8181}.beta{color:#f6ad55;border-color:#f6ad55}}
-td.pz{font-weight:700;text-align:center}td.pz.rb{background:rgba(140,90,220,.24)!important}td.pz.wr{background:rgba(0,170,200,.26)!important}td.pz.te{background:rgba(236,130,40,.26)!important}
+td.pz{font-weight:700;text-align:center;width:1%;padding:3px 4px;font-size:12px}
+#hdrtip{position:absolute;z-index:50;display:none;max-width:340px;padding:8px 10px;border-radius:6px;font-size:12.5px;line-height:1.4;white-space:normal;text-align:left;font-weight:400;
+  background:var(--fg);color:var(--bg);box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none}
+th[data-tip]{text-decoration:underline dotted;text-underline-offset:3px;text-decoration-color:var(--mut)}td.pz.rb{background:rgba(140,90,220,.24)!important}td.pz.wr{background:rgba(0,170,200,.26)!important}td.pz.te{background:rgba(236,130,40,.26)!important}
 @media (prefers-color-scheme:dark){td.pz.rb{background:rgba(140,90,220,.42)!important}td.pz.wr{background:rgba(0,170,200,.42)!important}td.pz.te{background:rgba(236,130,40,.45)!important}}
 #srch{display:flex;align-items:center;gap:8px}#psearch{padding:7px 10px;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--fg);min-height:36px;width:240px;font-size:14px}
 .sw{display:inline-block;width:12px;height:12px;border:1px solid var(--bd);vertical-align:middle;border-radius:2px}.sw.vg2{background:var(--vg2)}.sw.vb1{background:var(--vb1)}.sw.ow3{background:var(--ow3)}
@@ -149,7 +177,7 @@ p.legend{margin:.2rem 0}
   "<p class='s legend'><span class='sw vg2'></span> green = among the best fifth on the tab (Pts/$1K, Value, P(4x)); <span class='sw vb1'></span> red = worst fifth. ",
   "<b>Own%</b> <span class='beta'>BETA</span> is projected tournament ownership from a placeholder formula (shaded <span class='sw ow3'></span> 20%+), not yet fitted to real DK ownership. ",
   "<b>Lev</b> = P(4x) minus Own%: + = under-owned upside.</p>",
-  '<div class="bar"><div id="posb">', paste0(sprintf('<button data-pos="%s">%s</button>', c(tabs, "GL"), c(tabs, "Glossary")), collapse = ""), '</div>',
+  '<div class="bar"><div id="posb">', paste0(sprintf('<button data-pos="%s">%s</button>', c(tabs, "GL"), c(unname(tab_lab[tabs]), "Glossary")), collapse = ""), '</div>',
   '<div id="srch"><input type="search" id="psearch" placeholder="Search player or team" aria-label="Search a player by name, or a team by city or nickname" autocomplete="off"><span id="pscount" class="s"></span></div></div>',
   paste0(panes, collapse = ""), sprintf('<div class="pane" data-pos="GL">%s</div>', dfs_glossary(P)),
   '<script>', SITE_JS, '
@@ -169,6 +197,13 @@ if(!n){const o=["QB","RB","WR","TE","DST"].map(p=>{const pn=document.querySelect
 const k=pn?[...pn.querySelectorAll("tr[data-s]")].filter(r=>r.style.display!="none").length:0;return k?p+" "+k:""}).filter(Boolean);if(o.length)msg+=" \\u00b7 "+o.join(", ")}}
 document.getElementById("pscount").textContent=msg}
 document.getElementById("psearch").addEventListener("input",applySearch);show();
+const tipEl=document.createElement("div");tipEl.id="hdrtip";document.body.appendChild(tipEl);let tipT=null;
+function tipShow(th){const t=th.dataset.tip;if(!t)return;tipEl.textContent=t;tipEl.style.display="block";const r=th.getBoundingClientRect(),w=tipEl.offsetWidth,
+vw=document.documentElement.clientWidth;tipEl.style.left=(window.scrollX+Math.max(8,Math.min(r.left,vw-w-8)))+"px";tipEl.style.top=(window.scrollY+r.bottom+6)+"px"}
+function tipHide(){tipEl.style.display="none"}
+document.querySelectorAll("th[data-tip]").forEach(th=>{th.addEventListener("mouseenter",()=>tipShow(th));th.addEventListener("mouseleave",tipHide);
+th.addEventListener("touchstart",()=>{tipShow(th);clearTimeout(tipT);tipT=setTimeout(tipHide,4000)},{passive:true})});
+window.addEventListener("scroll",tipHide,{passive:true});
 function srt(th){const t=th.closest("table"),b=t.tBodies[0],i=[...th.parentNode.children].indexOf(th),d=th.dataset.d=th.dataset.d=="a"?"d":"a";
 const v=r=>{const s=r.children[i].innerText.replace(/[$,%+*\\u{1F512}]/gu,"").trim();const n=parseFloat(s);return isNaN(n)?s:n};
 [...b.rows].sort((x,y)=>{const a=v(x),c=v(y);return (a>c?1:a<c?-1:0)*(d=="a"?1:-1)}).forEach(r=>b.appendChild(r))}</script></body></html>')
