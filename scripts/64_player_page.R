@@ -68,7 +68,7 @@ pp_fb_note <- function(sk) {
 pp_rank_pts <- function(rk, pts) ifelse(is.na(rk), "", ifelse(is.na(pts), as.character(rk), sprintf("%d (%.1f)", as.integer(rk), pts)))
 PP_FILL_NOTE <- "Italic* = no prop for this stat: receptions from the receiving-yards prop and the player's yards per catch (or the reverse); otherwise his recency-weighted career average per game, shrunk toward players at his position without that prop."
 
-pp_table <- function(df, raw, id, row_cls, cell_cls, stick = 3) {
+pp_table <- function(df, raw, id, row_cls, cell_cls, stick = 3, row_key = NULL) {
   lft <- names(df) %in% c("Player", "Team", "Opp", "Kickoff")
   hdr <- paste0("<tr>", paste0(sprintf('<th title="%s" onclick="srt(this)"%s>%s</th>', pp_esc(coalesce(unname(PP_TIP[names(df)]), "")),
                                        ifelse(lft, ' style="text-align:left"', ""), pp_esc(names(df))), collapse = ""), "</tr>")
@@ -76,7 +76,8 @@ pp_table <- function(df, raw, id, row_cls, cell_cls, stick = 3) {
   body <- vapply(seq_len(nrow(df)), function(i) { r <- M[i, ]
     cls <- ifelse(names(df) %in% c("Player", "Team", "Opp", "Kickoff"), "l", "")
     for (cn in intersect(names(cell_cls), names(df))) { k <- which(names(df) == cn); if (nzchar(cell_cls[[cn]][i])) cls[k] <- trimws(paste(cls[k], cell_cls[[cn]][i])) }
-    paste0(if (nzchar(row_cls[i])) sprintf('<tr class="%s">', row_cls[i]) else "<tr>",
+    paste0(sprintf("<tr%s%s>", if (nzchar(row_cls[i])) sprintf(' class="%s"', row_cls[i]) else "",
+                   if (!is.null(row_key)) sprintf(' data-s="%s"', pp_esc(row_key[i])) else ""),
            paste0(ifelse(nzchar(cls), sprintf('<td class="%s">', cls), "<td>"), ifelse(names(df) %in% raw, r, pp_esc(r)), "</td>", collapse = ""), "</tr>") }, "")
   sprintf('<div class="tw"><table id="%s" data-stick="%d"><thead>%s</thead><tbody>%s</tbody></table></div>', id, stick, hdr, paste(body, collapse = ""))
 }
@@ -142,6 +143,20 @@ pp_player_cell <- function(d, prk) {
   tip_span(paste0(pp_esc(d$player_name), badge, ifelse(d$td_keep, " <span class='s'>(TD)</span>", ""), ifelse(fb, " <span class='s nop'>no props yet</span>", ""), sym), tip)
 }
 
+## search bar (Andrew 2026-10-03): each player row carries a key with his name, team code, full team name and nicknames;
+## lower case, accents and punctuation removed (the page's script normalises what is typed the same way)
+PP_TEAM_NAMES <- c(ARI = "Arizona Cardinals", ATL = "Atlanta Falcons", BAL = "Baltimore Ravens", BUF = "Buffalo Bills", CAR = "Carolina Panthers",
+  CHI = "Chicago Bears", CIN = "Cincinnati Bengals", CLE = "Cleveland Browns", DAL = "Dallas Cowboys", DEN = "Denver Broncos", DET = "Detroit Lions",
+  GB = "Green Bay Packers", HOU = "Houston Texans", IND = "Indianapolis Colts", JAX = "Jacksonville Jaguars Jags", KC = "Kansas City Chiefs",
+  LV = "Las Vegas Raiders", LAC = "Los Angeles Chargers LA Bolts", LA = "Los Angeles Rams LAR", MIA = "Miami Dolphins", MIN = "Minnesota Vikings",
+  NE = "New England Patriots Pats", NO = "New Orleans Saints", NYG = "New York Giants NY", NYJ = "New York Jets NY", PHI = "Philadelphia Eagles",
+  PIT = "Pittsburgh Steelers", SF = "San Francisco 49ers Niners", SEA = "Seattle Seahawks", TB = "Tampa Bay Buccaneers Bucs", TEN = "Tennessee Titans",
+  WAS = "Washington Commanders")
+pp_search_key <- function(name, team) {
+  k <- tolower(paste(name, team, coalesce(unname(PP_TEAM_NAMES[team]), "")))
+  k <- iconv(k, "UTF-8", "ASCII//TRANSLIT", sub = ""); k[is.na(k)] <- ""
+  gsub("\\s+", " ", gsub("[^a-z0-9 ]", "", k))
+}
 pp_pos_table <- function(P, pos, fmt) {
   if (!nrow(P$cur)) return("<p class='s'>No props posted yet for this position.</p>")
   flex <- pos == "FLEX"
@@ -207,8 +222,9 @@ pp_pos_table <- function(P, pos, fmt) {
   ng <- c(QB = 2, RB = 3, WR = 3, TE = 2, FLEX = 4)[[pos]]                 # green tiers (Andrew 2026-10-01: RB / WR 3, FLEX 4)
   tc <- if (ng <= 2) tier_cls(tr$tier, k = max(tr$tier)) else
     ifelse(tr$tier <= ng, paste0("g", ng, "_", tr$tier), tier_cls(tr$tier, k = max(tr$tier)))
+  pos_cls <- if (flex) list(Pos = paste0("pz ", tolower(d$pos))) else list()        # FLEX: colour-coded position (Andrew 2026-10-03): RB purple (not green: the tiers are green), WR blue, TE orange
   pp_table(t, raw = c("Player", "Trend", "ECR", "Range bar", "\u00b1", "TD%", unname(scols)), id = paste0("t_", pos, "_", fmt), row_cls = row_cls,
-           cell_cls = c(list(Rank = tc, Player = tc, Proj = tc), ext_c))
+           cell_cls = c(list(Rank = tc, Player = tc, Proj = tc), ext_c, pos_cls), row_key = pp_search_key(d$player_name, d$team))
 }
 
 ## ---- Track record tab (69_player_track.R -> output/players_site/track_players.rds) ----
@@ -301,12 +317,16 @@ td.g4_1{background:var(--g4_1)!important}td.g4_2{background:var(--g4_2)!importan
 tr.nop td{font-style:italic}span.nop{font-style:normal;border:1px solid var(--bd);border-radius:4px;padding:0 4px;font-size:11px}
 span.inj{color:#c05621;font-weight:700;font-size:12px}span.inj.out{color:#c53030}
 @media (prefers-color-scheme:dark){span.inj{color:#f6ad55}span.inj.out{color:#fc8181}}
-.sw.fl1{background:var(--fl1)}.sw.fl2{background:var(--fl2)}p.legend{margin:.2rem 0}', SITE_CSS, '</style></head><body>',
+.sw.fl1{background:var(--fl1)}.sw.fl2{background:var(--fl2)}p.legend{margin:.2rem 0}
+td.pz{font-weight:700;text-align:center}td.pz.rb{background:rgba(140,90,220,.24)!important}td.pz.wr{background:rgba(52,120,230,.22)!important}td.pz.te{background:rgba(236,130,40,.26)!important}td.pz.qb{background:rgba(214,64,96,.22)!important}
+#srch{display:flex;align-items:center;gap:8px}#psearch{padding:7px 10px;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--fg);min-height:36px;width:240px;font-size:14px}
+@media (max-width:560px){#srch{width:100%}#psearch{flex:1;width:auto}}', SITE_CSS, '</style></head><body>',
   if (exists("site_nav")) site_nav("players", b) else sprintf("<p class='s'><a href='%s'>D/ST</a> · <a href='%sk/'>Kickers</a> · <b>Players</b></p>", b, b),
   sprintf("<h1>Player projections — %d week %d</h1><p class='s'>%s Vegas-only: sportsbook player props (pass / rush / receiving yards, attempts, receptions, pass TDs, INTs, anytime TD) converted to expected stats and scored in your format. In back-tests (2024–26) no model or extra stats beat these at kickoff. Hover a column header for its definition; click to sort.</p>",
           P$season, P$week, status),
   '<div class="bar"><div id="posb">', paste0(sprintf('<button data-pos="%s">%s</button>', c(pos_l, "TR", "GL"), c(pos_l, "Track record", "Glossary")), collapse = ""), '</div>',
-  '<div id="fmtb">', paste0(sprintf('<button data-fmt="%s">%s</button>', fmts, unname(PS_FORMATS)), collapse = ""), '</div></div>',
+  '<div id="fmtb">', paste0(sprintf('<button data-fmt="%s">%s</button>', fmts, unname(PS_FORMATS)), collapse = ""), '</div>',
+  '<div id="srch"><input type="search" id="psearch" placeholder="Search player or team" aria-label="Search a player by name, or a team by city or nickname" autocomplete="off"><span id="pscount" class="s"></span></div></div>',
   PP_AMBER, paste0(panes, collapse = ""), paste0(sprintf('<div class="pane" data-pos="TR" data-fmt="%s">%s</div>', PS_FMT_POS$other, vapply(PS_FMT_POS$other, \(f) pp_track(P$track, f), "")), collapse = ""),
   sprintf('<div class="pane" data-pos="GL" data-fmt="*">%s<p class="s">%s</p></div>', gl_html, PP_FILL_NOTE),
   sprintf("<p class='s'>%s</p>", PP_FILL_NOTE),
@@ -319,9 +339,19 @@ document.querySelectorAll(".pane").forEach(p=>p.classList.toggle("on",p.dataset.
 document.querySelectorAll("#posb button").forEach(b=>b.classList.toggle("on",b.dataset.pos==st.pos));
 document.querySelectorAll("#fmtb button").forEach(b=>{b.classList.toggle("on",b.dataset.fmt==f);b.style.display=a.includes(b.dataset.fmt)?"":"none"});
 document.querySelectorAll("p.legend").forEach(l=>l.style.display=(st.pos=="TR"||st.pos=="GL")?"none":"");
+document.getElementById("srch").style.display=(st.pos=="TR"||st.pos=="GL")?"none":"";applySearch();
 try{localStorage.setItem("pp_state",JSON.stringify(st))}catch(e){};stickCols()}
 document.querySelectorAll("#posb button").forEach(b=>b.onclick=()=>{st.pos=b.dataset.pos;show()});
 document.querySelectorAll("#fmtb button").forEach(b=>b.onclick=()=>{st.fmt=b.dataset.fmt;show()});show();
+function normq(x){return x.toLowerCase().normalize("NFD").replace(/[\\u0300-\\u036f]/g,"").replace(/[^a-z0-9 ]/g,"").trim().split(/\\s+/).filter(Boolean)}
+function applySearch(){const q=document.getElementById("psearch");if(!q)return;const toks=normq(q.value);
+document.querySelectorAll(".pane tr[data-s]").forEach(r=>{r.style.display=toks.every(t=>r.dataset.s.includes(t))?"":"none"});
+const v=document.querySelector(".pane.on"),n=v?[...v.querySelectorAll("tr[data-s]")].filter(r=>r.style.display!="none").length:0;
+let msg="";if(toks.length){msg=n?n+" player"+(n==1?"":"s"):"none on this tab";
+if(!n){const o=["QB","RB","WR","TE"].map(p=>{const a=p=="QB"?FQB:FOT,f=a.includes(st.fmt)?st.fmt:"std",pn=document.querySelector(".pane[data-pos="+p+"][data-fmt="+f+"]");
+const k=pn?[...pn.querySelectorAll("tr[data-s]")].filter(r=>r.style.display!="none").length:0;return k?p+" "+k:""}).filter(Boolean);if(o.length)msg+=" \u00b7 "+o.join(", ")}}
+document.getElementById("pscount").textContent=msg}
+document.getElementById("psearch").addEventListener("input",applySearch);
 function srt(th){const t=th.closest("table"),b=t.tBodies[0],i=[...th.parentNode.children].indexOf(th),d=th.dataset.d=th.dataset.d=="a"?"d":"a";
 const v=r=>{const s=r.children[i].innerText.replace(/[%+*\\u{1F512}]/gu,"").trim();const n=parseFloat(s);return isNaN(n)?s:n};
 [...b.rows].sort((x,y)=>{const a=v(x),c=v(y);return (a>c?1:a<c?-1:0)*(d=="a"?1:-1)}).forEach(r=>b.appendChild(r))}</script></body></html>')
