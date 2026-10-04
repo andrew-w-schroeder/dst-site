@@ -154,24 +154,38 @@ dk_get_json <- function(url, mock = Sys.getenv("DK_MOCK_DIR")) {
   if (r$status_code != 200) stop(sprintf("HTTP %d for %s", r$status_code, url))
   jsonlite::fromJSON(rawToChar(r$content), simplifyVector = FALSE)
 }
-## draft groups in the lobby: id, contest type, game count, start, suffix
+## draft groups in the lobby. The lobby JSON used to carry a DraftGroups array; since 2026 it carries only Contests
+## (fields: n = name, dg = draft group id, gameType, gameTypeId, po = prize pool, sd / sdstring = start). Both are read:
+## from Contests, one row per Classic draft group with its contest count and total prize pool.
+DK_NOT_MAIN <- "Early|Afternoon|Turbo|Primetime|Night|Sun-Mon|Thu-Mon|Mon-Thu|Late|Snake|Tiers|Best Ball|Showdown|Single Game"
 dk_groups <- function(lobby) {
-  dg <- lobby$DraftGroups %||% lobby$draftGroups %||% list()
-  if (!length(dg)) return(tibble())
   g <- function(x, ...) { for (k in c(...)) if (!is.null(x[[k]])) return(x[[k]]); NA }
-  tibble(dg_id = map_chr(dg, \(x) as.character(g(x, "DraftGroupId", "draftGroupId"))),
+  dg <- lobby$DraftGroups %||% lobby$draftGroups %||% list()
+  if (length(dg)) return(tibble(dg_id = map_chr(dg, \(x) as.character(g(x, "DraftGroupId", "draftGroupId"))),
          ctype = map_dbl(dg, \(x) as.numeric(g(x, "ContestTypeId", "contestTypeId"))),
          n_games = map_dbl(dg, \(x) as.numeric(g(x, "GameCount", "gameCount"))),
          start = map_chr(dg, \(x) as.character(g(x, "StartDateEst", "startDateEst", "StartDate"))),
          suffix = map_chr(dg, \(x) { s <- g(x, "ContestStartTimeSuffix", "contestStartTimeSuffix"); if (is.null(s) || is.na(s)) "" else as.character(s) }),
          tag = map_chr(dg, \(x) as.character(g(x, "DraftGroupTag", "draftGroupTag"))),
-         game_type = map_dbl(dg, \(x) as.numeric(g(x, "GameTypeId", "gameTypeId"))))
+         game_type = map_dbl(dg, \(x) as.numeric(g(x, "GameTypeId", "gameTypeId"))), source = "draftgroups"))
+  cs <- lobby$Contests %||% lobby$contests %||% list()
+  if (!length(cs)) return(tibble())
+  tibble(dg_id = map_chr(cs, \(x) as.character(format(as.numeric(g(x, "dg")), scientific = FALSE))),
+         gtype = map_chr(cs, \(x) as.character(g(x, "gameType"))), name = map_chr(cs, \(x) as.character(g(x, "n"))),
+         po = map_dbl(cs, \(x) as.numeric(g(x, "po"))), start = map_chr(cs, \(x) as.character(g(x, "sdstring", "sd")))) |>
+    filter(gtype %in% "Classic", !is.na(dg_id), dg_id != "NA") |>
+    group_by(dg_id) |>
+    summarise(n_contests = n(), prize = sum(po, na.rm = TRUE), start = first(start),
+              not_main = mean(grepl(DK_NOT_MAIN, name, ignore.case = TRUE)), example = name[which.max(po)], .groups = "drop") |>
+    mutate(ctype = 21, n_games = NA_real_, suffix = ifelse(not_main > 0.5, "(not main)", ""), tag = "Featured", game_type = 1, source = "contests")
 }
-## the main slate: classic (contest type 21), no suffix, featured, most games
+## the main slate: classic, no time suffix, featured; most games (DraftGroups) or most contests then prize (Contests)
 dk_main_group <- function(groups) {
+  if (!nrow(groups)) return(groups)
   x <- groups |> filter(ctype == 21 | is.na(ctype), !nzchar(trimws(suffix)))
   if (any(x$tag %in% "Featured")) x <- x |> filter(tag %in% "Featured")
-  x |> arrange(desc(n_games), start) |> slice_head(n = 1)
+  if (identical(x$source[1], "contests")) x |> arrange(desc(n_contests), desc(prize)) |> slice_head(n = 1) else
+    x |> arrange(desc(n_games), start) |> slice_head(n = 1)
 }
 ## draftables -> one row per player: name, DK position, team, salary, status, game (away @ home), start time
 dk_parse_draftables <- function(j) {

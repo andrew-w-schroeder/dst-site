@@ -112,7 +112,8 @@ dfs_page <- function(P) {
   tabs <- c("QB", "RB", "WR", "TE", "FLEX", "DST")
   panes <- vapply(tabs, \(p) sprintf('<div class="pane" data-pos="%s">%s</div>', p, dfs_pos_table(P, p)), "")
   b <- P$site_base
-  slate <- if (is.null(P$slate) || !nrow(P$slate)) "<b>DraftKings main slate not found yet</b> (DK usually posts the next week's salaries Sunday night / Monday); projections below are for every game this week, without salaries." else
+  slate <- if (is.null(P$slate) || !nrow(P$slate)) paste0("<b>DraftKings main slate not found yet</b> (DK usually posts the next week's salaries Sunday night / Monday); projections below are for every game this week, without salaries.",
+                    if (!is.null(P$dk_err) && !is.na(P$dk_err)) sprintf(" <span class='s'>(DK pull: %s)</span>", pp_esc(P$dk_err)) else "") else
     sprintf("<b>DK main slate: %d games</b> (%s) · salaries pulled %s ET%s.", nrow(P$slate), paste(P$slate$label, collapse = ", "),
             pp_et(P$sal_time, "%a %b %d %I:%M %p"), if (identical(P$sal_src, "csv")) " from the uploaded DKSalaries.csv" else "")
   props <- if (is.na(P$last_pull)) "No props pulled yet this week: rows are history-based until they post." else

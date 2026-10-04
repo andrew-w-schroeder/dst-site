@@ -71,7 +71,7 @@ SAL_CSV <- file.path(PROJ_DIR, sprintf("data/dfs/dk_salaries_%d_wk%02d.csv", SEA
 MAN_CSV <- file.path(PROJ_DIR, sprintf("data/dfs/DKSalaries_%d_wk%02d.csv", SEASON, WEEK))
 gl <- bind_rows(games |> transmute(game_id, team = home_team, opp = away_team, home = 1L, ko),
                 games |> transmute(game_id, team = away_team, opp = home_team, home = 0L, ko))
-sal <- NULL; sal_src <- NA
+sal <- NULL; sal_src <- NA; dk_err <- NA_character_
 if (file.exists(MAN_CSV)) { sal <- tryCatch(dk_parse_csv(MAN_CSV) |> mutate(pulled_at = isoz(file.mtime(MAN_CSV)), dg_id = "csv"), error = function(e) { message("dfs: DKSalaries.csv — ", conditionMessage(e)); NULL })
   if (!is.null(sal)) { sal_src <- "csv"; message(sprintf("dfs: salaries from the uploaded %s (%d players)", basename(MAN_CSV), nrow(sal))) } }
 if (is.null(sal) && !nzchar(Sys.getenv("NO_DK")) && any(games$ko > NOW)) tryCatch({
@@ -80,11 +80,13 @@ if (is.null(sal) && !nzchar(Sys.getenv("NO_DK")) && any(games$ko > NOW)) tryCatc
   x <- dk_parse_draftables(dk_get_json(sprintf(DK_DRAFTABLES, mg$dg_id)))
   ## this week's slate? its teams must be teams playing this week (the lobby can already show next week's slate)
   tm <- setdiff(unique(x$team), NA); share <- mean(tm %in% gl$team[gl$ko > NOW - 4 * 86400])
-  if (!nrow(x) || share < 0.9) stop(sprintf("lobby main slate (draft group %s, %d games) doesn't match week %d's games (%.0f%% of teams)", mg$dg_id, mg$n_games, WEEK, 100 * share))
+  if (!nrow(x) || share < 0.9) stop(sprintf("lobby main slate (draft group %s) doesn't match week %d's games (%.0f%% of its teams play this week)", mg$dg_id, WEEK, 100 * share))
   x <- x |> mutate(pulled_at = isoz(NOW), dg_id = mg$dg_id)
   write.csv(x, SAL_CSV, row.names = FALSE)
-  message(sprintf("dfs: DK main slate = draft group %s, %d games, %d players", mg$dg_id, mg$n_games, nrow(x)))
-}, error = function(e) message("dfs: DK salaries not pulled — ", conditionMessage(e), if (file.exists(SAL_CSV)) " (using the stored pull)" else ""))
+  message(sprintf("dfs: DK main slate = draft group %s (%s), %d games, %d players", mg$dg_id, if (!is.null(mg$example)) mg$example else "",
+                  n_distinct(x$game), nrow(x)))
+}, error = function(e) { dk_err <<- conditionMessage(e)
+  message("dfs: DK salaries not pulled — ", conditionMessage(e), if (file.exists(SAL_CSV)) " (using the stored pull)" else "") })
 if (is.null(sal) && file.exists(SAL_CSV)) { sal <- as_tibble(read.csv(SAL_CSV, stringsAsFactors = FALSE, colClasses = c(dk_id = "character", dg_id = "character"))); sal_src <- "dk" }
 ## slate games = this week's games with a team on the salary list
 slate_games <- if (!is.null(sal) && nrow(sal)) unique(gl$game_id[gl$team %in% sal$team]) else character()
@@ -187,7 +189,7 @@ last_pull <- if (nrow(cur) && "t" %in% names(cur) && any(!is.na(cur$t))) max(cur
 P <- list(season = SEASON, week = WEEK, now = NOW, rows = rows, spec = S, slate = slate, site_base = SITE_BASE,
           sal_time = if (!is.null(sal) && nrow(sal)) utc(max(sal$pulled_at)) else as.POSIXct(NA), sal_src = sal_src,
           last_pull = last_pull, n_locked = if (!is.null(slate)) sum(slate$ko <= NOW) else 0L, n_slate = if (!is.null(slate)) nrow(slate) else nrow(games),
-          n_unmatched = n_unm)
+          n_unmatched = n_unm, dk_err = if (is.null(sal)) dk_err else NA_character_)
 html <- dfs_page(P)
 dir.create(file.path(SITE_DIR, "dfs", "archive"), recursive = TRUE, showWarnings = FALSE)
 arch_name <- sprintf("dfs_%d_wk%02d.html", SEASON, WEEK)
