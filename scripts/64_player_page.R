@@ -222,7 +222,7 @@ pp_pos_table <- function(P, pos, fmt) {
   ng <- c(QB = 2, RB = 3, WR = 3, TE = 2, FLEX = 4)[[pos]]                 # green tiers (Andrew 2026-10-01: RB / WR 3, FLEX 4)
   tc <- if (ng <= 2) tier_cls(tr$tier, k = max(tr$tier)) else
     ifelse(tr$tier <= ng, paste0("g", ng, "_", tr$tier), tier_cls(tr$tier, k = max(tr$tier)))
-  pos_cls <- if (flex) list(Pos = paste0("pz ", tolower(d$pos))) else list()        # FLEX: colour-coded position (Andrew 2026-10-03): RB purple (not green: the tiers are green), WR blue, TE orange
+  pos_cls <- if (flex) list(Pos = paste0("pz ", tolower(d$pos))) else list()        # FLEX: colour-coded position (Andrew 2026-10-03): RB pink (not green: the tiers are green), WR sky blue, TE orange
   pp_table(t, raw = c("Player", "Trend", "ECR", "Range bar", "\u00b1", "TD%", unname(scols)), id = paste0("t_", pos, "_", fmt), row_cls = row_cls,
            cell_cls = c(list(Rank = tc, Player = tc, Proj = tc), ext_c, pos_cls), row_key = pp_search_key(d$player_name, d$team))
 }
@@ -318,7 +318,8 @@ tr.nop td{font-style:italic}span.nop{font-style:normal;border:1px solid var(--bd
 span.inj{color:#c05621;font-weight:700;font-size:12px}span.inj.out{color:#c53030}
 @media (prefers-color-scheme:dark){span.inj{color:#f6ad55}span.inj.out{color:#fc8181}}
 .sw.fl1{background:var(--fl1)}.sw.fl2{background:var(--fl2)}p.legend{margin:.2rem 0}
-td.pz{font-weight:700;text-align:center}td.pz.rb{background:rgba(140,90,220,.24)!important}td.pz.wr{background:rgba(52,120,230,.22)!important}td.pz.te{background:rgba(236,130,40,.26)!important}td.pz.qb{background:rgba(214,64,96,.22)!important}
+td.pz{font-weight:700;text-align:center}td.pz.rb{background:rgba(140,90,220,.24)!important}td.pz.wr{background:rgba(0,170,200,.26)!important}td.pz.te{background:rgba(236,130,40,.26)!important}td.pz.qb{background:rgba(214,64,96,.22)!important}
+@media (prefers-color-scheme:dark){td.pz.rb{background:rgba(140,90,220,.42)!important}td.pz.wr{background:rgba(0,170,200,.42)!important}td.pz.te{background:rgba(236,130,40,.45)!important}td.pz.qb{background:rgba(214,64,96,.42)!important}}
 #srch{display:flex;align-items:center;gap:8px}#psearch{padding:7px 10px;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--fg);min-height:36px;width:240px;font-size:14px}
 @media (max-width:560px){#srch{width:100%}#psearch{flex:1;width:auto}}', SITE_CSS, '</style></head><body>',
   if (exists("site_nav")) site_nav("players", b) else sprintf("<p class='s'><a href='%s'>D/ST</a> · <a href='%sk/'>Kickers</a> · <b>Players</b></p>", b, b),
