@@ -72,19 +72,23 @@ MAN_CSV <- file.path(PROJ_DIR, sprintf("data/dfs/DKSalaries_%d_wk%02d.csv", SEAS
 gl <- bind_rows(games |> transmute(game_id, team = home_team, opp = away_team, home = 1L, ko),
                 games |> transmute(game_id, team = away_team, opp = home_team, home = 0L, ko))
 sal <- NULL; sal_src <- NA; dk_err <- NA_character_
-if (file.exists(MAN_CSV)) { sal <- tryCatch(dk_parse_csv(MAN_CSV) |> mutate(pulled_at = isoz(file.mtime(MAN_CSV)), dg_id = "csv"), error = function(e) { message("dfs: DKSalaries.csv — ", conditionMessage(e)); NULL })
-  if (!is.null(sal)) { sal_src <- "csv"; message(sprintf("dfs: salaries from the uploaded %s (%d players)", basename(MAN_CSV), nrow(sal))) } }
+## an uploaded lobby export: DKSalaries_<season>_wk<ww>.csv, or any DKSalaries*.csv in data/dfs whose teams play this week
+## (newest first), so the default export name works too
+man <- c(MAN_CSV[file.exists(MAN_CSV)], { f <- list.files(file.path(PROJ_DIR, "data/dfs"), pattern = "^DKSalaries.*\\.csv$", full.names = TRUE)
+  f <- setdiff(f, MAN_CSV); f[order(file.mtime(f), decreasing = TRUE)] })
+for (f in man) {
+  x <- tryCatch(dk_parse_csv(f), error = function(e) { message("dfs: ", basename(f), " — ", conditionMessage(e)); NULL })
+  if (is.null(x) || !nrow(x)) next
+  if (dk_game_share(x$game, games) < 0.9) { message("dfs: ", basename(f), " is not this week's slate (its games aren't this week's matchups), skipped"); next }
+  sal <- x |> mutate(pulled_at = isoz(file.mtime(f)), dg_id = "csv"); sal_src <- "csv"
+  message(sprintf("dfs: salaries from the uploaded %s (%d players)", basename(f), nrow(sal))); break
+}
+## the automatic pull (also done from Stratus by 97, which stores the same file). GitHub's runners may be refused by DK's
+## draftables API (HTTP 403); then the stored file from 97 or an uploaded export is used.
 if (is.null(sal) && !nzchar(Sys.getenv("NO_DK")) && any(games$ko > NOW)) tryCatch({
-  grp <- dk_groups(dk_get_json(DK_LOBBY)); mg <- dk_main_group(grp)
-  if (!nrow(mg)) stop("no classic main-slate draft group in the lobby")
-  x <- dk_parse_draftables(dk_get_json(sprintf(DK_DRAFTABLES, mg$dg_id)))
-  ## this week's slate? its teams must be teams playing this week (the lobby can already show next week's slate)
-  tm <- setdiff(unique(x$team), NA); share <- mean(tm %in% gl$team[gl$ko > NOW - 4 * 86400])
-  if (!nrow(x) || share < 0.9) stop(sprintf("lobby main slate (draft group %s) doesn't match week %d's games (%.0f%% of its teams play this week)", mg$dg_id, WEEK, 100 * share))
-  x <- x |> mutate(pulled_at = isoz(NOW), dg_id = mg$dg_id)
+  x <- dk_pull_main(games, NOW)
   write.csv(x, SAL_CSV, row.names = FALSE)
-  message(sprintf("dfs: DK main slate = draft group %s (%s), %d games, %d players", mg$dg_id, if (!is.null(mg$example)) mg$example else "",
-                  n_distinct(x$game), nrow(x)))
+  message(sprintf("dfs: DK main slate = draft group %s (%s), %d games, %d players", x$dg_id[1], attr(x, "example"), n_distinct(x$game), nrow(x)))
 }, error = function(e) { dk_err <<- conditionMessage(e)
   message("dfs: DK salaries not pulled — ", conditionMessage(e), if (file.exists(SAL_CSV)) " (using the stored pull)" else "") })
 if (is.null(sal) && file.exists(SAL_CSV)) { sal <- as_tibble(read.csv(SAL_CSV, stringsAsFactors = FALSE, colClasses = c(dk_id = "character", dg_id = "character"))); sal_src <- "dk" }

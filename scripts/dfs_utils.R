@@ -205,6 +205,25 @@ dk_parse_draftables <- function(j) {
   ## each player is listed once per roster slot (e.g. RB and FLEX): keep one
   out |> filter(!is.na(salary)) |> distinct(dk_id, .keep_all = TRUE) |> mutate(status = ifelse(status %in% c("None", "", NA), "", status))
 }
+## the main slate's salaries, checked against the teams playing this week (the lobby can already show next week's slate).
+## teams: teams with a game this week not yet started. Returns the draftables with pulled_at / dg_id, or stops with a reason.
+## share of a salary list's games ("BUF @ MIA", "BUF@MIA ...") that are this week's matchups (games: away_team, home_team)
+dk_game_share <- function(game, games) {
+  g <- unique(sub("^\\s*([A-Za-z]+)\\s*@\\s*([A-Za-z]+).*$", "\\1@\\2", na.omit(game)))
+  if (!length(g)) return(0)
+  key <- paste0(dk_team(sub("@.*", "", g)), "@", dk_team(sub(".*@", "", g)))
+  mean(key %in% c(paste0(games$away_team, "@", games$home_team), paste0(games$home_team, "@", games$away_team)))
+}
+## games: this week's games (away_team, home_team) not yet started
+dk_pull_main <- function(games, now = Sys.time()) {
+  mg <- dk_main_group(dk_groups(dk_get_json(DK_LOBBY)))
+  if (!nrow(mg)) stop("no classic main-slate draft group in the lobby")
+  x <- dk_parse_draftables(dk_get_json(sprintf(DK_DRAFTABLES, mg$dg_id)))
+  share <- dk_game_share(x$game, games)
+  if (!nrow(x) || share < 0.9) stop(sprintf("lobby main slate (draft group %s) isn't this week's (%.0f%% of its games are this week's matchups)", mg$dg_id, 100 * share))
+  attr(x, "example") <- if (!is.null(mg$example)) mg$example else ""
+  x |> mutate(pulled_at = format(now, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"), dg_id = mg$dg_id)
+}
 ## DKSalaries.csv (lobby export): Position, Name + ID, Name, ID, Roster Position, Salary, Game Info, TeamAbbrev, AvgPointsPerGame
 dk_parse_csv <- function(file) {
   x <- utils::read.csv(file, stringsAsFactors = FALSE, check.names = FALSE)

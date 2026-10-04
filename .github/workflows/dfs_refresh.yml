@@ -9,7 +9,7 @@ on:
     types: [completed]
   push:
     branches: [main]
-    paths: ["output/dfs/**", "scripts/95_dfs_page.R", "scripts/96_dfs_refresh.R", "scripts/dfs_utils.R", "data/dfs/DKSalaries_*.csv"]
+    paths: ["output/dfs/**", "scripts/95_dfs_page.R", "scripts/96_dfs_refresh.R", "scripts/dfs_utils.R", "data/dfs/DKSalaries*.csv", "data/dfs/dk_salaries_*.csv"]
   workflow_dispatch:
 
 permissions:
