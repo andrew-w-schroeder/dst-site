@@ -245,7 +245,7 @@ dk_parse_csv <- function(file) {
 ##           Andrew 2026-10-04: it pushed one WR to 51%);
 ##   imp   = team implied total, z-scored (popular games).
 ## The shares are scaled so each position sums to its slots on a DK classic roster (QB 1, RB 2 + FLEX share,
-## WR 3 + FLEX share, TE 1 + FLEX share, DST 1; 900% in all). How concentrated each position is (the softmax temperature)
+## WR 3 + FLEX share, TE 1 + FLEX share, DST 1; 900% in all; FLEX roughly a third each, from the first contest export). How concentrated each position is (the softmax temperature)
 ## is set per slate so the "effective number of players" (1 / sum of squared shares) matches a typical main slate, scaled
 ## by the number of games: at 12 games QB 9, RB 14, WR 22, TE 9, D/ST 10 (top QB ~15-20%, top RB ~30-40%). The drivers
 ## decide WHO is popular; the targets only set HOW concentrated. Weights and targets are placeholders until 98 fits
@@ -256,7 +256,7 @@ dk_parse_csv <- function(file) {
 OWN_BETA <- list(
   w = c(value = 1.00, proj = 0.55, form = 0.20, imp = 0.20),
   neff12 = c(QB = 9, RB = 14, WR = 22, TE = 9, DST = 10),
-  slots = c(QB = 100, RB = 235, WR = 350, TE = 115, DST = 100),
+  slots = c(QB = 100, RB = 232, WR = 336, TE = 132, DST = 100),   # 900% in all; actual 2026 wk 4 Play-Action: RB 230, WR 336, TE 132, FLEX split 31 / 36 / 32 (Andrew 2026-10-05)
   avg_salary = 49700, cap = 0.60, fitted = FALSE)
 own_project <- function(d, n_games = 12, spec = OWN_BETA) {
   ## d: pos (QB / RB / WR / TE / DST), salary, proj, form (may be NA), imp (may be NA), avail (FALSE = out)
