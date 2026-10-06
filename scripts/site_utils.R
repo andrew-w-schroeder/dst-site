@@ -339,6 +339,7 @@ track_file <- function(proj_dir, season) file.path(Sys.getenv("TRACK_DIR", file.
 .pc <- function(x) ifelse(is.na(x), "—", paste0(round(100 * x), "%"))
 .cls <- function(x) ifelse(is.na(x) | abs(x) < 0.005, "", ifelse(x > 0, "gain", "loss"))
 tr_table <- function(cols, left = 1, foot = NULL, cls_row = NULL) {        # cols: list of list(h, v, tip, cls)
+  cols <- Filter(Negate(is.null), cols)                                    # optional columns: if (cond) list(...) gives NULL
   th <- vapply(cols, function(c) sprintf('<th title="%s">%s</th>', .tr_esc(c$tip %||% ""), .tr_esc(c$h)), "")
   n <- length(cols[[1]]$v)
   rows <- vapply(seq_len(n), function(i) paste0(sprintf("<tr%s>", if (!is.null(cls_row) && nzchar(cls_row[i])) sprintf(' class="%s"', cls_row[i]) else ""),
@@ -381,6 +382,7 @@ tr_cum <- function(m, col) {
 track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
   if (!identical(TR$version, 2L)) return(NULL)
   mm <- TR$metrics[TR$metrics$pos == pos, ]; if (!nrow(mm)) return(NULL)
+  has18 <- all(c("ndcg_lin18", "ndcg_s12") %in% names(mm)) && any(!is.na(mm$ndcg_lin18))   # NDCG@18 (Andrew 2026-10-06; 62 from then on)
   units <- if (pos == "DEF") "D/STs" else "kickers"
   wlab <- function(w) if (length(w) > 1) sprintf("weeks %d–%d", min(w), max(w)) else sprintf("week %d", w)
   bf <- sort(unique(mm$week[mm$kind == "backfilled"]))
@@ -390,7 +392,9 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
                   "and in ESPN standard scoring Sleeper's and ESPN's weekly projections (Sleeper's re-scored into ESPN standard from its projected stats; the last version before each kickoff). ",
                   "All ", units, " count, rostered or not, and every metric is computed on the teams all sources projected that week. Charts show the season to date after each week; hover a dot for its value.", bf_note, "</p>",
                   "<p class='s'><b>Rank correlation</b>: how well the order matched the actual finish (1 = perfect, 0 = random). <b>Projection correlation</b>: the same for the projected points themselves, so magnitude counts too. ",
-                  "<b>Top-weighted score</b>: like rank correlation but mistakes near the top of the list cost the most (NDCG: 1 = perfect order). <b>RMSE</b>: typical projection error in points (lower = better). ",
+                  "<b>Top-weighted score</b>: like rank correlation but mistakes near the top of the list cost the most (NDCG: 1 = perfect order). ",
+                  if (has18) "<b>NDCG@18, linear</b> and <b>NDCG@18, S-curve</b>: the same score over the top 18 only (about how many are rostered in 12-team leagues; ranks 19+ count for nothing), with gentler weights: linear = rank 1 counts 1, each rank lower 1/22 less (rank 2 0.95, rank 12 0.50, rank 18 0.23); S-curve = nearly flat through the top 6, half weight at rank 12 (the start line), 0.12 at rank 18. On these, a random order scores about 0.69, and a ranking with rank correlation about 0.3 (typical for these positions) about 0.78. " else "",
+                  "<b>RMSE</b>: typical projection error in points (lower = better). ",
                   "<b>Top-12 average</b>: actual points of each source's weekly top 12. <b>Start/sit calls</b>: every pair of ", units, " two sources ranked in opposite order is one call; points gained per call by following ours.</p>")
   sec <- vapply(names(systems), function(sy) {
     m <- mm[mm$system == sy & mm$source %in% names(TR_SLOT), ]; if (!nrow(m)) return("")
@@ -402,11 +406,15 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
       tr_chart(tr_cum(m, "rho_rank"), "Rank correlation", "higher = better"),
       tr_chart(tr_cum(m, "rho_proj"), "Projection correlation", "higher = better"),
       tr_chart(tr_cum(m, "ndcg"), "Top-weighted score (NDCG)", "higher = better", function(v) sprintf("%.3f", v)),
+      if (has18) tr_chart(tr_cum(m, "ndcg_lin18"), "NDCG@18, linear weights", "higher = better", function(v) sprintf("%.3f", v)) else "",
+      if (has18) tr_chart(tr_cum(m, "ndcg_s12"), "NDCG@18, S-curve (half weight at 12)", "higher = better", function(v) sprintf("%.3f", v)) else "",
       tr_chart(tr_cum(m, "rmse"), "RMSE (points)", "lower = better"),
       tr_chart(tr_cum(m, "top12"), "Top-12 average (points)", "higher = better"),
       if (!is.null(ss_cum)) tr_chart(ss_cum, "Our start/sit gain vs each (pts per call)", "above 0 = ours better", function(v) sprintf("%+.2f", v)) else "")
     # season-to-date summary: one row per source
+    if (!has18) { m$ndcg_lin18 <- NA_real_; m$ndcg_s12 <- NA_real_ }
     sm <- m %>% dplyr::group_by(source) %>% dplyr::summarise(weeks = dplyr::n(), rho_rank = mean(rho_rank), rho_proj = mean(rho_proj), ndcg = mean(ndcg),
+                                                             ndcg_lin18 = mean(ndcg_lin18), ndcg_s12 = mean(ndcg_s12),
                                                              rmse = sqrt(sum(n * rmse^2) / sum(n)), bias = weighted.mean(bias, n), top12 = mean(top12), .groups = "drop")
     sm <- sm[order(match(sm$source, names(TR_SLOT))), ]
     # (right / gain before calls: inside summarise() a later `calls = sum(calls)` would overwrite the per-week column)
@@ -417,7 +425,10 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
     tbl <- tr_table(list(
       list(h = "Source", v = sm$source), list(h = "Weeks", v = sm$weeks),
       list(h = "Rank corr.", v = .f(sm$rho_rank, 3), cls = best(sm$rho_rank)), list(h = "Projection corr.", v = .f(sm$rho_proj, 3), cls = best(sm$rho_proj)),
-      list(h = "Top-weighted (NDCG)", v = .f(sm$ndcg, 3), cls = best(sm$ndcg)), list(h = "RMSE", v = .f(sm$rmse), cls = best(sm$rmse, FALSE)),
+      list(h = "Top-weighted (NDCG)", v = .f(sm$ndcg, 3), cls = best(sm$ndcg)),
+      if (has18) list(h = "NDCG@18 linear", v = .f(sm$ndcg_lin18, 3), cls = best(sm$ndcg_lin18), tip = "top 18 only; weight 1 at rank 1, falling 1/22 per rank (0.50 at 12, 0.23 at 18)"),
+      if (has18) list(h = "NDCG@18 S-curve", v = .f(sm$ndcg_s12, 3), cls = best(sm$ndcg_s12), tip = "top 18 only; nearly flat through rank 6, half weight at rank 12, 0.12 at 18"),
+      list(h = "RMSE", v = .f(sm$rmse), cls = best(sm$rmse, FALSE)),
       list(h = "Bias", v = .sg(sm$bias), tip = "average projection minus average actual (+ = projects too high)"),
       list(h = "Top-12 avg", v = .f(sm$top12), cls = best(sm$top12)),
       list(h = "Calls vs ours", v = ifelse(is.na(j), "", format(sp$calls[j], big.mark = ",")), tip = "start/sit calls: pairs this source and ours ranked in opposite order"),
@@ -426,7 +437,9 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
     weekly <- m[order(m$week, match(m$source, names(TR_SLOT))), ]
     wtbl <- tr_table(list(list(h = "Week", v = weekly$week), list(h = "Type", v = weekly$kind), list(h = "Source", v = weekly$source),
                           list(h = "Rank corr.", v = .f(weekly$rho_rank, 3)), list(h = "Projection corr.", v = .f(weekly$rho_proj, 3)),
-                          list(h = "NDCG", v = .f(weekly$ndcg, 3)), list(h = "RMSE", v = .f(weekly$rmse)), list(h = "Bias", v = .sg(weekly$bias)),
+                          list(h = "NDCG", v = .f(weekly$ndcg, 3)),
+                          if (has18) list(h = "NDCG@18 lin.", v = .f(weekly$ndcg_lin18, 3)), if (has18) list(h = "NDCG@18 S", v = .f(weekly$ndcg_s12, 3)),
+                          list(h = "RMSE", v = .f(weekly$rmse)), list(h = "Bias", v = .sg(weekly$bias)),
                           list(h = "Top-12 avg", v = .f(weekly$top12))), left = 3)
     cal <- TR$calibration[TR$calibration$pos == pos & TR$calibration$system == sy, ]
     cal_txt <- if (nrow(cal)) sprintf("<p class='s'>Our calibration, %s: %s of actual scores landed inside our 80%% range (should be about 80%%); P(boom) averaged %s vs %s that boomed; P(bust) %s vs %s that busted.</p>",
