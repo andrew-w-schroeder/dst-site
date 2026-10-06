@@ -233,7 +233,8 @@ k_groups <- function(vars) {
     vars %in% c("k_fg_pct", "k_fg50_pct", "k_xp_pct") ~ "Kicker career accuracy",
     vars %in% c("k_fgoe", "k_fgoe2", "k_fgoe2r", "k_xpoe", "k_log_fga", "k_new", "k_drafted") ~ "Kicker recent skill & experience",
     vars %in% c("k_long_share", "k_avg_dist") ~ "Kicker range (long attempts)",
-    startsWith(vars, "c_") ~ "Coach 4th-down tendency",
+    vars %in% c("c_fg_oe", "c_longfg_oe") ~ "Coach FG tendency (LFGOE)",          # split 2026-10-06: FG attempts vs go-for-it
+    startsWith(vars, "c_") ~ "Coach go-for-it (GROE)",
     grepl("sec_play", vars) ~ "Game pace (sec / play)",
     startsWith(vars, "o_") ~ "Own offense (scoring / drives)",
     startsWith(vars, "d_") ~ "Opp. defense (points / drives allowed)",
