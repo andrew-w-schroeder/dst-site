@@ -224,7 +224,16 @@ th.sorted{box-shadow:inset 0 -3px 0 var(--accent)}
 #tip{position:fixed;z-index:50;display:none;max-width:420px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;
   padding:8px 10px;font-size:12.5px;line-height:1.4;box-shadow:0 4px 18px rgba(0,0,0,.25);white-space:pre-line;pointer-events:none}
 #tip b{font-size:13.5px}.leg{font-size:12.5px;color:var(--muted)}.leg span{display:inline-block;padding:1px 6px;border-radius:4px;margin:0 2px}
-details{margin:.6rem 0;font-size:13.5px;max-width:1000px}details summary{cursor:pointer;color:var(--accent)}', NAV_CSS)
+details{margin:.6rem 0;font-size:13.5px;max-width:1000px}details summary{cursor:pointer;color:var(--accent)}
+#pairs .chips{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-size:12.5px;color:var(--muted);margin:.2rem 0 .6rem}#pairs .chips span{margin-right:4px}
+#pairs .chips button{border:1px solid var(--line);background:none;color:var(--fg);padding:2px 7px;border-radius:999px;font-size:12px;cursor:pointer}
+#pairs .chips button.off{text-decoration:line-through;opacity:.45}
+#pairs select{font-size:14px;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+#pairs th{cursor:default}td.s{min-width:40px;cursor:help;line-height:1.15}td.s small{display:block;font-size:9.5px;color:var(--muted)}
+td.s.pa,.sw.pa{background:rgba(127,127,127,.12)}td.s.pb,.sw.pb{background:rgba(var(--pos),.32)}td.s.bb,.sw.bb{background:rgba(var(--neg),.38)}td.s.pj{font-style:italic}
+.sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;border:1px solid var(--line)}
+tr.solo td{font-style:italic;color:var(--muted)}
+table.hm td,table.hm th{padding:3px 3px;min-width:30px;font-size:11px}table.hm td.hc{cursor:pointer}table.hm td.dg{color:var(--muted);font-style:italic}', NAV_CSS)
 html <- c('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
   '<title>Rest of season</title><style>', css, '</style></head><body>', site_nav("ros", SITE_BASE),
   '<h1>Rest of season: D/ST &amp; kickers</h1>',
@@ -234,7 +243,15 @@ html <- c('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name
   '<div class="tabs" id="sec"></div>',
   '<div class="bar"><div class="grp" id="fmt"></div><div class="grp" id="view"></div>',
   '<span class="leg">colour: <span style="background:rgba(var(--pos),.45)">better</span> / <span style="background:rgba(var(--neg),.45)">worse</span> than that week&#39;s average · click a column to sort</span></div>',
-  '<div class="wrap"><table id="grid"></table></div><div id="tip"></div>',
+  '<div class="wrap"><table id="grid"></table></div><div id="pairs" style="display:none"></div><div id="tip"></div>',
+  # D/ST pairs tab (Andrew 2026-10-07): built in the page from the D/ST projections above (ros_utils.R, ROS_JS)
+  '<div id="pairs_help" hidden><details><summary>How pairs are scored</summary><ul>',
+  '<li><b>Rule:</b> with two D/STs, each week you start the one projected higher. On a bye the other one plays; if both are on bye that week scores 0 (marked ⚠).</li>',
+  '<li><b>Pair pts/wk:</b> the points that rule gives, averaged over the weeks in the window (rest of season = this week through week ', max(INP$playoff_weeks %||% 15:17), '; playoffs = weeks ',
+  paste(range(INP$playoff_weeks %||% 15:17), collapse = "–"), '). Use it to choose a pair.</li>',
+  '<li><b>Gain:</b> pair points minus your D/ST on its own (or, for overall pairs and the heatmap&#39;s <i>Pairing gain</i>, minus the better of the two on its own). It measures how well the schedules cover each other: byes and weak matchups that fall in different weeks.</li>',
+  '<li><b>Uncertainty:</b> weeks after next use projected lines (<i>italic</i>), so they are rougher; the projections already pull far-off weeks toward average, which keeps distant gains small. The page rebuilds daily as lines post.</li>',
+  '<li><b>Not available:</b> click teams in the row of buttons to hide D/STs that are rostered in your league; the page remembers them on this device.</li></ul></details></div>',
   sprintf('<p class="note">%s</p>', rel_txt),
   '<details><summary>How this works</summary><ul>',
   '<li><b>Models:</b> the weekly D/ST (ESPN, Yahoo, FFPC) and kicker (ESPN, decimal) blends, fed each future matchup. Team, opponent, QB and kicker rates are as of the last game played, so they don&#39;t change between now and a future week.</li>',

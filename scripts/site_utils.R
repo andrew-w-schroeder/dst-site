@@ -495,7 +495,44 @@ site_nav <- function(active, base = Sys.getenv("SITE_BASE", "/dst-site/")) {
   paste0('<nav class="topnav" aria-label="Pages">',
          paste0(sprintf('<a class="navtab%s" href="%s"%s>%s</a>', ifelse(names(items) == active, " on", ""), href,
                         ifelse(names(items) == active, ' aria-current="page"', ""), items), collapse = ""),
+         site_sched_html(),
          if (!is.na(arch[[active]])) sprintf('<a class="navarch" href="%s">past weeks</a>', arch[[active]]) else "", '</nav>')
+}
+# ---- Update schedule in the nav bar (Andrew 2026-10-07): "Next update ~…" plus the week's run times, Eastern ----
+# Read from the D/ST refresh workflow's cron lines (46 rewrites them weekly from ET_SCHEDULE); every page refreshes in
+# those runs (Players a few minutes later, DFS right after Players). The browser converts the UTC crons to Eastern time.
+SITE_SCHED_DEFAULT <- c("0 14 * * 2-6", "0 22 * * 2-3", "0 22 * * 5-6", "30 22 * * 4", "0 12 * * 0", "45 15 * * 0",
+                        "35 16 * * 0", "5 19 * * 0", "15 23 * * 0", "0 23 * * 1")   # EDT copy of 46's schedule (fallback only)
+site_sched_crons <- function() {
+  yml <- c(file.path(Sys.getenv("FF_PROJ_DIR", getwd()), ".github/workflows/dst_refresh.yml"),
+           file.path(path.expand(Sys.getenv("DST_SITE_DIR", "~/ML/dst-site")), ".github/workflows/dst_refresh.yml"))
+  yml <- yml[file.exists(yml)]
+  L <- if (length(yml)) grep('^\\s*- cron:', readLines(yml[1], warn = FALSE), value = TRUE) else character()
+  cr <- if (length(L)) sub('^\\s*- cron:\\s*"([^"]+)".*$', "\\1", L) else SITE_SCHED_DEFAULT
+  why <- if (length(L)) ifelse(grepl("E[DS]?T:\\s*", L), sub("^.*E[DS]?T:\\s*", "", L), "") else rep("", length(cr))
+  dows <- function(x) unlist(lapply(strsplit(x, ",")[[1]], function(p) if (grepl("-", p)) { r <- as.integer(strsplit(p, "-")[[1]]); r[1]:r[2] } else as.integer(p)))
+  out <- lapply(seq_along(cr), function(k) { f <- strsplit(trimws(cr[k]), "\\s+")[[1]]
+    if (length(f) != 5 || !grepl("^\\d+$", f[1]) || !grepl("^\\d+$", f[2])) return(NULL)
+    list(m = as.integer(f[1]), h = as.integer(f[2]), d = if (f[5] == "*") 0:6 else dows(f[5]) %% 7, w = trimws(why[k])) })
+  Filter(Negate(is.null), out)
+}
+site_sched_html <- function() {
+  cr <- tryCatch(site_sched_crons(), error = function(e) NULL); if (!length(cr)) return("")
+  paste0('<details class="navsched" id="navsched"><summary>&#x1F552; <span id="navnext">Update schedule</span></summary><div class="schedpop">',
+    '<b>Update schedule</b> <span class="schedtz">(Eastern, approximate)</span><table id="schedtab"></table>',
+    '<p>All pages (D/ST, Kickers, ROS, Players, DFS) refresh in these runs: new lines, props, weather and starters. ',
+    'GitHub can start a run up to about 30 minutes late. The weekly models refit on Tuesdays. Games lock at kickoff.</p></div></details>',
+    '<script>(function(){const C=', jsonlite::toJSON(cr, auto_unbox = TRUE), ';',
+    'const tz="America/New_York",now=new Date(),occ=[];for(let o=-1;o<9;o++){const d=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()+o));',
+    'C.forEach(c=>{if([].concat(c.d).includes(d.getUTCDay()))occ.push({t:new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate(),c.h,c.m)),w:c.w});});}',
+    'occ.sort((a,b)=>a.t-b.t);const fd=new Intl.DateTimeFormat("en-US",{timeZone:tz,weekday:"short"}),ft=new Intl.DateTimeFormat("en-US",{timeZone:tz,hour:"numeric",minute:"2-digit"});',
+    'const tm=t=>ft.format(t).replace(":00","").replace(" AM"," am").replace(" PM"," pm"),nx=occ.find(x=>x.t>now);',
+    'if(nx)document.getElementById("navnext").textContent="Next update ~"+fd.format(nx.t)+" "+tm(nx.t)+" ET";',
+    'const wk=occ.filter(x=>x.t>now&&x.t-now<7*864e5),by={},ord=["Tue","Wed","Thu","Fri","Sat","Sun","Mon"];',
+    'wk.forEach(x=>{const k=fd.format(x.t);(by[k]=by[k]||[]).push(x);});',
+    'const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");',
+    'document.getElementById("schedtab").innerHTML=ord.filter(k=>by[k]).map(k=>"<tr><th>"+k+"</th><td>"+by[k].map(x=>"<span title=\\""+esc(x.w)+"\\">"+tm(x.t)+"</span>").join(" · ")+"</td></tr>").join("");',
+    'document.addEventListener("click",e=>{const s=document.getElementById("navsched");if(s&&s.open&&!e.target.closest("#navsched"))s.open=false;});})();</script>')
 }
 NAV_CSS <- '
 .topnav{display:flex;flex-wrap:wrap;align-items:flex-end;gap:6px;border-bottom:3px solid var(--acc,var(--accent,#2b6cb0));margin:0 0 16px;padding-top:4px}
@@ -504,6 +541,14 @@ NAV_CSS <- '
 .topnav a.navtab:hover{filter:brightness(.95)}
 .topnav a.navtab.on{background:var(--acc,var(--accent,#2b6cb0));border-color:var(--acc,var(--accent,#2b6cb0));color:#fff}
 .topnav a.navarch{margin-left:auto;font-size:13px;padding:0 4px 8px;color:var(--acc,var(--accent,#2b6cb0))}
+.topnav .navsched{margin-left:auto;position:relative;font-size:13px;padding:0 4px 8px}
+.topnav .navsched+a.navarch{margin-left:10px}
+.navsched summary{cursor:pointer;color:var(--acc,var(--accent,#2b6cb0));list-style:none}.navsched summary::-webkit-details-marker{display:none}
+.navsched .schedpop{position:absolute;right:0;top:100%;z-index:60;width:min(340px,92vw);background:var(--bg,#fff);color:var(--fg,#222);
+  border:1px solid var(--bd,var(--line,#ccc));border-radius:8px;padding:10px 12px;box-shadow:0 6px 22px rgba(0,0,0,.22);font-size:13px;line-height:1.4}
+.navsched .schedtz{color:var(--mut,var(--muted,#666));font-weight:400}.navsched table{border-collapse:collapse;margin:.4rem 0;font-size:13px;display:table}
+.navsched th,.navsched td{border:0;padding:2px 8px 2px 0;text-align:left;white-space:normal;background:none;position:static}.navsched th{font-weight:600;color:var(--fg,#222)}
+.navsched p{margin:.3rem 0 0;color:var(--mut,var(--muted,#666));font-size:12px}
 @media (max-width:560px){.topnav{gap:4px}.topnav a.navtab{font-size:.98rem;padding:8px 11px}.topnav a.navarch{font-size:12px;padding:0 0 7px}}
 @media (max-width:420px){.topnav{gap:3px}.topnav a.navtab{font-size:.9rem;padding:7px 8px}}'
 SITE_CSS <- paste0(SITE_CSS, NAV_CSS)

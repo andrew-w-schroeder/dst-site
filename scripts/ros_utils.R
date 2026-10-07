@@ -95,9 +95,13 @@ const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 const SRC={live:'live lines',lookahead:'posted lines',projected:'projected',mixed:'some posted'};
 function btns(el,label,items,cur,cb){el.innerHTML=label?'<span>'+label+'</span>':'';items.forEach(([k,l])=>{const b=document.createElement('button');b.textContent=l;if(k===cur)b.className='on';b.onclick=()=>cb(k);el.appendChild(b);});}
 function fx(x,d){return x==null?'':x.toFixed(d);}
+function drawTabs(){btns($('sec'),'',Object.keys(S).map(k=>[k,S[k].title]).concat(S.dst?[['pairs','D/ST pairs']]:[]),sec,
+  k=>{sec=k;pinned=null;pPinned=null;tip.style.display='none';try{history.replaceState(null,'',k==='pairs'?'#pairs':location.pathname);}catch(e){}render();});}
 function render(){
+  drawTabs();const isP=sec==='pairs';$('grid').parentNode.style.display=isP?'none':'';
+  document.querySelectorAll('.leg').forEach(x=>x.style.display=isP?'none':'');$('pairs').style.display=isP?'':'none';
+  if(isP){renderPairs();return;}
   const sc=S[sec],sys=Object.keys(sc.systems);if(!fmt||!sys.includes(fmt))fmt=sys[0];
-  btns($('sec'),'',Object.keys(S).map(k=>[k,S[k].title]),sec,k=>{sec=k;render();});
   btns($('fmt'),'Format',sys.map(k=>[k,sc.systems[k]]),fmt,k=>{fmt=k;render();});
   btns($('view'),'Show',[['pts','Points'],['rank','Rank'],['dev','vs avg']],view,k=>{view=k;render();});
   const V=sc.vals[fmt],T=sc.teams,val=(t,i)=>{const c=V[t]&&V[t][i];return c?c.v:null;};
@@ -156,6 +160,104 @@ grid.addEventListener('click',e=>{const th=e.target.closest('th[data-k]');
   if(pinned===td){pinned=null;tip.style.display='none';return;}
   pinned=td;tip.innerHTML=tipHtml(td.dataset.t,+td.dataset.i);tip.style.display='block';const r=td.getBoundingClientRect();place(r.left,r.bottom);});
 document.addEventListener('click',e=>{if(pinned&&!e.target.closest('#grid')){pinned=null;tip.style.display='none';}});
+const pBg=z=>'background:rgba(var(--'+(z>=0?'pos':'neg')+'),'+(Math.min(Math.abs(z)/2,1)*0.5).toFixed(2)+')';
+// ---- D/ST pairs tab (Andrew 2026-10-07): which two D/STs cover each other best over the rest of the season ----
+// Rule: each week you start whichever of the two projects higher (a bye = the other one plays; both on bye = 0).
+// Pair pts/wk = that total / weeks in the window. Pairing gain = pair total minus the better of the two on its own.
+const PE=Math.max.apply(null,PO.length?PO:W);
+let pWin='ros',pView='find',pAnchor='',pMetric='pair',hidden=new Set(),pPinned=null;
+try{const s=JSON.parse(localStorage.getItem('rosPairs')||'{}');if(s.a)pAnchor=s.a;if(Array.isArray(s.h))hidden=new Set(s.h);}catch(e){}
+function pSave(){try{localStorage.setItem('rosPairs',JSON.stringify({a:pAnchor,h:[...hidden]}));}catch(e){}}
+function pIdx(){return W.map((w,i)=>[w,i]).filter(([w])=>w<=PE&&(pWin==='ros'||PO.includes(w))).map(([w,i])=>i);}
+function pVal(t,i){const c=S.dst.vals[fmt][t]&&S.dst.vals[fmt][t][i];return c?c.v:null;}
+function pOpp(t,i){const g=S.dst.cells[t]&&S.dst.cells[t][i];return g?g.o:'bye';}
+function pPair(a,b,I){let tot=0,na=0,nb=0;const both=[],pick=[];
+  I.forEach(i=>{const x=pVal(a,i),y=b?pVal(b,i):null;
+    if(x==null&&y==null){both.push(W[i]);pick.push(null);return;}
+    if(y==null||(x!=null&&x>=y)){tot+=x;na++;pick.push(a);}else{tot+=y;nb++;pick.push(b);}});
+  return {tot:tot,na:na,nb:nb,both:both,pick:pick};}
+function pWk(n){return n===1?'1 wk':n+' wks';}
+function pStrip(a,b,p,I,abbr){return I.map((i,k)=>{const who=p.pick[k];
+  if(who==null)return '<td class="s bb" data-a="'+a+'" data-b="'+(b||'')+'" data-i="'+i+'">—<small>'+(b?'both bye':'bye')+'</small></td>';
+  const v=pVal(who,i),cls=who===a?'pa':'pb';
+  return '<td class="s '+cls+(S.dst.cells[who][i].s==='projected'?' pj':'')+'" data-a="'+a+'" data-b="'+(b||'')+'" data-i="'+i+'">'+v.toFixed(1)+
+    '<small>'+(abbr?who:esc(pOpp(who,i)))+'</small></td>';}).join('');}
+function renderPairs(){
+  const sc=S.dst,sys=Object.keys(sc.systems);if(!fmt||!sys.includes(fmt))fmt=sys[0];
+  btns($('fmt'),'Format',sys.map(k=>[k,sc.systems[k]]),fmt,k=>{fmt=k;render();});
+  btns($('view'),'Show',[['find','Find a partner'],['heat','Heatmap']],pView,k=>{pView=k;pPinned=null;tip.style.display='none';render();});
+  const I=pIdx(),nW=Math.max(1,I.length),wl=I.map(i=>W[i]),wr='wks '+wl[0]+'–'+wl[wl.length-1];
+  const solo={};sc.teams.forEach(t=>solo[t]=pPair(t,null,I).tot);
+  const avail=sc.teams.filter(t=>!hidden.has(t));
+  let h='<div class="bar"><div class="grp" id="pwin"></div>';
+  if(pView==='find')h+='<label class="grp">Your D/ST <select id="panc"><option value="">— best pairs overall —</option>'+
+    sc.teams.map(t=>'<option'+(t===pAnchor?' selected':'')+'>'+t+'</option>').join('')+'</select></label>';
+  else h+='<div class="grp" id="pmet"></div>';
+  h+='</div><div class="chips"><span>Not available (rostered elsewhere) — click to hide:</span>'+
+    sc.teams.map(t=>'<button data-h="'+t+'"'+(hidden.has(t)?' class="off"':'')+'>'+t+'</button>').join('')+
+    (hidden.size?'<button data-h="*">show all</button>':'')+'</div>';
+  const wkHead=I.map(i=>'<th>Wk '+W[i]+'<small>'+SRC[D.wsrc[i]]+'</small></th>').join('');
+  if(pView==='find'&&pAnchor){
+    const A=pAnchor,rows=avail.filter(t=>t!==A).map(t=>{const p=pPair(A,t,I);return {t:t,p:p,gain:p.tot-solo[A]};}).sort((x,y)=>y.p.tot-x.p.tot);
+    h+='<p class="note">Partners for <b>'+A+'</b> over '+wr+': each week the higher projection starts. <span class="sw pa"></span> '+A+' starts · '+
+      '<span class="sw pb"></span> partner starts · <span class="sw bb"></span> both on bye. '+A+' alone: '+(solo[A]/nW).toFixed(2)+' pts/wk.</p>';
+    h+='<div class="wrap"><table class="pt"><thead><tr><th>#</th><th class="tm">Partner</th><th>Pair pts/wk<small>'+wr+'</small></th><th>Gain vs '+A+
+      '<small>pts/wk</small></th><th>Total<small>'+pWk(I.length)+'</small></th><th>Partner<br>starts</th><th class="gap"></th>'+wkHead+'</tr></thead><tbody>';
+    const sp=pPair(A,null,I);
+    h+='<tr class="solo"><td></td><td class="tm">'+A+' alone</td><td>'+(solo[A]/nW).toFixed(2)+'</td><td>—</td><td>'+solo[A].toFixed(1)+'</td><td>—</td><td class="gap"></td>'+pStrip(A,null,sp,I,false)+'</tr>';
+    rows.forEach((r,k)=>{h+='<tr><td>'+(k+1)+'</td><td class="tm">'+r.t+'</td><td class="sum">'+(r.p.tot/nW).toFixed(2)+'</td><td class="sum" style="'+
+      pBg(r.gain/nW/0.6)+'">+'+(r.gain/nW).toFixed(2)+'</td><td>'+r.p.tot.toFixed(1)+'</td><td>'+pWk(r.p.nb)+(r.p.both.length?' <span title="both on bye: wk '+r.p.both.join(', ')+'">⚠</span>':'')+
+      '</td><td class="gap"></td>'+pStrip(A,r.t,r.p,I,false)+'</tr>';});
+    h+='</tbody></table></div>';
+  }else if(pView==='find'){
+    const pr=[];for(let x=0;x<avail.length;x++)for(let y=x+1;y<avail.length;y++){const a0=avail[x],b0=avail[y],a=solo[a0]>=solo[b0]?a0:b0,b=a===a0?b0:a0,p=pPair(a,b,I);
+      pr.push({a:a,b:b,p:p,fit:p.tot-solo[a]});}
+    pr.sort((u,v)=>v.p.tot-u.p.tot);
+    h+='<p class="note">Best pairs among the available D/STs over '+wr+'. Pick your D/ST above to see its best partners. <span class="sw pa"></span> first team starts · <span class="sw pb"></span> second team starts.</p>';
+    h+='<div class="wrap"><table class="pt"><thead><tr><th>#</th><th class="tm">Pair</th><th>Pair pts/wk<small>'+wr+'</small></th><th>Pairing gain<small>pts/wk vs better alone</small></th><th>Total<small>'+pWk(I.length)+
+      '</small></th><th class="gap"></th>'+wkHead+'</tr></thead><tbody>';
+    pr.slice(0,40).forEach((r,k)=>{h+='<tr><td>'+(k+1)+'</td><td class="tm">'+r.a+' + '+r.b+'</td><td class="sum">'+(r.p.tot/nW).toFixed(2)+'</td><td class="sum" style="'+
+      pBg(r.fit/nW/0.6)+'">+'+(r.fit/nW).toFixed(2)+'</td><td>'+r.p.tot.toFixed(1)+'</td><td class="gap"></td>'+pStrip(r.a,r.b,r.p,I,true)+'</tr>';});
+    h+='</tbody></table></div>';
+  }else{
+    const T=avail.slice().sort((x,y)=>solo[y]-solo[x]),M={},vals=[];
+    T.forEach(a=>{M[a]={};T.forEach(b=>{if(a===b)return;const p=pPair(a,b,I),v=pMetric==='pair'?p.tot/nW:(p.tot-Math.max(solo[a],solo[b]))/nW;M[a][b]={v:v,p:p};vals.push(v);});});
+    const m=vals.reduce((s,x)=>s+x,0)/Math.max(1,vals.length),sd=Math.sqrt(vals.reduce((s,x)=>s+(x-m)*(x-m),0)/Math.max(1,vals.length-1))||1,mx=Math.max.apply(null,vals.concat([0.01]));
+    h+='<p class="note">'+(pMetric==='pair'?'<b>Pair pts/wk</b>: average weekly points from starting the better of the two each week ('+wr+'). Green = better than the average pair. Best for choosing a pair.':
+      '<b>Pairing gain</b>: how much the pair adds over the better of the two on its own (pts/wk, '+wr+'). High = schedules that cover each other (byes and soft weeks fall in different weeks), regardless of how good the teams are.')+
+      ' Teams are sorted by their own projection over the window (best at top-left). Hover for details; click a cell to open that team&#39;s partner list.</p>';
+    h+='<div class="wrap"><table class="hm"><thead><tr><th class="tm">D/ST</th><th title="the team on its own">Alone</th>'+T.map(t=>'<th>'+t+'</th>').join('')+'</tr></thead><tbody>';
+    T.forEach(a=>{h+='<tr><td class="tm">'+a+'</td><td class="dg">'+(solo[a]/nW).toFixed(1)+'</td>';T.forEach(b=>{if(a===b){h+='<td class="dg">—</td>';return;}
+      const c=M[a][b],st=pMetric==='pair'?pBg((c.v-m)/sd):'background:rgba(var(--pos),'+(Math.max(0,c.v)/mx*0.6).toFixed(2)+')';
+      h+='<td class="hc" style="'+st+'" data-a="'+a+'" data-b="'+b+'">'+c.v.toFixed(1)+'</td>';});h+='</tr>';});
+    h+='</tbody></table></div>';
+  }
+  $('pairs').innerHTML=h+$('pairs_help').innerHTML;
+  btns($('pwin'),'Window',[['ros','Rest of season (wk '+Math.min.apply(null,W)+'–'+PE+')'],['po','Playoffs (wk '+PO[0]+'–'+PO[PO.length-1]+')']],pWin,k=>{pWin=k;render();});
+  if($('pmet'))btns($('pmet'),'Value',[['pair','Pair pts/wk'],['gain','Pairing gain']],pMetric,k=>{pMetric=k;render();});
+  if($('panc'))$('panc').onchange=e=>{pAnchor=e.target.value;pSave();render();};
+}
+function pTipHtml(el){const a=el.dataset.a,b=el.dataset.b||null,I=pIdx(),nW=Math.max(1,I.length),sys=S.dst.systems[fmt];
+  if(el.dataset.i!=null){const i=+el.dataset.i,x=pVal(a,i),y=b?pVal(b,i):null,ln=(t,v)=>'<b>'+t+'</b> '+(v==null?'on bye':v.toFixed(1)+' pts · '+esc(pOpp(t,i)));
+    const st=(x==null&&y==null)?'Neither plays':'Start '+((y==null||(x!=null&&x>=y))?a:b);
+    return '<b>Week '+W[i]+' · '+esc(sys)+': '+st+'</b>\n'+ln(a,x)+(b?'\n'+ln(b,y):'')+(S.dst.cells[a][i]&&S.dst.cells[a][i].s==='projected'?'\n(projected lines)':'');}
+  const p=pPair(a,b,I),sa=pPair(a,null,I).tot,sb=pPair(b,null,I).tot;
+  return '<b>'+a+' + '+b+' · '+esc(sys)+': '+(p.tot/nW).toFixed(2)+' pts/wk</b> (weeks '+W[I[0]]+'–'+W[I[I.length-1]]+')\n'+
+    'Start '+a+' '+pWk(p.na)+', '+b+' '+pWk(p.nb)+(p.both.length?' · both on bye wk '+p.both.join(', '):'')+'\n'+
+    a+' alone '+(sa/nW).toFixed(2)+' · '+b+' alone '+(sb/nW).toFixed(2)+' pts/wk\n'+
+    'Gain over '+a+' alone +'+((p.tot-sa)/nW).toFixed(2)+' · over '+b+' alone +'+((p.tot-sb)/nW).toFixed(2)+' pts/wk';}
+const pairs=$('pairs');
+pairs.addEventListener('mousemove',e=>{const el=e.target.closest('td[data-a]');if(!el){if(!pPinned)tip.style.display='none';return;}
+  if(pPinned)return;tip.innerHTML=pTipHtml(el);tip.style.display='block';place(e.clientX,e.clientY);});
+pairs.addEventListener('mouseleave',()=>{if(!pPinned)tip.style.display='none';});
+pairs.addEventListener('click',e=>{const hb=e.target.closest('button[data-h]');
+  if(hb){const t=hb.dataset.h;if(t==='*')hidden.clear();else if(hidden.has(t))hidden.delete(t);else hidden.add(t);pSave();render();return;}
+  const hc=e.target.closest('td.hc');if(hc){pAnchor=hc.dataset.a;pView='find';pSave();tip.style.display='none';pPinned=null;render();window.scrollTo(0,pairs.offsetTop-10);return;}
+  const el=e.target.closest('td[data-a]');if(!el){pPinned=null;tip.style.display='none';return;}
+  if(pPinned===el){pPinned=null;tip.style.display='none';return;}
+  pPinned=el;tip.innerHTML=pTipHtml(el);tip.style.display='block';const r=el.getBoundingClientRect();place(r.left,r.bottom);});
+document.addEventListener('click',e=>{if(pPinned&&!e.target.closest('#pairs')){pPinned=null;tip.style.display='none';}});
+if(location.hash==='#pairs'&&S.dst)sec='pairs';
 render();
 })();
 ]---"
