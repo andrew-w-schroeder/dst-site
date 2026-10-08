@@ -37,20 +37,21 @@ PP_TIP <- c(
   "\u00b1" = "Model uncertainty of the projection, like the kicker and D/ST pages: half the width of its 90% bootstrap interval. Each of 60 draws resamples the sportsbooks behind the median lines (with replacement, per game) and uses one of 100 bootstrap refits of the props-to-stats calibration; the interval is the 5th to 95th percentile of the projections. Wide = books disagree, thin markets or lines far from typical. Hover for the interval. It measures how sure we are of the projection, not how much the player's score can swing (that is the range bar).",
   "Range bar" = "How much his score can swing: light band = 80% of outcomes (10th to 90th percentile), dark band = 50% (25th to 75th), line = projection; the small orange band around the line = the \u00b1 (90% interval of the projection itself). From quantile regression on 2023+ player-games with the same projection (adding the TD price, implied total or spread didn't help). Same scale within a table.",
   "Injury" = "(Q) Questionable, (D) Doubtful, (O) Out, IR / PUP / NFI / SUS after the name: the official NFL injury report's game status once it is out (Friday), before that Sleeper's status; IR / PUP / suspensions from either. Checked at every refresh and frozen at kickoff. Hover the player for practice participation and the injury. Red = ruled out or doubtful.",
-  ECR = "FantasyPros expert consensus rank at the position (via DynastyProcess, updated about 10 am / 10 pm ET; the last one before kickoff). RB / WR / TE ranks are PPR in every format. Hover for the average rank, spread across experts and FantasyPros' projected PPR points. Amber when we rank the player a start but ECR has him as a sit: light = just outside the start line, dark = well outside (start lines: QB 12, RB 24, WR 36, TE 12).",
-  "ESPN rank" = "ESPN's projected stats scored in this format, ranked at the position (last pull before kickoff); projected points in brackets. Amber as for ECR.",
-  "Sleeper rank" = "Sleeper's projected stats (Rotowire) scored in this format, ranked at the position (last pull before kickoff); projected points in brackets. Amber as for ECR.")
+  ECR = "FantasyPros expert consensus rank at the position (via DynastyProcess, updated about 10 am / 10 pm ET; the last one before kickoff). RB / WR / TE ranks are PPR in every format. Hover for the average rank, spread across experts and FantasyPros' projected PPR points. Shaded when ECR ranks him at least 25% (pale) or 50% (strong) higher or lower than our position rank: the gap divided by the better of the two ranks, at least 3 spots, and one of the two inside RB 36 / WR 54 / TE 18 (any QB rank).",
+  "ESPN rank" = "ESPN's projected stats scored in this format, ranked at the position (last pull before kickoff); projected points in brackets. Shaded as for ECR.",
+  "Sleeper rank" = "Sleeper's projected stats (Rotowire) scored in this format, ranked at the position (last pull before kickoff); projected points in brackets. Shaded as for ECR.")
 PP_START <- c(QB = 12, RB = 24, WR = 36, TE = 12)
-## amber when we have him inside the start line and the other source is outside it (1.5x = dark)
-pp_flag <- function(ours, theirs, pos) { n <- unname(PP_START[pos])          # pos: one per row
-  ifelse(is.na(theirs) | ours > n, "", ifelse(theirs > 1.5 * n, "fl2", ifelse(theirs > n, "fl1", ""))) }
-PP_AMBER <- paste0("<p class='s legend'><span class='sw fl1'></span> <b>Light amber</b>: we rank him a start at his position ",
-  "(inside QB 12 / RB 24 / WR 36 / TE 12) but that source ranks him just outside, a borderline sit (e.g. WR 37\u201354). ",
-  "<span class='sw fl2'></span> <b>Dark amber</b>: that source ranks him well outside, beyond 1.5\u00d7 the start line (e.g. WR 55+). ",
-  "Compared on position ranks, also on FLEX.</p>",
-  "<p class='s legend'>Vegas vs FantasyPros ECR (our Vegas-only position rank; the gap \u00f7 the better of the two ranks, always at least 3 spots: ",
-  "WR12 vs WR15 = 25%, WR10 vs WR15 = 50%): \U0001F525 <b>love</b> at least 50% higher \u00b7 \U0001F44D <b>like</b> 25\u201350% higher \u00b7 ",
-  "\U0001F914 <b>dislike</b> 25\u201350% lower \u00b7 \u2620\uFE0F <b>fade</b> at least 50% lower. Hover a player for the exact difference.</p>")
+## amber (Andrew 2026-10-07): that source ranks him 25% / 50%+ higher or lower than our position rank (site_utils rank_flag),
+## at least 3 spots, and one of the two ranks inside 1.5x the start line (RB 36, WR 54, TE 18); QBs: no cutoff (only 32)
+PP_AMBER_CAP <- c(QB = NA, RB = 36, WR = 54, TE = 18)
+pp_flag <- function(ours, theirs, pos) { cap <- unname(PP_AMBER_CAP[pos]); lo <- pmin(ours, theirs); pc <- abs(theirs - ours) / lo   # pos: one per row
+  ok <- !is.na(ours) & !is.na(theirs) & abs(theirs - ours) >= 3 & (is.na(cap) | lo <= cap)        # same rule as site_utils rank_flag
+  ifelse(!ok, "", ifelse(pc >= 0.5, "fl2", ifelse(pc >= 0.25, "fl1", ""))) }
+pp_key <- function() if (!exists("site_key")) "" else site_key(list(KEY_TIERS, KEY_RANGE,                                   # shared page key (Andrew 2026-10-07)
+  key_flags("our Vegas-only position rank"),
+  key_amber("RB 36 / WR 54 / TE 18 (any QB)", "him"),
+  key_status(kit("(Q) / (D) / (O), IR: injury status (red = ruled out or doubtful)"), kit("<i>italic</i> no props yet: projected from his history"),
+             kit("(TD) = TD-only prop"))))
 ## glossary text for rows without props (back-test numbers from 79 via the bundle)
 pp_fb_note <- function(sk) {
   x <- ""
@@ -328,7 +329,7 @@ td.pz{font-weight:700;text-align:center}td.pz.rb{background:rgba(140,90,220,.24)
   '<div class="bar"><div id="posb">', paste0(sprintf('<button data-pos="%s">%s</button>', c(pos_l, "TR", "GL"), c(pos_l, "Track record", "Glossary")), collapse = ""), '</div>',
   '<div id="fmtb">', paste0(sprintf('<button data-fmt="%s">%s</button>', fmts, unname(PS_FORMATS)), collapse = ""), '</div>',
   '<div id="srch"><input type="search" id="psearch" placeholder="Search player or team" aria-label="Search a player by name, or a team by city or nickname" autocomplete="off"><span id="pscount" class="s"></span></div></div>',
-  PP_AMBER, paste0(panes, collapse = ""), paste0(sprintf('<div class="pane" data-pos="TR" data-fmt="%s">%s</div>', PS_FMT_POS$other, vapply(PS_FMT_POS$other, \(f) pp_track(P$track, f), "")), collapse = ""),
+  pp_key(), paste0(panes, collapse = ""), paste0(sprintf('<div class="pane" data-pos="TR" data-fmt="%s">%s</div>', PS_FMT_POS$other, vapply(PS_FMT_POS$other, \(f) pp_track(P$track, f), "")), collapse = ""),
   sprintf('<div class="pane" data-pos="GL" data-fmt="*">%s<p class="s">%s</p></div>', gl_html, PP_FILL_NOTE),
   sprintf("<p class='s'>%s</p>", PP_FILL_NOTE),
   '<script>', SITE_JS, '
@@ -339,7 +340,7 @@ function show(){const f=eff(),a=st.pos=="QB"?FQB:(st.pos=="GL"?[]:FOT);
 document.querySelectorAll(".pane").forEach(p=>p.classList.toggle("on",p.dataset.pos==st.pos&&(p.dataset.fmt==f||p.dataset.fmt=="*")));
 document.querySelectorAll("#posb button").forEach(b=>b.classList.toggle("on",b.dataset.pos==st.pos));
 document.querySelectorAll("#fmtb button").forEach(b=>{b.classList.toggle("on",b.dataset.fmt==f);b.style.display=a.includes(b.dataset.fmt)?"":"none"});
-document.querySelectorAll("p.legend").forEach(l=>l.style.display=(st.pos=="TR"||st.pos=="GL")?"none":"");
+document.querySelectorAll(".legend").forEach(l=>l.style.display=(st.pos=="TR"||st.pos=="GL")?"none":"");
 document.getElementById("srch").style.display=(st.pos=="TR"||st.pos=="GL")?"none":"";applySearch();
 try{localStorage.setItem("pp_state",JSON.stringify(st))}catch(e){};stickCols()}
 document.querySelectorAll("#posb button").forEach(b=>b.onclick=()=>{st.pos=b.dataset.pos;show()});
