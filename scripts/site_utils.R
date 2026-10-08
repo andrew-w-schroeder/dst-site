@@ -511,8 +511,9 @@ site_nav <- function(active, base = Sys.getenv("SITE_BASE", "/dst-site/")) {
 SITE_SCHED_DEFAULT <- c("0 14 * * 2-6", "0 22 * * 2-3", "0 22 * * 5-6", "30 22 * * 4", "0 12 * * 0", "45 15 * * 0",
                         "35 16 * * 0", "5 19 * * 0", "15 23 * * 0", "0 23 * * 1")   # EDT copy of 46's schedule (fallback only)
 site_sched_crons <- function() {
-  yml <- c(file.path(Sys.getenv("FF_PROJ_DIR", getwd()), ".github/workflows/dst_refresh.yml"),
-           file.path(path.expand(Sys.getenv("DST_SITE_DIR", "~/ML/dst-site")), ".github/workflows/dst_refresh.yml"))
+  pd <- Sys.getenv("FF_PROJ_DIR", getwd())                                 # the D/ST page is built in <repo>/work: look one level up too
+  yml <- c(outer(unique(c(pd, dirname(pd), Sys.getenv("GITHUB_WORKSPACE"), getwd(), path.expand(Sys.getenv("DST_SITE_DIR", "~/ML/dst-site")))),
+                 c(".github/workflows/site_refresh.yml", ".github/workflows/dst_refresh.yml"), file.path))   # site_refresh = the one workflow since 2026-10-07
   yml <- yml[file.exists(yml)]
   L <- if (length(yml)) grep('^\\s*- cron:', readLines(yml[1], warn = FALSE), value = TRUE) else character()
   cr <- if (length(L)) sub('^\\s*- cron:\\s*"([^"]+)".*$', "\\1", L) else SITE_SCHED_DEFAULT
@@ -527,7 +528,7 @@ site_sched_html <- function() {
   cr <- tryCatch(site_sched_crons(), error = function(e) NULL); if (!length(cr)) return("")
   paste0('<div class="navsched" id="navsched" tabindex="0"><span class="schedbtn">&#x1F552; <span id="navnext">Update schedule</span></span><div class="schedpop">',
     '<b>Update schedule</b> <span class="schedtz">(Eastern, approximate)</span><table id="schedtab"></table>',
-    '<p>All pages (D/ST, Kickers, ROS, Players, DFS) refresh in these runs: new lines, props, weather and starters. ',
+    '<p>All pages (D/ST, Kickers, ROS, Players, DFS) refresh together in each run: new lines, props, weather and starters. ',
     'GitHub can start a run up to about 30 minutes late. The weekly models refit on Tuesdays. Games lock at kickoff.</p></div></div>',
     '<script>(function(){const C=', jsonlite::toJSON(cr, auto_unbox = TRUE), ';',
     'const tz="America/New_York",now=new Date(),occ=[];for(let o=-1;o<9;o++){const d=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()+o));',

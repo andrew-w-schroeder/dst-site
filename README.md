@@ -1,25 +1,21 @@
-# D/ST projections site
+# Fantasy projections site (D/ST · Kickers · ROS · Players · DFS)
 
-Weekly fantasy D/ST projections (ESPN, Yahoo, FFPC) and kicker projections (ESPN, decimal) re-scored with the
-latest sportsbook lines (kickers also with the latest weather forecast).
-D/ST: `https://<your-username>.github.io/dst-site/` (past weeks `/archive/`) · kickers: `/k/` (past weeks `/k/archive/`).
+`https://<your-username>.github.io/dst-site/` — every page refreshes together on one schedule.
 
 How it works
 
-* **Tuesday, on my computer:** `43_dst_run_all.R` fits the models and `46_dst_publish.R` pushes this week's
-  scoring bundles (`output/dst/<system>/bundle_*.rds`, coefficients only, no raw data) to this repo.
-* **Every day until kickoff:** `.github/workflows/dst_refresh.yml` runs `scripts/45_dst_refresh.R`, which pulls
-  consensus spreads/totals from The Odds API (secret `ODDS_API_KEY`), re-scores all three formats, appends the
-  lines to `data/lines/line_history.csv` and publishes `site/` to GitHub Pages. Started games are locked at their
-  last pre-kickoff line. Then `scripts/55_k_refresh.R` re-scores the kickers with the same lines plus Open-Meteo
-  forecasts (`data/lines/weather_history.csv`; no key, no extra Odds API credits) and writes `site/k/`.
-  Both pages get tiers, forecast gusts / rain, a dotted trend line per team (`data/lines/proj_history.csv`)
-  and hover text with what drives each projection (`scripts/site_utils.R`).
-* **Starting QBs:** every refresh re-checks each offense's starter (`scripts/starters.R`: official injury report,
-  Sleeper and Ourlads depth charts, nflverse schedule) and re-scores a new starter exactly; kickers get an
-  injury-status flag. Choices are logged to `data/lines/starter_history.csv`.
-  **To force a starter:** edit `data/lines/qb_override.csv` on GitHub (pencil icon) and add a line such as
+* **Tuesday, on my computer:** `weekly_run.R` runs the weekly models (D/ST, kickers, rest of season, track record, players,
+  DFS fit) and then `site_publish.R`, which copies this week's model files (coefficients and bundles, no raw data) and the
+  page scripts here in **one commit and one push**.
+* **One workflow, `.github/workflows/site_refresh.yml`** ("Site refresh"), runs on a schedule (Eastern times written by
+  site_publish.R), on every push from site_publish.R, and from the Run workflow button. In one job, in order:
+  D/ST (`45`, sportsbook lines via secret `ODDS_API_KEY`, starting QBs) → kickers (`55`, + weather forecasts) →
+  rest of season (`49`) → players (`65`, live props via secret `PROPS_API_KEY`) → DFS (`96`) → save the history files
+  (`data/lines`, `data/players`, `data/dfs`) → publish `site/` to GitHub Pages once. Started games are locked at their
+  last pre-kickoff lines and props.
+* **Mid-week:** save `DKSalaries.csv` from the DK lobby in `~/ML/ff/data/dfs/` (or edit a script) and run `site_publish.R`.
+* **To force a starting QB:** edit `data/lines/qb_override.csv` here on GitHub (pencil icon), e.g.
   `2026,3,WAS,Marcus Mariota,Daniels out (hamstring)` — saving it starts a refresh. Rows only apply to their week.
-* **Run it now:** Actions tab → DST refresh → Run workflow.
+* **Run it now:** Actions tab → Site refresh → Run workflow.
 
 Files in this repo are written by the scripts in `~/ML/ff`; edit them there, not here.
