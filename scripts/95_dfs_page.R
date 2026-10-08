@@ -174,9 +174,13 @@ p.legend{margin:.2rem 0}
   site_nav("dfs", b), dfs_subnav("players", b),
   sprintf("<h1>DraftKings DFS — %d week %d</h1>", P$season, P$week),
   sprintf("<p class='s'>%s %s%s Vegas-only projections in DK scoring (the Players page's props, plus the odds of DK's yardage bonuses) next to DK salaries. Hover a column header for its definition; click to sort.</p>", slate, props, unm),
-  "<p class='s legend'><span class='sw vg2'></span> green = among the best fifth on the tab (Pts/$1K, Value, P(4x)); <span class='sw vb1'></span> red = worst fifth. ",
-  "<b>Own%</b> <span class='beta'>BETA</span> is projected tournament ownership from a placeholder formula (shaded <span class='sw ow3'></span> 20%+), not yet fitted to real DK ownership. ",
-  "<b>Lev</b> = P(4x) minus Own%: + = under-owned upside.</p>",
+  site_key(list(                                                                  # shared page key (Andrew 2026-10-07)
+    key_row("Value", kit(ksw("vg2"), "best fifth on the tab"), kit(ksw("vg1"), "second fifth"), kit(ksw("vb1"), "worst fifth"), kit("(Pts/$1K, Value, P(4x))")),
+    key_row("Own% <span class='beta'>BETA</span>", kit(ksw("ow1"), "5%+"), kit(ksw("ow2"), "10%+"), kit(ksw("ow3"), "20%+ projected tournament ownership"),
+            kit("placeholder formula, not yet fitted to real DK ownership")),
+    key_row("Lev", kit("P(4x) minus Own%"), kit(ksw("vg2"), ksw("vg1"), "under-owned upside (+5 / +2 points)"), kit(ksw("vb2"), ksw("vb1"), "over-owned (−5 / −2)")),
+    KEY_RANGE,
+    key_status(kit("(Q) / (D) / (O): injury status"), kit("<i>italic</i> no props yet: projected from his history")))),
   '<div class="bar"><div id="posb">', paste0(sprintf('<button data-pos="%s">%s</button>', c(tabs, "GL"), c(unname(tab_lab[tabs]), "Glossary")), collapse = ""), '</div>',
   '<div id="srch"><input type="search" id="psearch" placeholder="Search player or team" aria-label="Search a player by name, or a team by city or nickname" autocomplete="off"><span id="pscount" class="s"></span></div></div>',
   paste0(panes, collapse = ""), sprintf('<div class="pane" data-pos="GL">%s</div>', dfs_glossary(P)),
@@ -184,7 +188,7 @@ p.legend{margin:.2rem 0}
 let st={pos:"RB"};try{const s=JSON.parse(localStorage.getItem("dfs_state")||"{}");if(s.pos)st.pos=s.pos}catch(e){}
 function show(){document.querySelectorAll(".pane").forEach(p=>p.classList.toggle("on",p.dataset.pos==st.pos));
 document.querySelectorAll("#posb button").forEach(b=>b.classList.toggle("on",b.dataset.pos==st.pos));
-document.querySelectorAll("p.legend").forEach(l=>l.style.display=st.pos=="GL"?"none":"");
+document.querySelectorAll(".legend").forEach(l=>l.style.display=st.pos=="GL"?"none":"");
 document.getElementById("srch").style.display=st.pos=="GL"?"none":"";applySearch();
 try{localStorage.setItem("dfs_state",JSON.stringify(st))}catch(e){};stickCols()}
 document.querySelectorAll("#posb button").forEach(b=>b.onclick=()=>{st.pos=b.dataset.pos;show()});
