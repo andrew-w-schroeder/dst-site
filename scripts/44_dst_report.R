@@ -130,7 +130,7 @@ compare_gloss <- tribble(~term, ~definition,
   "Δ Proj", "change in the projection since the week's first weekly model run, normally Tuesday — not since the previous refresh, and not reset by a mid-week model rerun",
   "Avg rank", "average of the three ranks; the table is sorted by it",
   "ESPN rank", RANKCOL_TIP, "Sleeper rank", RANKCOL_TIP, "ECR", ECR_TIP,
-  "Vegas-only rank", "rank and projection of the Vegas-only baseline (a regression on the betting lines alone: spread, total, implied points, home), with the same lines as our projection. Amber as for ESPN / Sleeper rank",
+  "Vegas-only rank", "rank and projection of the Vegas-only baseline (a regression on the betting lines alone: spread, total, implied points, home), with the same lines as our projection. Shaded as for ESPN / Sleeper rank",
   "Rank spread", "largest minus smallest rank across systems; big spreads mean the scoring rules change the pick (usually shutout / points-allowed upside vs yards allowed or sacks)")
 col_gloss <- g0$col_glossary %>% mutate(definition = case_when(
   term == "Proj"   ~ "projected fantasy points for the tab's scoring system: average of elastic net + component model + ridge",
@@ -154,9 +154,10 @@ feature_gloss <- map(parts, ~ .x$glossary_all %>% filter(str_starts(section, "Fe
 ## ---- 4. HTML helpers ----
 esc <- function(x) { x <- gsub("&", "&amp;", as.character(x), fixed = TRUE); x <- gsub("<", "&lt;", x, fixed = TRUE); gsub('"', "&quot;", gsub(">", "&gt;", x, fixed = TRUE), fixed = TRUE) }
 html_table <- function(df, id = NULL, sortable = FALSE, left = 1, rank_cols = character(), tips = TRUE, raw_cols = character(),
-                       row_cls = NULL, cell_cls = list(), stick = 0) {
+                       row_cls = NULL, cell_cls = list(), stick = 0, txt_cols = character()) {     # txt_cols: left-aligned, wrapping text (Andrew 2026-10-07)
+  for (n in intersect(txt_cols, names(df))) cell_cls[[n]] <- rep("txt", nrow(df))
   th <- map_chr(seq_along(df), function(k) { n <- names(df)[k]; d <- if (tips) describe(n) else ""
-    sprintf('<th%s%s>%s%s</th>', if (sortable) sprintf(' onclick="sortTable(this,%d)"', k - 1) else "",
+    sprintf('<th%s%s%s>%s%s</th>', if (n %in% txt_cols) ' class="txt"' else "", if (sortable) sprintf(' onclick="sortTable(this,%d)"', k - 1) else "",
             if (nzchar(d)) sprintf(' title="%s"', esc(d)) else "", esc(n), if (nzchar(d)) "<sup>?</sup>" else "") })
   rows <- map_chr(seq_len(nrow(df)), function(i) paste0(if (!is.null(row_cls) && nzchar(row_cls[i])) sprintf('<tr class="%s">', row_cls[i]) else "<tr>", paste0(map_chr(seq_along(df), function(k) {
     v <- df[[k]][i]; cls <- if (names(df)[k] %in% rank_cols && !is.na(v)) (if (v <= 8) ' class="top"' else if (v >= 25) ' class="bot"' else "") else ""
@@ -187,21 +188,26 @@ sys_tab <- function(p) {
   if (all(c("q10", "q90") %in% names(p$pred))) pt <- pt %>% mutate(Range = pmap_chr(p$pred[c("proj", "q10", "q25", "q75", "q90", "ci_lo", "ci_hi")], range_bar), .after = all_of(ac))
   cvt <- p$cv_tbl %>% select(any_of(c("model", "rmse", "mae", "spearman", "top8_avg", "bot8_avg", "edge_top8", "vs_vegas_top8", "t_stat",
                                       "hold_rmse", "hold_spearman", "hold_top8", "hold_vs_vegas_top8", "hold_t", "what")))
-  paste0(sprintf("<p class='note'>Feature families in this model: %s.</p>", esc(paste(p$families, collapse = ", "))),
-         "<p class='note'>Range bar: light = where the actual score lands 8 times in 10, dark = 5 times in 10, tick = projection, small orange band = the ± (90% CI of the projection itself), thin line = 0 points (axis −5 to 25).</p>",
-         "<p class='note'>Tiers: natural breaks in the projections. A solid line = a clear drop (bigger than the model's typical ±), dashed = a softer break. Tier 1 dark green, tier 2 light green, the bottom two tiers light / dark red. Hover or tap a team for what drives its projection.</p>",
+  dg <- c(rmse = 3, mae = 3, spearman = 3, top8_avg = 2, bot8_avg = 2, edge_top8 = 2, vs_vegas_top8 = 2, t_stat = 2,      # fixed decimals, as on the kicker page
+          hold_rmse = 3, hold_spearman = 3, hold_top8 = 2, hold_vs_vegas_top8 = 2, hold_t = 2)
+  for (n in intersect(names(dg), names(cvt))) cvt[[n]] <- ifelse(is.na(cvt[[n]]), "", formatC(as.numeric(cvt[[n]]), format = "f", digits = dg[[n]]))
+  key <- site_key(list(KEY_TIERS, KEY_RANGE,
+                       if ("ECR" %in% names(pt)) key_flags("we rank it"),
+                       if (any(c("ESPN rank", "Sleeper rank", "Vegas-only rank", "ECR") %in% names(pt))) key_amber("the top 18"),
+                       if ("Weather" %in% names(pt)) KEY_WEATHER,
+                       if (refreshed) key_status(kit("Opp QB: (Q) / (D) / (O) injury status"), kit("\u21BB changed since the weekly run"), kit("\u26A0 a source disagrees (hover)"))))
+  paste0(sprintf("<p class='note'>Feature families in this model: %s.</p>", esc(paste(p$families, collapse = ", "))), key,
          html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, raw_cols = c("Range", "Trend", "Team", "Opp QB", "Weather", "ECR"),
                     row_cls = row_cls, cell_cls = c(list(Team = team_cls, Rank = team_cls, Proj = team_cls), ext_cls), stick = 4),   # Proj coloured like Rank (Andrew 2026-09-25)
-         if ("ECR" %in% names(pt)) "<p class='note'>ECR = FantasyPros expert consensus rank (hover for the average expert rank). \U0001F525 after a team = we rank it at least 25% (and 3 spots) higher than ECR; \u2620\uFE0F = at least 25% (and 3 spots) lower. Hover the symbol for the exact difference.</p>" else "",
-         if (any(c("ESPN rank", "Vegas-only rank") %in% names(pt))) "<p class='note'>Vegas-only / ESPN / Sleeper rank: that source's rank this week, with its projected points in parentheses (ESPN and Sleeper in ESPN standard scoring). Light amber = we have the D/ST in our top 12 but that source has it as a sit (13–18); dark amber = not rosterable (19+).</p>" else "",
+         if (any(c("ESPN rank", "Vegas-only rank") %in% names(pt))) "<p class='note'>ECR = FantasyPros expert consensus rank (hover for the average expert rank). Vegas-only / ESPN / Sleeper rank: that source's rank this week, with its projected points in parentheses (ESPN and Sleeper in ESPN standard scoring).</p>" else "",
          sprintf("<p class='rules'><b>%s scoring:</b> %s</p>", esc(p$SC$label), esc(p$SC$rules)),
          if (is.null(p$holdout)) sprintf("<h3>Back-test: %s</h3><p class='note'>Each season predicted by models trained only on earlier seasons (from 2018). Every tuning, feature and blend choice maximizes the weekly top-8 edge over Vegas-only on these seasons, so these numbers are optimistic. %s %d is the clean test.</p>",
                                          paste(unique(range(p$cv_season)), collapse = "–"), esc(if (is.null(p$validation_note) || is.na(p$validation_note)) "" else p$validation_note),
                                          SEASON) else
            sprintf("<h3>Back-test: selection %s · clean hold-out %d</h3><p class='note'>Each season is predicted by models trained only on earlier seasons (from 2018). Every tuning and feature choice was made on %s. hold_* columns = %d: never used for any choice, scored once with the frozen configuration (trained 2018–%d).</p>",
                    paste(range(p$cv_season), collapse = "–"), p$holdout, paste(range(p$cv_season), collapse = "–"), p$holdout, p$holdout - 1),
-         html_table(cvt, left = 1),
-         "<h3>Top 25 GBM features</h3>", html_table(p$imp_tbl %>% select(feature, rel_inf, meaning), left = 1))
+         html_table(cvt, left = 1, txt_cols = "what"),
+         "<h3>Top 25 GBM features</h3>", html_table(p$imp_tbl %>% select(feature, rel_inf, meaning), left = 1, txt_cols = "meaning"))
 }
 tabs <- c(list(Compare = paste0(
   "<p class='note'>One model per scoring system (same data, features and method; each tuned and feature-selected on its own 2023–24 back-test; 2025 = clean hold-out). ",
@@ -229,16 +235,17 @@ css <- ':root{--bg:#fff;--fg:#1d1d1f;--muted:#666;--line:#ddd;--head:#f3f3f3;--t
 @media (prefers-color-scheme: dark){:root{--bg:#141414;--fg:#e8e8e8;--muted:#9a9a9a;--line:#333;--head:#222;--top:#17351f;--bot:#3a1a1a;--accent:#7fb0ff;--rng80:#26395a;--rng50:#4f7fc4}}
 body{font-family:system-ui,sans-serif;max-width:1800px;margin:1.5rem auto;padding:0 16px;color:var(--fg);background:var(--bg)}
 h1{margin:.2rem 0}.sub{color:var(--muted);font-size:14px}
-.tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:2px solid var(--line);margin:1rem 0}
-.tabs button{border:0;background:none;padding:8px 14px;font-size:15px;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-2px}
-.tabs button.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
+.tabs{display:flex;gap:0;flex-wrap:wrap;margin:1rem 0 .6rem}
+.tabs button{background:none;border:1px solid var(--line);color:var(--fg);padding:6px 12px;margin:0 4px 4px 0;border-radius:6px 6px 0 0;cursor:pointer;font-size:14px}
+.tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 .panel{display:none}.panel.on{display:block}
 table{border-collapse:collapse;font-size:13.5px;margin:.6rem 0 1.2rem;display:block;overflow-x:auto;max-width:100%}
 th,td{border:1px solid var(--line);padding:4px 8px;text-align:right;white-space:nowrap}
 th{background:var(--head);position:sticky;top:0}th[title]{cursor:help}th sup{color:var(--muted);font-size:10px;margin-left:2px}
 table.sortable th{cursor:pointer}
 table.l1 td:nth-child(-n+1),table.l3 td:nth-child(-n+3),table.l4 td:nth-child(-n+4),table.l5 td:nth-child(-n+5),table.l6 td:nth-child(-n+6){text-align:left}
-table.l99 td{text-align:left;white-space:normal}table.l99 td:first-child{font-family:ui-monospace,monospace;white-space:nowrap}
+table.l99 td,table.l99 th{text-align:left;white-space:normal}table.l99 td:first-child{font-family:ui-monospace,monospace;white-space:nowrap}
+td.txt,th.txt{text-align:left}td.txt{white-space:normal;min-width:280px;max-width:640px}
 td.top{background:var(--top);font-weight:600}td.bot{background:var(--bot)}
 .rb{position:relative;width:170px;height:14px}.rb span{position:absolute;top:0;height:14px}
 .rb .r80{background:var(--rng80);border-radius:3px}.rb .r50{background:var(--rng50);border-radius:3px}

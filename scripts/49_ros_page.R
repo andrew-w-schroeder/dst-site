@@ -207,9 +207,9 @@ h1{margin:.2rem 0}.sub{color:var(--muted);font-size:14px}.note{font-size:13.5px;
 .bar{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin:.8rem 0}.grp{display:flex;gap:4px;align-items:center;font-size:13px;color:var(--muted)}
 .grp button{border:1px solid var(--line);background:var(--head);color:var(--fg);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:14px}
 .grp button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
-.tabs{display:flex;gap:4px;border-bottom:2px solid var(--line);margin:1rem 0 .4rem}
-.tabs button{border:0;background:none;padding:8px 16px;font-size:16px;color:var(--muted);cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-2px}
-.tabs button.on{color:var(--fg);border-bottom-color:var(--accent);font-weight:600}
+.tabs{display:flex;gap:0;flex-wrap:wrap;margin:1rem 0 .4rem}
+.tabs button{background:none;border:1px solid var(--line);color:var(--fg);padding:6px 12px;margin:0 4px 4px 0;border-radius:6px 6px 0 0;cursor:pointer;font-size:14px}
+.tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}sup.byemark{font-weight:400;margin-left:1px}
 .wrap{overflow-x:auto;max-width:100%}
 table{border-collapse:collapse;font-size:13px}
 th,td{border:1px solid var(--line);padding:4px 7px;text-align:center;white-space:nowrap}
@@ -223,7 +223,7 @@ td.sum{font-weight:600}th.sumh{background:var(--head)}td.gap,th.gap{border:0;bac
 th.sorted{box-shadow:inset 0 -3px 0 var(--accent)}
 #tip{position:fixed;z-index:50;display:none;max-width:420px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;
   padding:8px 10px;font-size:12.5px;line-height:1.4;box-shadow:0 4px 18px rgba(0,0,0,.25);white-space:pre-line;pointer-events:none}
-#tip b{font-size:13.5px}.leg{font-size:12.5px;color:var(--muted)}.leg span{display:inline-block;padding:1px 6px;border-radius:4px;margin:0 2px}
+#tip b{font-size:13.5px}.leg{font-size:12.5px;color:var(--muted)}.leg>span{display:inline-block;padding:1px 6px;border-radius:4px;margin:0 2px}
 details{margin:.6rem 0;font-size:13.5px;max-width:1000px}details summary{cursor:pointer;color:var(--accent)}
 #pairs .chips{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-size:12.5px;color:var(--muted);margin:.2rem 0 .6rem}#pairs .chips span{margin-right:4px}
 #pairs .chips button{border:1px solid var(--line);background:none;color:var(--fg);padding:2px 7px;border-radius:999px;font-size:12px;cursor:pointer}
@@ -233,7 +233,7 @@ details{margin:.6rem 0;font-size:13.5px;max-width:1000px}details summary{cursor:
 td.s.pa,.sw.pa{background:rgba(127,127,127,.12)}td.s.pb,.sw.pb{background:rgba(var(--pos),.32)}td.s.bb,.sw.bb{background:rgba(var(--neg),.38)}td.s.pj{font-style:italic}
 .sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;border:1px solid var(--line)}
 tr.solo td{font-style:italic;color:var(--muted)}
-table.hm td,table.hm th{padding:3px 3px;min-width:30px;font-size:11px}table.hm td.hc{cursor:pointer}table.hm td.dg{color:var(--muted);font-style:italic}', NAV_CSS)
+table.hm td,table.hm th{padding:3px 3px;min-width:30px;font-size:11px}table.hm td.hc{cursor:pointer}table.hm td.dg{color:var(--muted);font-style:italic}', NAV_CSS, KEY_CSS)
 html <- c('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
   '<title>Rest of season</title><style>', css, '</style></head><body>', site_nav("ros", SITE_BASE),
   '<h1>Rest of season: D/ST &amp; kickers</h1>',
@@ -242,7 +242,10 @@ html <- c('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name
   '<i>italic</i> weeks use projected lines and typical weather. Hover or tap a cell for the matchup, lines, weather and what moves it.</p>',
   '<div class="tabs" id="sec"></div>',
   '<div class="bar"><div class="grp" id="fmt"></div><div class="grp" id="view"></div>',
-  '<span class="leg">colour: <span style="background:rgba(var(--pos),.45)">better</span> / <span style="background:rgba(var(--neg),.45)">worse</span> than that week&#39;s average · click a column to sort</span></div>',
+  '</div>', site_key(list(
+    key_row("Colour", kit('<span class="ksw" style="background:rgba(var(--pos),.45)"></span>better'), kit('<span class="ksw" style="background:rgba(var(--neg),.45)"></span>worse than that week&#39;s average')),
+    key_row("Cells", kit("<i>italic</i> = projected lines and typical weather"), kit('<span class="ksw" style="background:repeating-linear-gradient(45deg,transparent,transparent 3px,rgba(127,127,127,.35) 3px,rgba(127,127,127,.35) 6px)"></span>bye')),
+    key_row("Next 3 / 4", kit("points per game played"), kit("* = a bye in that span (average of the games played)"), kit("click a column to sort"))), cls = "leg"),
   '<div class="wrap"><table id="grid"></table></div><div id="pairs" style="display:none"></div><div id="tip"></div>',
   # D/ST pairs tab (Andrew 2026-10-07): built in the page from the D/ST projections above (ros_utils.R, ROS_JS)
   '<div id="pairs_help" hidden><details><summary>How pairs are scored</summary><ul>',
@@ -257,7 +260,7 @@ html <- c('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name
   '<li><b>Models:</b> the weekly D/ST (ESPN, Yahoo, FFPC) and kicker (ESPN, decimal) blends, fed each future matchup. Team, opponent, QB and kicker rates are as of the last game played, so they don&#39;t change between now and a future week.</li>',
   '<li><b>Lines:</b> this week = the latest sportsbook consensus; next week = the lookahead lines books have posted (or nflverse&#39;s); later weeks = projected. Every posted line gives two implied team totals; a ridge fit of implied total = league average + team offense + opponent defense + home field (recent weeks count most) projects any future game. In the 2021–25 back-test the projected implied totals missed the eventual closing line by 2.1 points one week out, 2.6 at four weeks and 3.1 at eight (3.7 with no team information).</li>',
   '<li><b>Weather:</b> this week&#39;s Open-Meteo forecast where available, otherwise the 2016–25 typical weather for that stadium, date (±10 days) and kickoff hour (chances of cold and strong wind enter the models as probabilities). Domes and retractable roofs count as indoor.</li>',
-  '<li><b>Columns:</b> Next 3 / Next 4 = total points over the next 3 / 4 weeks including this one (a bye counts 0); ROS avg = average over the remaining games; Wk 15–17 = fantasy playoff total.</li>',
+  '<li><b>Columns:</b> Next 3 / Next 4 = average points per game over the next 3 / 4 weeks including this one (* = a bye in that span, so the average is over the games played); ROS avg = average over the remaining games; Wk 15–17 = fantasy playoff total.</li>',
   '<li><b>Not included:</b> future injuries, QB or kicker changes, coaching changes. The page rebuilds every day with new lines; the models refit every Tuesday.</li></ul></details>',
   '<script>const D=', json, ';', ROS_JS(), '</script></body></html>')
 out_dir <- if (dir.exists(file.path(PROJ_DIR, "site"))) file.path(PROJ_DIR, "site", "ros") else file.path(PROJ_DIR, "output", "ros")

@@ -110,10 +110,11 @@ function render(){
   const rk=(x,i)=>st[i].s.indexOf(x)+1;
   const n3=W.slice(0,3),n4=W.slice(0,4),po=PO.filter(w=>W.includes(w));
   const sumW=(t,ws)=>ws.reduce((a,w)=>{const v=val(t,W.indexOf(w));return a+(v==null?0:v);},0);
+  const avgW=(t,ws)=>{const vs=ws.map(w=>val(t,W.indexOf(w))).filter(x=>x!=null);return vs.length?vs.reduce((a,b)=>a+b,0)/vs.length:null;};
   const rows=T.map(t=>{const vs=W.map((w,i)=>val(t,i)).filter(x=>x!=null);
-    return {t:t,n3:sumW(t,n3),n4:sumW(t,n4),avg:vs.length?vs.reduce((a,b)=>a+b,0)/vs.length:null,po:po.length?sumW(t,po):null,
+    return {t:t,n3:avgW(t,n3),n4:avgW(t,n4),avg:vs.length?vs.reduce((a,b)=>a+b,0)/vs.length:null,po:po.length?sumW(t,po):null,
             byes:W.filter((w,i)=>!(sc.cells[t]&&sc.cells[t][i]))};});
-  const cols=[['n3','Next 3','wks '+n3[0]+'–'+n3[n3.length-1]],['n4','Next 4','wks '+n4[0]+'–'+n4[n4.length-1]],['avg','ROS avg','per game']];
+  const cols=[['n3','Next 3','pts/game · wks '+n3[0]+'–'+n3[n3.length-1]],['n4','Next 4','pts/game · wks '+n4[0]+'–'+n4[n4.length-1]],['avg','ROS avg','per game']];
   if(po.length)cols.push(['po','Wk '+po[0]+'–'+po[po.length-1],'playoffs']);
   const cz={};cols.forEach(([k])=>{const xs=rows.map(r=>r[k]).filter(x=>x!=null),m=xs.reduce((a,b)=>a+b,0)/xs.length,
     sd=Math.sqrt(xs.reduce((a,b)=>a+(b-m)*(b-m),0)/Math.max(1,xs.length-1))||1,s=xs.slice().sort((a,b)=>b-a);cz[k]={m:m,sd:sd,s:s};});
@@ -130,9 +131,10 @@ function render(){
   rows.forEach(r=>{const who=sec==='k'&&sc.who[r.t]?'<small>'+esc(sc.who[r.t])+'</small>':'';
     h+='<tr><td class="tm">'+r.t+who+'</td>';
     cols.forEach(([k])=>{const x=r[k];if(x==null){h+='<td class="sum"></td>';return;}const z=(x-cz[k].m)/cz[k].sd,rr=cz[k].s.indexOf(x)+1;
-      const tip=(k==='avg'?'Average per remaining game: ':'Total points: ')+x.toFixed(1)+' (rank '+rr+' of '+cz[k].s.length+')'+
-        (k!=='avg'&&r.byes.some(w=>(k==='n3'?n3:k==='n4'?n4:po).includes(w))?' · includes a bye (0 pts)':'');
-      h+='<td class="sum" style="'+bg(z)+'" title="'+esc(tip)+'">'+x.toFixed(1)+'</td>';});
+      const span=k==='n3'?n3:k==='n4'?n4:k==='po'?po:[],by=r.byes.filter(w=>span.includes(w)),pg=k==='n3'||k==='n4';
+      const tip=(k==='avg'?'Average per remaining game: ':pg?'Average per game, weeks '+span[0]+'–'+span[span.length-1]+': ':'Total points: ')+x.toFixed(1)+
+        ' (rank '+rr+' of '+cz[k].s.length+')'+(by.length?(pg?' · * bye in week '+by.join(', ')+': average of '+(span.length-by.length)+' games':' · includes a bye (0 pts)'):'');
+      h+='<td class="sum" style="'+bg(z)+'" title="'+esc(tip)+'">'+x.toFixed(1)+(pg&&by.length?'<sup class="byemark">*</sup>':'')+'</td>';});
     h+='<td class="gap"></td>';
     W.forEach((w,i)=>{const g=sc.cells[r.t]&&sc.cells[r.t][i];if(!g){h+='<td class="c bye">BYE</td>';return;}
       const v=val(r.t,i);if(v==null){h+='<td class="c">?<span class="o">'+esc(g.o)+'</span></td>';return;}
@@ -165,10 +167,10 @@ const pBg=z=>'background:rgba(var(--'+(z>=0?'pos':'neg')+'),'+(Math.min(Math.abs
 // Rule: each week you start whichever of the two projects higher (a bye = the other one plays; both on bye = 0).
 // Pair pts/wk = that total / weeks in the window. Pairing gain = pair total minus the better of the two on its own.
 const PE=Math.max.apply(null,PO.length?PO:W);
-let pWin='ros',pView='find',pAnchor='',pMetric='pair',hidden=new Set(),pPinned=null;
+let pWin='ros',pView='find',pAnchor='',pMetric='pair',hidden=new Set(),pPinned=null,pFrom=Math.min.apply(null,W),pTo=PE;
 try{const s=JSON.parse(localStorage.getItem('rosPairs')||'{}');if(s.a)pAnchor=s.a;if(Array.isArray(s.h))hidden=new Set(s.h);}catch(e){}
 function pSave(){try{localStorage.setItem('rosPairs',JSON.stringify({a:pAnchor,h:[...hidden]}));}catch(e){}}
-function pIdx(){return W.map((w,i)=>[w,i]).filter(([w])=>w<=PE&&(pWin==='ros'||PO.includes(w))).map(([w,i])=>i);}
+function pIdx(){return W.map((w,i)=>[w,i]).filter(([w])=>w<=PE&&(pWin==='ros'||(pWin==='po'&&PO.includes(w))||(pWin==='custom'&&w>=pFrom&&w<=pTo))).map(([w,i])=>i);}
 function pVal(t,i){const c=S.dst.vals[fmt][t]&&S.dst.vals[fmt][t][i];return c?c.v:null;}
 function pOpp(t,i){const g=S.dst.cells[t]&&S.dst.cells[t][i];return g?g.o:'bye';}
 function pPair(a,b,I){let tot=0,na=0,nb=0;const both=[],pick=[];
@@ -189,7 +191,8 @@ function renderPairs(){
   const I=pIdx(),nW=Math.max(1,I.length),wl=I.map(i=>W[i]),wr='wks '+wl[0]+'–'+wl[wl.length-1];
   const solo={};sc.teams.forEach(t=>solo[t]=pPair(t,null,I).tot);
   const avail=sc.teams.filter(t=>!hidden.has(t));
-  let h='<div class="bar"><div class="grp" id="pwin"></div>';
+  const wopt=v=>W.filter(w=>w<=PE).map(w=>'<option'+(w===v?' selected':'')+'>'+w+'</option>').join('');
+  let h='<div class="bar"><div class="grp" id="pwin"></div>'+(pWin==='custom'?'<label class="grp">Weeks <select id="pfrom">'+wopt(pFrom)+'</select> to <select id="pto">'+wopt(pTo)+'</select></label>':'');
   if(pView==='find')h+='<label class="grp">Your D/ST <select id="panc"><option value="">— best pairs overall —</option>'+
     sc.teams.map(t=>'<option'+(t===pAnchor?' selected':'')+'>'+t+'</option>').join('')+'</select></label>';
   else h+='<div class="grp" id="pmet"></div>';
@@ -233,7 +236,8 @@ function renderPairs(){
     h+='</tbody></table></div>';
   }
   $('pairs').innerHTML=h+$('pairs_help').innerHTML;
-  btns($('pwin'),'Window',[['ros','Rest of season (wk '+Math.min.apply(null,W)+'–'+PE+')'],['po','Playoffs (wk '+PO[0]+'–'+PO[PO.length-1]+')']],pWin,k=>{pWin=k;render();});
+  btns($('pwin'),'Window',[['ros','Rest of season (wk '+Math.min.apply(null,W)+'–'+PE+')'],['po','Playoffs (wk '+PO[0]+'–'+PO[PO.length-1]+')'],['custom','Custom']],pWin,k=>{pWin=k;render();});
+  if($('pfrom')){$('pfrom').onchange=e=>{pFrom=+e.target.value;if(pTo<pFrom)pTo=pFrom;render();};$('pto').onchange=e=>{pTo=+e.target.value;if(pFrom>pTo)pFrom=pTo;render();};}
   if($('pmet'))btns($('pmet'),'Value',[['pair','Pair pts/wk'],['gain','Pairing gain']],pMetric,k=>{pMetric=k;render();});
   if($('panc'))$('panc').onchange=e=>{pAnchor=e.target.value;pSave();render();};
 }

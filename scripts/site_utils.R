@@ -299,9 +299,16 @@ document.addEventListener("mouseover",e=>{const t=e.target.closest&&e.target.clo
 document.addEventListener("focusin",e=>{const t=e.target.closest&&e.target.closest(".tt");if(t)placeTip(t)});'
 
 ## ---- This week's Sleeper / ESPN ranks next to ours ----
-# flag = we have the team in our top 12 but that site has it as a sit (13–18: "fl1") or not rosterable (19+: "fl2")
-rank_flag <- function(ours, theirs) ifelse(is.na(theirs) | ours > 12, "", ifelse(theirs > 18, "fl2", ifelse(theirs > 12, "fl1", "")))
-RANKCOL_TIP <- "this week's rank on that site in ESPN standard scoring (their projection re-scored; the last update before kickoff). Highlighted when we have the team in our top 12 but they have it as a sit (13–18, light) or not rosterable (19+, dark)"
+# Amber (Andrew 2026-10-07): the source ranks it at least 25% ("fl1") or 50% ("fl2") higher OR lower than we do. Same % as the
+# love / fade flags: the gap divided by the better of the two ranks; at least AMBER_MIN spots apart; and only where it matters:
+# one of the two ranks inside `cap` (D/ST and kickers 18 = rostered in a 12-team league; players 1.5x the start line; NA = no cap).
+AMBER_PCT <- 0.25; AMBER_STRONG <- 0.50; AMBER_MIN <- 3
+rank_flag <- function(ours, theirs, cap = 18) {
+  cap <- rep_len(cap, length(ours)); lo <- pmin(ours, theirs); pc <- abs(theirs - ours) / lo
+  ok <- !is.na(ours) & !is.na(theirs) & abs(theirs - ours) >= AMBER_MIN & (is.na(cap) | lo <= cap)
+  ifelse(!ok, "", ifelse(pc >= AMBER_STRONG, "fl2", ifelse(pc >= AMBER_PCT, "fl1", ""))) }
+AMBER_TXT <- "Shaded when that source ranks it at least 25% (pale) or 50% (strong) higher or lower than we do: the gap divided by the better of the two ranks, at least 3 spots, and one of the two ranks inside the top 18"
+RANKCOL_TIP <- paste0("this week's rank on that site in ESPN standard scoring (their projection re-scored; the last update before kickoff). ", AMBER_TXT, ".")
 # Vegas-only projection from lm coefficients stored in the weekly bundle (re-scored with the refreshed lines)
 vegas_proj <- function(cf, df) { if (is.null(cf)) return(rep(NA_real_, nrow(df))); cf[is.na(cf)] <- 0; v <- setdiff(names(cf), "(Intercept)")   # NA = aliased term (implied points = total/2 ± spread/2), as predict.lm treats it
   as.numeric(cf["(Intercept)"] + as.matrix(df[v]) %*% cf[v]) }
@@ -327,7 +334,7 @@ love_fade <- function(ours, ecr, what = "team") {
                                        as.integer(ours), as.integer(ecr), as.integer(abs(gap)), ifelse(abs(gap) == 1, "", "s"), ifelse(gap > 0, "higher", "lower"), 100 * pc))
   ifelse(sym == "", "", sprintf(' <span title="%s">%s</span>', tip, sym))
 }
-ECR_TIP <- "FantasyPros expert consensus rank this week (their own weekly page, else DynastyProcess's copy of it; the last update before kickoff). Hover for the average expert rank and the spread across experts. Amber as for the other ranks. After the name: \U0001F525 love = we rank it at least 50% higher than ECR, \U0001F44D like = 25–50% higher, \U0001F914 dislike = 25–50% lower, \u2620\uFE0F fade = at least 50% lower (the gap divided by the better of the two ranks; always at least 3 spots)."
+ECR_TIP <- "FantasyPros expert consensus rank this week (their own weekly page, else DynastyProcess's copy of it; the last update before kickoff). Hover for the average expert rank and the spread across experts. Shaded as for the other ranks (see the key). After the name: \U0001F525 love = we rank it at least 50% higher than ECR, \U0001F44D like = 25–50% higher, \U0001F914 dislike = 25–50% lower, \u2620\uFE0F fade = at least 50% lower (the gap divided by the better of the two ranks; always at least 3 spots)."
 ecr_cell <- function(rk, avg, sd, html = TRUE) ifelse(is.na(rk), "", if (!html) as.character(rk) else
   tip_span(as.character(rk), ifelse(is.na(avg), "FantasyPros ECR", sprintf("FantasyPros ECR %d: average expert rank %.1f (\u00b1 %.1f)", as.integer(rk), avg, sd))))
 rank_pts <- function(rk, pts) ifelse(is.na(rk), "", ifelse(is.na(pts), as.character(rk), sprintf("%d (%.1f)", as.integer(rk), pts)))
@@ -499,7 +506,7 @@ site_nav <- function(active, base = Sys.getenv("SITE_BASE", "/dst-site/")) {
          if (!is.na(arch[[active]])) sprintf('<a class="navarch" href="%s">past weeks</a>', arch[[active]]) else "", '</nav>')
 }
 # ---- Update schedule in the nav bar (Andrew 2026-10-07): "Next update ~…" plus the week's run times, Eastern ----
-# Read from the D/ST refresh workflow's cron lines (46 rewrites them weekly from ET_SCHEDULE); every page refreshes in
+# Shown on hover (desktop) or tap (phones) — Andrew 2026-10-07. Read from the D/ST refresh workflow's cron lines (46 rewrites them weekly from ET_SCHEDULE); every page refreshes in
 # those runs (Players a few minutes later, DFS right after Players). The browser converts the UTC crons to Eastern time.
 SITE_SCHED_DEFAULT <- c("0 14 * * 2-6", "0 22 * * 2-3", "0 22 * * 5-6", "30 22 * * 4", "0 12 * * 0", "45 15 * * 0",
                         "35 16 * * 0", "5 19 * * 0", "15 23 * * 0", "0 23 * * 1")   # EDT copy of 46's schedule (fallback only)
@@ -518,10 +525,10 @@ site_sched_crons <- function() {
 }
 site_sched_html <- function() {
   cr <- tryCatch(site_sched_crons(), error = function(e) NULL); if (!length(cr)) return("")
-  paste0('<details class="navsched" id="navsched"><summary>&#x1F552; <span id="navnext">Update schedule</span></summary><div class="schedpop">',
+  paste0('<div class="navsched" id="navsched" tabindex="0"><span class="schedbtn">&#x1F552; <span id="navnext">Update schedule</span></span><div class="schedpop">',
     '<b>Update schedule</b> <span class="schedtz">(Eastern, approximate)</span><table id="schedtab"></table>',
     '<p>All pages (D/ST, Kickers, ROS, Players, DFS) refresh in these runs: new lines, props, weather and starters. ',
-    'GitHub can start a run up to about 30 minutes late. The weekly models refit on Tuesdays. Games lock at kickoff.</p></div></details>',
+    'GitHub can start a run up to about 30 minutes late. The weekly models refit on Tuesdays. Games lock at kickoff.</p></div></div>',
     '<script>(function(){const C=', jsonlite::toJSON(cr, auto_unbox = TRUE), ';',
     'const tz="America/New_York",now=new Date(),occ=[];for(let o=-1;o<9;o++){const d=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()+o));',
     'C.forEach(c=>{if([].concat(c.d).includes(d.getUTCDay()))occ.push({t:new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate(),c.h,c.m)),w:c.w});});}',
@@ -532,7 +539,9 @@ site_sched_html <- function() {
     'wk.forEach(x=>{const k=fd.format(x.t);(by[k]=by[k]||[]).push(x);});',
     'const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");',
     'document.getElementById("schedtab").innerHTML=ord.filter(k=>by[k]).map(k=>"<tr><th>"+k+"</th><td>"+by[k].map(x=>"<span title=\\""+esc(x.w)+"\\">"+tm(x.t)+"</span>").join(" · ")+"</td></tr>").join("");',
-    'document.addEventListener("click",e=>{const s=document.getElementById("navsched");if(s&&s.open&&!e.target.closest("#navsched"))s.open=false;});})();</script>')
+    'const ns=document.getElementById("navsched");ns.addEventListener("click",e=>{if(!e.target.closest(".schedpop"))ns.classList.toggle("open");});',   # tap (phones)
+    'ns.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();ns.classList.toggle("open");}if(e.key==="Escape")ns.classList.remove("open");});',
+    'document.addEventListener("click",e=>{if(!e.target.closest("#navsched"))ns.classList.remove("open");});})();</script>')
 }
 NAV_CSS <- '
 .topnav{display:flex;flex-wrap:wrap;align-items:flex-end;gap:6px;border-bottom:3px solid var(--acc,var(--accent,#2b6cb0));margin:0 0 16px;padding-top:4px}
@@ -543,7 +552,8 @@ NAV_CSS <- '
 .topnav a.navarch{margin-left:auto;font-size:13px;padding:0 4px 8px;color:var(--acc,var(--accent,#2b6cb0))}
 .topnav .navsched{margin-left:auto;position:relative;font-size:13px;padding:0 4px 8px}
 .topnav .navsched+a.navarch{margin-left:10px}
-.navsched summary{cursor:pointer;color:var(--acc,var(--accent,#2b6cb0));list-style:none}.navsched summary::-webkit-details-marker{display:none}
+.navsched .schedbtn{cursor:default;color:var(--acc,var(--accent,#2b6cb0));font-weight:400}.navsched:focus{outline:none}
+.navsched .schedpop{display:none}@media (hover:hover){.navsched:hover .schedpop{display:block}}.navsched.open .schedpop{display:block}
 .navsched .schedpop{position:absolute;right:0;top:100%;z-index:60;width:min(340px,92vw);background:var(--bg,#fff);color:var(--fg,#222);
   border:1px solid var(--bd,var(--line,#ccc));border-radius:8px;padding:10px 12px;box-shadow:0 6px 22px rgba(0,0,0,.22);font-size:13px;line-height:1.4}
 .navsched .schedtz{color:var(--mut,var(--muted,#666));font-weight:400}.navsched table{border-collapse:collapse;margin:.4rem 0;font-size:13px;display:table}
@@ -552,3 +562,43 @@ NAV_CSS <- '
 @media (max-width:560px){.topnav{gap:4px}.topnav a.navtab{font-size:.98rem;padding:8px 11px}.topnav a.navarch{font-size:12px;padding:0 0 7px}}
 @media (max-width:420px){.topnav{gap:3px}.topnav a.navtab{font-size:.9rem;padding:7px 8px}}'
 SITE_CSS <- paste0(SITE_CSS, NAV_CSS)
+
+
+## ---- Page key (Andrew 2026-10-07): every page's colour / symbol codes from one place, one row per set ----
+## site_key(list(KEY_TIERS, key_amber("top 18"), ...)) -> a collapsible "Key" block (open on desktop, closed on phones).
+## Each element: c(label, items html). Pages pick the rows they use.
+ksw <- function(var) sprintf('<span class="ksw" style="background:var(--%s)"></span>', var)
+kit <- function(...) sprintf('<span class="k">%s</span>', paste0(...))
+key_row <- function(label, ...) c(label, paste0(...))
+KEY_TIERS <- key_row("Tiers", kit(ksw("t1"), "tier 1"), kit(ksw("t2"), "tier 2"), kit(ksw("t5"), ksw("t6"), "bottom two tiers"),
+  kit('<span class="kln"></span>', "clear drop"), kit('<span class="kln d"></span>', "softer break"),
+  kit("hover or tap a name for what drives the projection"))
+key_amber <- function(within = "the top 18", what = "it") key_row("Other rankings",
+  kit(ksw("fl1"), "that source ranks ", what, " 25–50% higher or lower than we do"), kit(ksw("fl2"), "50%+ apart"),
+  kit("(gap ÷ the better rank; at least 3 spots; one of the two ranks inside ", within, ")"))
+key_flags <- function(vs = "our rank") key_row("Vs ECR",
+  kit("\U0001F525 love: ", vs, " at least 50% higher"), kit("\U0001F44D like: 25–50% higher"),
+  kit("\U0001F914 dislike: 25–50% lower"), kit("☠️ fade: at least 50% lower"), kit("(gap ÷ the better rank; at least 3 spots)"))
+KEY_WEATHER <- key_row("Weather", kit(ksw("wx1"), "wind or gusts over 15 mph, or likely moderate rain"), kit(ksw("wx2"), "over 25 mph, or likely heavy rain"))
+KEY_RANGE <- key_row("Range bar", kit('<span class="krb"><span class="r80"></span><span class="r50"></span><span class="ci"></span><span class="pt"></span></span>'),
+  kit("light = 80% of outcomes"), kit("dark = 50%"), kit("tick = projection"), kit("orange = the ± (how sure the projection is)"))
+key_status <- function(...) key_row("Status", kit("\U0001F512 game started: frozen at the last pre-kickoff line"), ...)
+site_key <- function(rows, cls = "") {
+  rows <- Filter(Negate(is.null), rows)
+  paste0('<details class="sitekey legend', if (nzchar(cls)) paste0(" ", cls) else "", '" open><summary>Key</summary>',
+         paste0(vapply(rows, function(r) sprintf('<div class="kr"><span class="kl">%s</span><span class="ki">%s</span></div>', r[1], r[2]), ""), collapse = ""),
+         '</details><script>(function(){if(window.innerWidth<640)document.querySelectorAll("details.sitekey").forEach(d=>d.open=false);})();</script>')
+}
+KEY_CSS <- '
+details.sitekey{margin:.5rem 0 .8rem;font-size:13px;color:var(--mut,var(--muted,#666));max-width:1200px}
+details.sitekey>summary{cursor:pointer;font-weight:600;color:var(--fg,#222);font-size:13px;margin-bottom:.2rem}
+.sitekey .kr{display:flex;gap:10px;align-items:baseline;padding:3px 0;border-top:1px solid var(--bd,var(--line,#e3e3e3))}
+.sitekey .kr:first-of-type{border-top:0}.sitekey .kl{flex:0 0 120px;font-weight:600;color:var(--fg,#222)}.sitekey .ki{flex:1;line-height:1.7}
+.sitekey .k{display:inline-block;margin-right:16px;white-space:nowrap}
+.ksw{display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:-2px;border:1px solid rgba(127,127,127,.35);margin-right:4px}
+.kln{display:inline-block;width:22px;border-top:2px solid var(--fg,#222);vertical-align:3px;margin-right:4px}.kln.d{border-top-style:dashed}
+.krb{position:relative;display:inline-block;width:70px;height:12px;vertical-align:-1px}.krb span{position:absolute;top:0;height:12px}
+.krb .r80{left:0;width:70px;background:var(--rng80,#c9dcf5);border-radius:3px}.krb .r50{left:18px;width:30px;background:var(--rng50,#6f9ee0);border-radius:3px}
+.krb .ci{left:31px;width:8px;top:3px;height:6px;background:#dd6b20;border-radius:2px}.krb .pt{left:34px;width:2px;top:-2px;height:16px;background:var(--fg,#222)}
+@media (max-width:640px){.sitekey .kr{display:block}.sitekey .kl{display:block;margin-bottom:1px}.sitekey .k{white-space:normal}}'
+SITE_CSS <- paste0(SITE_CSS, KEY_CSS)

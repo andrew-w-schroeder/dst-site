@@ -130,7 +130,7 @@ sys_table <- function(sy) {
 tip[c("ESPN rank", "Sleeper rank")] <- RANKCOL_TIP
 tip["ECR"] <- ECR_TIP
 tip["Weather"] <- "Open-Meteo forecast. Temperature and sustained wind: mean over kickoff + 2 h; gust (g): max. Rain: chance (max hourly) and intensity (peak hourly rate: light < 0.10 in/h, moderate 0.10–0.30, heavy > 0.30) from 1 h before to 3 h after kickoff. Highlighted: wind or gust over 15 mph (light red) / 25 mph (dark red); likely (50%+) moderate rain (light red) / heavy rain (dark red). * = no forecast yet: the model uses the outdoor median wind. The model uses sustained wind and temperature; gusts and rain are display only."
-tip["Vegas-only rank"] <- "rank and projection of the Vegas-only baseline (a regression on the betting lines alone: implied points, spread, total, home), with the same lines as our projection. Amber as for ESPN / Sleeper rank"
+tip["Vegas-only rank"] <- "rank and projection of the Vegas-only baseline (a regression on the betting lines alone: implied points, spread, total, home), with the same lines as our projection. Shaded as for ESPN / Sleeper rank"
 tip["FG% OE"] <- paste0("FG% over expected: decayed field-goal makes above the league's expected make rate for each kick's distance, roof and weather, per attempt (recent seasons count more), shrunk toward 0 for kickers with few attempts. +2% = makes 2 more of every 100 kicks than an average kicker would in the same spots.",
   if ("k_fgoe_ver" %in% names(pred)) paste0(" Version shown: ", c(kicker_fgoe = "original", kicker_fgoe2 = "v2 (recency-weighted league baseline, wind bands, rain, snow)", kicker_fgoe2r = "v2 with faster decay")[pred$k_fgoe_ver[1]], " — the one the model uses.") else "")
 tip["Coach LFGOE"] <- "Coach LFGOE = long field goal attempts over expected: the head coach's rate of attempting a field goal on 4th downs at the opponent's 32–45 yard line (50–62 yard kicks), minus the league's expected rate for the same yards to go, field position, score, time and win probability (at least 60 s left; win probability 5–95% or first half). Decayed over the coach's career, shrunk toward 0. Positive = kicks long field goals where others punt or go for it, so more 5-point tries."
@@ -163,8 +163,12 @@ tt <- if (file.exists(TR_F)) tryCatch(track_tab(readRDS(TR_F), "K", c(espn = SC$
 te_c <- tiers(cmp$proj_espn)$tier; td_c <- tiers(cmp$proj_dec)$tier
 pos_cls <- tier_cls(round((te_c + td_c) / 2), k = 6)                                                 # Kicker: average of the two tiers
 sys_html <- function(sy) { t <- sys_table(sy)
-  paste0("<p class='s'>Tiers: natural breaks (solid line = clear drop, dashed = softer); dark green = tier 1, light green = tier 2, light / dark red = the bottom two tiers. Hover or tap a kicker for what drives the projection.</p>",
-         if ("ECR" %in% names(t)) "<p class='s'>ECR = FantasyPros expert consensus rank (hover for the average expert rank). \U0001F525 after a kicker = we rank him at least 25% (and 3 spots) higher than ECR; \u2620\uFE0F = at least 25% (and 3 spots) lower. Hover the symbol for the exact difference.</p>" else "",
+  key <- site_key(list(KEY_TIERS, KEY_RANGE,                                           # shared page key (Andrew 2026-10-07)
+                       if ("ECR" %in% names(t)) key_flags("we rank him"),
+                       if (any(c("ESPN rank", "Sleeper rank", "Vegas-only rank", "ECR") %in% names(t))) key_amber("the top 18", "him"),
+                       KEY_WEATHER,
+                       key_status(kit("(Q) / (D) / (O) injury status"), kit("\u26A0 ruled out: hover for the likely replacement"), kit("Weather * = no forecast yet"))))
+  paste0(key,
          html_table(t, raw = c("Range bar", "Trend", "Kicker", "Weather", "ECR"), id = paste0("t_", sy), row_cls = attr(t, "row_cls"), cell_cls = attr(t, "cell_cls"), stick = 4),
          "<p class='s'><b>Scoring:</b> ", esc(SC[[sy]]$long), "</p>") }
 panes <- c(paste0("<p class='s'>Colours follow the tiers: dark green = tier 1, light green = tier 2, light / dark red = the bottom two tiers (rank columns: that format's tier; Kicker: the average). Hover or tap a kicker for what drives the ESPN projection.</p>",
@@ -173,7 +177,7 @@ panes <- c(paste0("<p class='s'>Colours follow the tiers: dark green = tier 1, l
                                              `ESPN proj` = tier_cls(te_c, k = 6), `Dec proj` = tier_cls(td_c, k = 6),
                                              Wind = wind_c[oc], Gust = gust_c[oc], Rain = rain_c[oc]))),
            sys_html("espn"), sys_html("dec"),
-           if (!is.null(tt)) tt, P$backtest_html, html_table(glossary))
+           if (!is.null(tt)) tt, P$backtest_html, html_table(glossary, id = "t_gloss"))
 if (!is.null(tt)) tabs <- c("Compare", SC$espn$label, SC$dec$label, "Track record", "Back-test", "Glossary")
 if (!identical(Sys.getenv("SHOW_COMPARE"), "1")) { keep <- tabs != "Compare"; tabs <- tabs[keep]; panes <- panes[keep] }   # Compare hidden (Andrew 2026-09-29)
 
@@ -193,6 +197,7 @@ body{background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;max-w
 h1{font-size:1.4rem;margin:.2rem 0}.s{color:var(--mut);font-size:13px}.tw{overflow-x:auto}a{color:var(--acc)}
 table{border-collapse:collapse;font-size:13px;margin:.6rem 0;white-space:nowrap}th,td{border:1px solid var(--bd);padding:3px 7px;text-align:right}
 th{background:var(--th);cursor:pointer;position:sticky;top:0}td.l{text-align:left}
+#t_gloss th{text-align:left}#t_gloss td{white-space:normal}#t_gloss td:last-child{min-width:360px}
 .tabs button{background:none;border:1px solid var(--bd);color:var(--fg);padding:6px 12px;margin:0 4px 4px 0;border-radius:6px 6px 0 0;cursor:pointer}
 .tabs button.on{background:var(--acc);color:#fff;border-color:var(--acc)}.pane{display:none}.pane.on{display:block}
 ', RB_CSS, '
