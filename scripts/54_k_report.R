@@ -103,11 +103,11 @@ sys_table <- function(sy) {
   if (paste0("trend_svg_", sy) %in% names(p)) t$Trend <- p[[paste0("trend_svg_", sy)]]
   ext_c <- list()                                                        # other rankings this week: "rank (projected points)"
   if (any(!is.na(c(p[["espn_rank"]], p[["sleeper_rank"]])))) {       # ESPN / Sleeper (their ESPN-standard ranks, on both tabs; Andrew 2026-09-25)
-    t <- t %>% mutate(`ESPN rank` = rank_pts(p[["espn_rank"]], p[["espn_pts"]] %||% NA), `Sleeper rank` = rank_pts(p[["sleeper_rank"]], p[["sleeper_pts"]] %||% NA), .after = Proj)
-    ext_c <- list(`ESPN rank` = rank_flag(t$Rank, p[["espn_rank"]]), `Sleeper rank` = rank_flag(t$Rank, p[["sleeper_rank"]])) }
+    t <- t %>% mutate(`ESPN rk` = rank_pts(p[["espn_rank"]], p[["espn_pts"]] %||% NA), `Sleeper rk` = rank_pts(p[["sleeper_rank"]], p[["sleeper_pts"]] %||% NA), .after = Proj)
+    ext_c <- list(`ESPN rk` = rank_flag(t$Rank, p[["espn_rank"]]), `Sleeper rk` = rank_flag(t$Rank, p[["sleeper_rank"]])) }
   vp <- p[[paste0("vegas_proj_", sy)]]
   if (!is.null(vp) && any(!is.na(vp))) { vr <- rank(-vp, ties.method = "first")
-    t <- t %>% mutate(`Vegas-only rank` = rank_pts(vr, vp), .after = Proj); ext_c$`Vegas-only rank` <- rank_flag(t$Rank, vr) }
+    t <- t %>% mutate(`Vegas rk` = rank_pts(vr, vp), .after = Proj); ext_c$`Vegas rk` <- rank_flag(t$Rank, vr) }
   if (any(!is.na(p[["ecr_rank"]] %||% NA))) { t <- t %>% mutate(ECR = ecr_cell(p$ecr_rank, p$ecr_avg, p$ecr_sd), .after = Proj)   # right of Proj
     ext_c$ECR <- rank_flag(t$Rank, p$ecr_rank) }
   brk <- c(FALSE, tr$tier[-1] != tr$tier[-length(tr$tier)])
@@ -127,10 +127,10 @@ sys_table <- function(sy) {
     `Coach LFGOE` = if ("c_longfg_oe" %in% names(p)) sprintf("%+.1f%%", 100 * p$c_longfg_oe) else rep("", nrow(p)), Inj = coalesce(p$injury, "")) %>%
     { if (all(is.na(.$`P(15+)`))) select(., -`P(15+)`) else . }                       # older bundles: no simulation
 }
-tip[c("ESPN rank", "Sleeper rank")] <- RANKCOL_TIP
+tip[c("ESPN rk", "Sleeper rk")] <- RANKCOL_TIP
 tip["ECR"] <- ECR_TIP
 tip["Weather"] <- "Open-Meteo forecast. Temperature and sustained wind: mean over kickoff + 2 h; gust (g): max. Rain: chance (max hourly) and intensity (peak hourly rate: light < 0.10 in/h, moderate 0.10–0.30, heavy > 0.30) from 1 h before to 3 h after kickoff. Highlighted: wind or gust over 15 mph (light red) / 25 mph (dark red); likely (50%+) moderate rain (light red) / heavy rain (dark red). * = no forecast yet: the model uses the outdoor median wind. The model uses sustained wind and temperature; gusts and rain are display only."
-tip["Vegas-only rank"] <- "rank and projection of the Vegas-only baseline (a regression on the betting lines alone: implied points, spread, total, home), with the same lines as our projection. Shaded as for ESPN / Sleeper rank"
+tip["Vegas rk"] <- "rank and projection of the Vegas-only baseline (a regression on the betting lines alone: implied points, spread, total, home), with the same lines as our projection. Shaded as for ESPN / Sleeper rk"
 tip["FG% OE"] <- paste0("FG% over expected: decayed field-goal makes above the league's expected make rate for each kick's distance, roof and weather, per attempt (recent seasons count more), shrunk toward 0 for kickers with few attempts. +2% = makes 2 more of every 100 kicks than an average kicker would in the same spots.",
   if ("k_fgoe_ver" %in% names(pred)) paste0(" Version shown: ", c(kicker_fgoe = "original", kicker_fgoe2 = "v2 (recency-weighted league baseline, wind bands, rain, snow)", kicker_fgoe2r = "v2 with faster decay")[pred$k_fgoe_ver[1]], " — the one the model uses.") else "")
 tip["Coach LFGOE"] <- "Coach LFGOE = long field goal attempts over expected: the head coach's rate of attempting a field goal on 4th downs at the opponent's 32–45 yard line (50–62 yard kicks), minus the league's expected rate for the same yards to go, field position, score, time and win probability (at least 60 s left; win probability 5–95% or first half). Decayed over the coach's career, shrunk toward 0. Positive = kicks long field goals where others punt or go for it, so more 5-point tries."
@@ -165,7 +165,7 @@ pos_cls <- tier_cls(round((te_c + td_c) / 2), k = 6)                            
 sys_html <- function(sy) { t <- sys_table(sy)
   key <- site_key(list(KEY_TIERS, KEY_RANGE,                                           # shared page key (Andrew 2026-10-07)
                        if ("ECR" %in% names(t)) key_flags("we rank him"),
-                       if (any(c("ESPN rank", "Sleeper rank", "Vegas-only rank", "ECR") %in% names(t))) key_amber("the top 18", "him"),
+                       if (any(c("ESPN rk", "Sleeper rk", "Vegas rk", "ECR") %in% names(t))) key_amber("the top 18", "him"),
                        KEY_WEATHER,
                        key_status(kit("(Q) / (D) / (O) injury status"), kit("\u26A0 ruled out: hover for the likely replacement"), kit("Weather * = no forecast yet"))))
   paste0(key,

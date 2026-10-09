@@ -299,15 +299,17 @@ document.addEventListener("mouseover",e=>{const t=e.target.closest&&e.target.clo
 document.addEventListener("focusin",e=>{const t=e.target.closest&&e.target.closest(".tt");if(t)placeTip(t)});'
 
 ## ---- This week's Sleeper / ESPN ranks next to ours ----
-# Amber (Andrew 2026-10-07): the source ranks it at least 25% ("fl1") or 50% ("fl2") higher OR lower than we do. Same % as the
-# love / fade flags: the gap divided by the better of the two ranks; at least AMBER_MIN spots apart; and only where it matters:
-# one of the two ranks inside `cap` (D/ST and kickers 18 = rostered in a 12-team league; players 1.5x the start line; NA = no cap).
-AMBER_PCT <- 0.25; AMBER_STRONG <- 0.50; AMBER_MIN <- 3
-rank_flag <- function(ours, theirs, cap = 18) {
-  cap <- rep_len(cap, length(ours)); lo <- pmin(ours, theirs); pc <- abs(theirs - ours) / lo
-  ok <- !is.na(ours) & !is.na(theirs) & abs(theirs - ours) >= AMBER_MIN & (is.na(cap) | lo <= cap)
-  ifelse(!ok, "", ifelse(pc >= AMBER_STRONG, "fl2", ifelse(pc >= AMBER_PCT, "fl1", ""))) }
-AMBER_TXT <- "Shaded when that source ranks it at least 25% (pale) or 50% (strong) higher or lower than we do: the gap divided by the better of the two ranks, at least 3 spots, and one of the two ranks inside the top 18"
+# Amber: the source ranks it far enough above OR below us. % = the gap divided by the better of the two ranks, and only where it
+# matters: one of the two ranks inside `cap` (18 = rostered in a 12-team league; NA = no cap).
+# D/ST and kickers (Andrew 2026-10-08, was 25% / 50% / 3 spots): pale ("fl1") = 50%+ AND 5+ spots, strong ("fl2") = 100%+ AND 10+ spots.
+# The Players page keeps 25% / 50% / 3 spots with its own rule (64 pp_flag).
+AMBER_PCT <- 0.50; AMBER_MIN <- 5; AMBER_STRONG <- 1.00; AMBER_MIN_STRONG <- 10
+rank_flag <- function(ours, theirs, cap = 18, pct = c(AMBER_PCT, AMBER_STRONG), min = c(AMBER_MIN, AMBER_MIN_STRONG)) {
+  cap <- rep_len(cap, length(ours)); lo <- pmin(ours, theirs); gap <- abs(theirs - ours); pc <- gap / lo
+  ok <- !is.na(ours) & !is.na(theirs) & (is.na(cap) | lo <= cap)
+  ifelse(!ok, "", ifelse(pc >= pct[2] & gap >= min[2], "fl2", ifelse(pc >= pct[1] & gap >= min[1], "fl1", ""))) }
+AMBER_TXT <- sprintf("Shaded when that source ranks it at least %g%% and %d spots (pale) or %g%% and %d spots (strong) higher or lower than we do: %% = the gap divided by the better of the two ranks; one of the two ranks inside the top 18",
+                     100 * AMBER_PCT, AMBER_MIN, 100 * AMBER_STRONG, AMBER_MIN_STRONG)
 RANKCOL_TIP <- paste0("this week's rank on that site in ESPN standard scoring (their projection re-scored; the last update before kickoff). ", AMBER_TXT, ".")
 # Vegas-only projection from lm coefficients stored in the weekly bundle (re-scored with the refreshed lines)
 vegas_proj <- function(cf, df) { if (is.null(cf)) return(rep(NA_real_, nrow(df))); cf[is.na(cf)] <- 0; v <- setdiff(names(cf), "(Intercept)")   # NA = aliased term (implied points = total/2 ± spread/2), as predict.lm treats it
@@ -574,9 +576,12 @@ key_row <- function(label, ...) c(label, paste0(...))
 KEY_TIERS <- key_row("Tiers", kit(ksw("t1"), "tier 1"), kit(ksw("t2"), "tier 2"), kit(ksw("t5"), ksw("t6"), "bottom two tiers"),
   kit('<span class="kln"></span>', "clear drop"), kit('<span class="kln d"></span>', "softer break"),
   kit("hover or tap a name for what drives the projection"))
-key_amber <- function(within = "the top 18", what = "it") key_row("Other rankings",
-  kit(ksw("fl1"), "that source ranks ", what, " 25–50% higher or lower than we do"), kit(ksw("fl2"), "50%+ apart"),
-  kit("(gap ÷ the better rank; at least 3 spots; one of the two ranks inside ", within, ")"))
+key_amber <- function(within = "the top 18", what = "it", pct = c(AMBER_PCT, AMBER_STRONG), min = c(AMBER_MIN, AMBER_MIN_STRONG)) {
+  p <- round(100 * pct); one <- min[1] == min[2]
+  key_row("Other rankings",
+    kit(ksw("fl1"), "that source ranks ", what, " ", p[1], "–", p[2], "% higher or lower than we do", if (!one) paste0(", at least ", min[1], " spots")),
+    kit(ksw("fl2"), p[2], "%+ apart", if (!one) paste0(", at least ", min[2], " spots")),
+    kit("(gap ÷ the better rank", if (one) paste0("; at least ", min[1], " spots"), "; one of the two ranks inside ", within, ")")) }
 key_flags <- function(vs = "our rank") key_row("Vs ECR",
   kit("\U0001F525 love: ", vs, " at least 50% higher"), kit("\U0001F44D like: 25–50% higher"),
   kit("\U0001F914 dislike: 25–50% lower"), kit("☠️ fade: at least 50% lower"), kit("(gap ÷ the better rank; at least 3 spots)"))

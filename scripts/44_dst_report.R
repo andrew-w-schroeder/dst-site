@@ -72,8 +72,8 @@ make_proj_tbl <- function(pred, html = FALSE, label = "") {       # same columns
   if (html && "trend_svg" %in% names(pred)) t <- t %>% mutate(Trend = pred$trend_svg, .after = all_of(DLAB))
   # other rankings this week, "rank (projected points)": Vegas-only in every format; ESPN / Sleeper in ESPN scoring
   if (label == "ESPN" && any(!is.na(pred[["espn_rank"]] %||% NA) | !is.na(pred[["sleeper_rank"]] %||% NA)))
-    t <- t %>% mutate(`ESPN rank` = rank_pts(pred[["espn_rank"]], pred[["espn_pts"]] %||% NA), `Sleeper rank` = rank_pts(pred[["sleeper_rank"]], pred[["sleeper_pts"]] %||% NA), .after = Proj)
-  if ("vegas_proj" %in% names(pred)) t <- t %>% mutate(`Vegas-only rank` = rank_pts(rank(-pred$vegas_proj, ties.method = "first"), pred$vegas_proj), .after = Proj)
+    t <- t %>% mutate(`ESPN rk` = rank_pts(pred[["espn_rank"]], pred[["espn_pts"]] %||% NA), `Sleeper rk` = rank_pts(pred[["sleeper_rank"]], pred[["sleeper_pts"]] %||% NA), .after = Proj)
+  if ("vegas_proj" %in% names(pred)) t <- t %>% mutate(`Vegas rk` = rank_pts(rank(-pred$vegas_proj, ties.method = "first"), pred$vegas_proj), .after = Proj)
   if (any(!is.na(pred[["ecr_rank"]] %||% NA))) t <- t %>% mutate(ECR = ecr_cell(pred$ecr_rank, pred$ecr_avg, pred$ecr_sd, html), .after = Proj)   # right of Proj (Andrew 2026-09-29)
   if ("wx_wind" %in% names(pred)) t <- t %>% mutate(Weather = wx_label(pred$indoor, pred$wx_temp, pred$wx_wind, pred$wx_gust, pred$wx_precip_prob,
                                                                        if ("wx_precip_max" %in% names(pred)) pred$wx_precip_max else pred$wx_precip_in / 3, html = html),
@@ -129,8 +129,8 @@ compare_gloss <- tribble(~term, ~definition,
   "Δ Opp implied", "change in the opponent's Vegas implied points since the week's first weekly model run, normally Tuesday (negative = good for this D/ST)",
   "Δ Proj", "change in the projection since the week's first weekly model run, normally Tuesday — not since the previous refresh, and not reset by a mid-week model rerun",
   "Avg rank", "average of the three ranks; the table is sorted by it",
-  "ESPN rank", RANKCOL_TIP, "Sleeper rank", RANKCOL_TIP, "ECR", ECR_TIP,
-  "Vegas-only rank", "rank and projection of the Vegas-only baseline (a regression on the betting lines alone: spread, total, implied points, home), with the same lines as our projection. Shaded as for ESPN / Sleeper rank",
+  "ESPN rk", RANKCOL_TIP, "Sleeper rk", RANKCOL_TIP, "ECR", ECR_TIP,
+  "Vegas rk", "rank and projection of the Vegas-only baseline (a regression on the betting lines alone: spread, total, implied points, home), with the same lines as our projection. Shaded as for ESPN / Sleeper rk",
   "Rank spread", "largest minus smallest rank across systems; big spreads mean the scoring rules change the pick (usually shutout / points-allowed upside vs yards allowed or sacks)")
 col_gloss <- g0$col_glossary %>% mutate(definition = case_when(
   term == "Proj"   ~ "projected fantasy points for the tab's scoring system: average of elastic net + component model + ridge",
@@ -182,8 +182,8 @@ sys_tab <- function(p) {
   brk <- c(FALSE, tt[-1] != tt[-length(tt)])
   row_cls <- trimws(paste(ifelse(tt %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tt] %in% TRUE, "tb-clear", "tb-soft"), "")))
   team_cls <- tier_cls(tt, k = max(tt))                                    # tier 1 dark green, 2 light green, 5 light red, 6 dark red
-  ext_cls <- c(if ("ESPN rank" %in% names(pt)) list(`ESPN rank` = rank_flag(p$pred$rank, p$pred[["espn_rank"]]), `Sleeper rank` = rank_flag(p$pred$rank, p$pred[["sleeper_rank"]])),
-               if ("vegas_proj" %in% names(p$pred)) list(`Vegas-only rank` = rank_flag(p$pred$rank, rank(-p$pred$vegas_proj, ties.method = "first"))),
+  ext_cls <- c(if ("ESPN rk" %in% names(pt)) list(`ESPN rk` = rank_flag(p$pred$rank, p$pred[["espn_rank"]]), `Sleeper rk` = rank_flag(p$pred$rank, p$pred[["sleeper_rank"]])),
+               if ("vegas_proj" %in% names(p$pred)) list(`Vegas rk` = rank_flag(p$pred$rank, rank(-p$pred$vegas_proj, ties.method = "first"))),
                if ("ECR" %in% names(pt)) list(ECR = rank_flag(p$pred$rank, p$pred$ecr_rank)))
   if (all(c("q10", "q90") %in% names(p$pred))) pt <- pt %>% mutate(Range = pmap_chr(p$pred[c("proj", "q10", "q25", "q75", "q90", "ci_lo", "ci_hi")], range_bar), .after = all_of(ac))
   cvt <- p$cv_tbl %>% select(any_of(c("model", "rmse", "mae", "spearman", "top8_avg", "bot8_avg", "edge_top8", "vs_vegas_top8", "t_stat",
@@ -193,13 +193,13 @@ sys_tab <- function(p) {
   for (n in intersect(names(dg), names(cvt))) cvt[[n]] <- ifelse(is.na(cvt[[n]]), "", formatC(as.numeric(cvt[[n]]), format = "f", digits = dg[[n]]))
   key <- site_key(list(KEY_TIERS, KEY_RANGE,
                        if ("ECR" %in% names(pt)) key_flags("we rank it"),
-                       if (any(c("ESPN rank", "Sleeper rank", "Vegas-only rank", "ECR") %in% names(pt))) key_amber("the top 18"),
+                       if (any(c("ESPN rk", "Sleeper rk", "Vegas rk", "ECR") %in% names(pt))) key_amber("the top 18"),
                        if ("Weather" %in% names(pt)) KEY_WEATHER,
                        if (refreshed) key_status(kit("Opp QB: (Q) / (D) / (O) injury status"), kit("\u21BB changed since the weekly run"), kit("\u26A0 a source disagrees (hover)"))))
   paste0(sprintf("<p class='note'>Feature families in this model: %s.</p>", esc(paste(p$families, collapse = ", "))), key,
          html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, raw_cols = c("Range", "Trend", "Team", "Opp QB", "Weather", "ECR"),
                     row_cls = row_cls, cell_cls = c(list(Team = team_cls, Rank = team_cls, Proj = team_cls), ext_cls), stick = 4),   # Proj coloured like Rank (Andrew 2026-09-25)
-         if (any(c("ESPN rank", "Vegas-only rank") %in% names(pt))) "<p class='note'>ECR = FantasyPros expert consensus rank (hover for the average expert rank). Vegas-only / ESPN / Sleeper rank: that source's rank this week, with its projected points in parentheses (ESPN and Sleeper in ESPN standard scoring).</p>" else "",
+         if (any(c("ESPN rk", "Vegas rk") %in% names(pt))) "<p class='note'>ECR = FantasyPros expert consensus rank (hover for the average expert rank). Vegas / ESPN / Sleeper rk (rk = rank): that source's rank this week (Vegas = the Vegas-only baseline), with its projected points in parentheses (ESPN and Sleeper in ESPN standard scoring).</p>" else "",
          sprintf("<p class='rules'><b>%s scoring:</b> %s</p>", esc(p$SC$label), esc(p$SC$rules)),
          if (is.null(p$holdout)) sprintf("<h3>Back-test: %s</h3><p class='note'>Each season predicted by models trained only on earlier seasons (from 2018). Every tuning, feature and blend choice maximizes the weekly top-8 edge over Vegas-only on these seasons, so these numbers are optimistic. %s %d is the clean test.</p>",
                                          paste(unique(range(p$cv_season)), collapse = "–"), esc(if (is.null(p$validation_note) || is.na(p$validation_note)) "" else p$validation_note),

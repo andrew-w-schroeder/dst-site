@@ -38,8 +38,8 @@ PP_TIP <- c(
   "Range bar" = "How much his score can swing: light band = 80% of outcomes (10th to 90th percentile), dark band = 50% (25th to 75th), line = projection; the small orange band around the line = the \u00b1 (90% interval of the projection itself). From quantile regression on 2023+ player-games with the same projection (adding the TD price, implied total or spread didn't help). Same scale within a table.",
   "Injury" = "(Q) Questionable, (D) Doubtful, (O) Out, IR / PUP / NFI / SUS after the name: the official NFL injury report's game status once it is out (Friday), before that Sleeper's status; IR / PUP / suspensions from either. Checked at every refresh and frozen at kickoff. Hover the player for practice participation and the injury. Red = ruled out or doubtful.",
   ECR = "FantasyPros expert consensus rank at the position (via DynastyProcess, updated about 10 am / 10 pm ET; the last one before kickoff). RB / WR / TE ranks are PPR in every format. Hover for the average rank, spread across experts and FantasyPros' projected PPR points. Shaded when ECR ranks him at least 25% (pale) or 50% (strong) higher or lower than our position rank: the gap divided by the better of the two ranks, at least 3 spots, and one of the two inside RB 36 / WR 54 / TE 18 (any QB rank).",
-  "ESPN rank" = "ESPN's projected stats scored in this format, ranked at the position (last pull before kickoff); projected points in brackets. Shaded as for ECR.",
-  "Sleeper rank" = "Sleeper's projected stats (Rotowire) scored in this format, ranked at the position (last pull before kickoff); projected points in brackets. Shaded as for ECR.")
+  "ESPN rk" = "ESPN's projected stats scored in this format, ranked at the position (last pull before kickoff); projected points in brackets. Shaded as for ECR.",
+  "Sleeper rk" = "Sleeper's projected stats (Rotowire) scored in this format, ranked at the position (last pull before kickoff); projected points in brackets. Shaded as for ECR.")
 PP_START <- c(QB = 12, RB = 24, WR = 36, TE = 12)
 ## amber (Andrew 2026-10-07): that source ranks him 25% / 50%+ higher or lower than our position rank (site_utils rank_flag),
 ## at least 3 spots, and one of the two ranks inside 1.5x the start line (RB 36, WR 54, TE 18); QBs: no cutoff (only 32)
@@ -49,7 +49,7 @@ pp_flag <- function(ours, theirs, pos) { cap <- unname(PP_AMBER_CAP[pos]); lo <-
   ifelse(!ok, "", ifelse(pc >= 0.5, "fl2", ifelse(pc >= 0.25, "fl1", ""))) }
 pp_key <- function() if (!exists("site_key")) "" else site_key(list(KEY_TIERS, KEY_RANGE,                                   # shared page key (Andrew 2026-10-07)
   key_flags("our Vegas-only position rank"),
-  key_amber("RB 36 / WR 54 / TE 18 (any QB)", "him"),
+  key_amber("RB 36 / WR 54 / TE 18 (any QB)", "him", pct = c(0.25, 0.5), min = c(3, 3)),   # players keep 25% / 50% / 3 spots
   key_status(kit("(Q) / (D) / (O), IR: injury status (red = ruled out or doubtful)"), kit("<i>italic</i> no props yet: projected from his history"),
              kit("(TD) = TD-only prop"))))
 ## glossary text for rows without props (back-test numbers from 79 via the bundle)
@@ -210,11 +210,11 @@ pp_pos_table <- function(P, pos, fmt) {
     ext_c$ECR <- ifelse(fb, "", pp_flag(prk, d$ecr_rank, d$pos))
   }
   for (src in c("ESPN", "Sleeper")) { lo <- tolower(src); rk <- d[[paste0(lo, "_rk_", fmt)]]
-    if (!is.null(rk) && any(!is.na(rk))) { cn <- paste(src, "rank")
+    if (!is.null(rk) && any(!is.na(rk))) { cn <- paste(src, "rk")
       pts <- d[[paste0(lo, "_pts_", fmt)]]
       t[[cn]] <- ifelse(is.na(rk), "", ifelse(is.na(pts), lab(rk), sprintf("%s (%.1f)", lab(rk), pts)))
       ext_c[[cn]] <- ifelse(fb, "", pp_flag(prk, rk, d$pos)) } }
-  if (length(ext_c)) t <- t |> relocate(any_of(c("ECR", "ESPN rank", "Sleeper rank")), .after = any_of(c("Proj", "\u00b1")))
+  if (length(ext_c)) t <- t |> relocate(any_of(c("ECR", "ESPN rk", "Sleeper rk")), .after = any_of(c("Proj", "\u00b1")))
   t <- bind_cols(t, as_tibble(stat_cells), tibble("TD%" = ifelse(fb & !tdp & !is.na(d$p_td_raw), paste0("<i class='fill'>", pp_pct(d$p_td_raw), "*</i>"), pp_pct(d$p_td_raw)),
     Books = ifelse(fb & !tdp, "", do.call(pmax, c(map(grep("^n_books\\.", names(d), value = TRUE), \(c) coalesce(d[[c]], 0)), na.rm = TRUE)))))
   brk <- c(FALSE, tr$tier[-1] != tr$tier[-length(tr$tier)])
