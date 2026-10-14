@@ -182,3 +182,11 @@ k_pool_swap <- function(te, pool, team, j) {
   for (r in seq_along(team)) { i <- match(team[r], te$team); if (!is.na(i)) te[i, cols] <- pool$feat[j[r], cols] }
   te
 }
+# The same swap on rows covering several weeks (the ROS page): each row of the team shifts by (new kicker - old kicker) as of this week,
+# so every future week keeps its own week-centring. Old kicker not in the pool: his rows are replaced outright (this week's centring).
+k_pool_shift <- function(rows, pool, team, j_new, j_old) {
+  cols <- intersect(setdiff(names(pool$feat), c("kicker_id", "kicker")), names(rows))
+  for (r in seq_along(team)) { i <- which(rows$team == team[r]); if (!length(i)) next
+    for (v in cols) rows[[v]][i] <- if (is.na(j_old[r])) pool$feat[[v]][j_new[r]] else rows[[v]][i] + pool$feat[[v]][j_new[r]] - pool$feat[[v]][j_old[r]] }
+  rows
+}

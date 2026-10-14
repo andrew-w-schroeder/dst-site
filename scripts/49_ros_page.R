@@ -37,6 +37,28 @@ load_pair <- function(dir) {
 DST <- Filter(Negate(is.null), setNames(lapply(c("espn", "yahoo", "ffpc"), function(s) load_pair(file.path(PROJ_DIR, "output/dst", s))), c("espn", "yahoo", "ffpc")))
 KK <- load_pair(file.path(PROJ_DIR, "output/k"))
 if (!length(DST) && is.null(KK)) { message("ROS: no ros_rows for ", wk, " (40 / 50 hooks) - page not built"); quit(save = "no") }
+# kicker swaps made by the kicker page's refresh (55_k_refresh.R, Andrew 2026-10-14): a released / ruled-out kicker is replaced by the
+# team's current K1 in every remaining week, with the new kicker's own career features from the bundle's kicker pool. Per team, the
+# newest kicker row of this week in data/lines/starter_history.csv (so a swap stays after that team's game has kicked off).
+if (!is.null(KK) && !is.null(KK$B$k_pool)) tryCatch({
+  sh_f <- first_file("data/lines/starter_history.csv")
+  if (!is.na(sh_f)) {
+    sh <- read.csv(sh_f, stringsAsFactors = FALSE, colClasses = "character") %>%
+      filter(season == as.character(SEASON), week == as.character(WEEK), pos == "K") %>%
+      group_by(team) %>% slice_max(pulled_at, n = 1, with_ties = FALSE) %>% ungroup() %>% filter(startsWith(rule, "auto-swap"))
+    old <- KK$R$rows %>% filter(team %in% sh$team) %>% distinct(team, .keep_all = TRUE)
+    sh <- sh %>% inner_join(old %>% select(team, old_id = kicker_id, old_kicker = kicker), by = "team") %>% filter(player != old_kicker)
+    if (nrow(sh)) {
+      pool <- KK$B$k_pool
+      j_new <- vapply(seq_len(nrow(sh)), function(r) K_E$k_pool_find(pool, sh$player[r], na_if(sh$player_id[r], "")), 1L)
+      j_old <- match(sh$old_id, pool$feat$kicker_id)
+      KK$R$rows <- K_E$k_pool_shift(KK$R$rows, pool, sh$team, j_new, j_old)
+      i <- match(KK$R$rows$team, sh$team); k <- !is.na(i)
+      KK$R$rows$kicker[k] <- sh$player[i[k]]; KK$R$rows$kicker_id[k] <- coalesce(na_if(sh$player_id[i[k]], ""), KK$R$rows$kicker_id[k])
+      say("ROS kickers: %s", paste(sprintf("%s %s -> %s", sh$team, sh$old_kicker, sh$player), collapse = ", "))
+    }
+  }
+}, error = function(e) message("ROS kickers: swap skipped - ", conditionMessage(e)))
 say("ROS %d week %d: D/ST formats %s; kickers %s", SEASON, WEEK, paste(names(DST), collapse = ", "), if (is.null(KK)) "no" else "yes")
 games <- INP$games
 WEEKS <- sort(unique(games$week))
@@ -261,7 +283,7 @@ html <- c('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name
   '<li><b>Lines:</b> this week = the latest sportsbook consensus; next week = the lookahead lines books have posted (or nflverse&#39;s); later weeks = projected. Every posted line gives two implied team totals; a ridge fit of implied total = league average + team offense + opponent defense + home field (recent weeks count most) projects any future game. In the 2021–25 back-test the projected implied totals missed the eventual closing line by 2.1 points one week out, 2.6 at four weeks and 3.1 at eight (3.7 with no team information).</li>',
   '<li><b>Weather:</b> this week&#39;s Open-Meteo forecast where available, otherwise the 2016–25 typical weather for that stadium, date (±10 days) and kickoff hour (chances of cold and strong wind enter the models as probabilities). Domes and retractable roofs count as indoor.</li>',
   '<li><b>Columns:</b> Next 3 / Next 4 = average points per game over the next 3 / 4 weeks including this one (* = a bye in that span, so the average is over the games played); ROS avg = average over the remaining games; Wk 15–17 = fantasy playoff total.</li>',
-  '<li><b>Not included:</b> future injuries, QB or kicker changes, coaching changes. The page rebuilds every day with new lines; the models refit every Tuesday.</li></ul></details>',
+  '<li><b>Not included:</b> future injuries, QB changes, coaching changes. A kicker released or ruled out is replaced by his team&#39;s new kicker in every remaining week. The page rebuilds every day with new lines; the models refit every Tuesday.</li></ul></details>',
   '<script>const D=', json, ';', ROS_JS(), '</script></body></html>')
 out_dir <- if (dir.exists(file.path(PROJ_DIR, "site"))) file.path(PROJ_DIR, "site", "ros") else file.path(PROJ_DIR, "output", "ros")
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
