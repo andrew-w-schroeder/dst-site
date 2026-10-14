@@ -50,7 +50,9 @@ jobs:
           use-public-rspm: true   # prebuilt Linux binaries: packages install in seconds
 
       - name: Install R packages
-        run: Rscript -e 'install.packages(c("dplyr", "tidyr", "purrr", "stringr", "tibble", "jsonlite", "curl", "lpSolve"))'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq libcurl4-openssl-dev libssl-dev
+          Rscript -e 'pk <- c("dplyr", "tidyr", "purrr", "stringr", "tibble", "jsonlite", "curl", "lpSolve"); install.packages(pk); bad <- pk[!vapply(pk, requireNamespace, NA, quietly = TRUE)]; if (length(bad)) stop("R packages failed to install: ", paste(bad, collapse = ", "))'
 
       - name: D/ST (lines, starting QBs, re-score)
         id: dst
