@@ -257,6 +257,37 @@ kicker_status <- function(S, k) purrr::map_dfr(seq_len(nrow(k)), function(i) {
   tibble::tibble(team = k$team[i], k_status = ps$status, k_out = ps$out, k_status_detail = ps$detail, k_alt = alt)
 })
 
+# Kickers who are no longer the team's kicker (Andrew 2026-10-14). player_status() only sees injury news: a released kicker
+# simply drops off his team's lists (Sleeper clears his team, Ourlads his depth-chart line), which reads as "no news".
+# k = tibble(team, kicker_id, kicker): the kicker each projection uses. A team's kicker is replaced when
+#   (a) none of the fetched depth sources (Sleeper, Ourlads) lists him on that team (released / waived / traded), or
+#   (b) he is ruled out for the game (Out, IR, PUP, NFI, suspended; Doubtful is not enough),
+# and the team has another kicker: Sleeper K1, else Ourlads K1, skipping anyone ruled out. If one source still lists him
+# (e.g. Ourlads a day behind), nothing changes until both agree. Returns one row per replaced team.
+kicker_swaps <- function(S, k) {
+  none <- tibble::tibble(team = character(), old_kicker = character(), old_id = character(), kicker = character(),
+                         kicker_id = character(), reason = character(), src = character())
+  out <- purrr::map_dfr(seq_len(nrow(k)), function(i) {
+    tm <- k$team[i]; key <- st_norm(k$kicker[i]); id <- k$kicker_id[i]
+    on <- c(sleeper = NA, ourlads = NA)
+    for (nm in names(on)) { tab <- S[[nm]]; if (is.null(tab) || !nrow(tab)) next
+      on[[nm]] <- NROW(st_match(tab[tab$pos %in% "K" & tab$team %in% tm, ], tm, key, id)) > 0 }
+    if (all(is.na(on))) return(NULL)
+    gone <- !any(on, na.rm = TRUE)
+    ps <- player_status(S, tm, k$kicker[i], id, pos = "K")
+    ruled_out <- !is.na(ps$status) && ps$status %in% c("Out", ST_HARD)
+    if (!gone && !ruled_out) return(NULL)
+    for (nm in c("sleeper", "ourlads")) { tab <- S[[nm]]; if (is.null(tab) || !nrow(tab)) next
+      d <- tab[tab$team %in% tm & tab$pos %in% "K" & !is.na(tab$name), ]; d <- d[order(d$order), ]
+      d <- d[st_norm(d$name) != key & !(d$status %in% ST_OUT) & !(!is.na(id) & d$gsis_id %in% id), ]
+      if (nrow(d)) return(tibble::tibble(team = tm, old_kicker = k$kicker[i], old_id = id, kicker = st_title(d$name[1]),
+                                         kicker_id = if ("gsis_id" %in% names(d)) d$gsis_id[1] else NA_character_,
+                                         reason = if (gone) paste("not on the roster per", paste(names(on)[!is.na(on)], collapse = " + ")) else paste("ruled out:", ps$status),
+                                         src = nm)) }
+    NULL })
+  if (!NROW(out)) none else out
+}
+
 # Log of every refresh's choices (one row per team and position)
 log_starters <- function(file, now, season, week, rows) {
   rows <- dplyr::mutate(rows, pulled_at = format(now, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"), season = season, week = week, .before = 1)

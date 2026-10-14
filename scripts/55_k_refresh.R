@@ -9,6 +9,7 @@
 #   2. Weather: Open-Meteo hourly forecast (free, no key) at kickoff +2 h for outdoor / retractable venues,
 #      appended to data/lines/weather_history.csv. Per game: newest forecast pulled before kickoff, so started
 #      games are frozen. Fetch failure → last stored forecast, else the weekly-run value.
+#   2b. Who kicks: a released / ruled-out kicker is swapped for the team's current K1 (starters.R + the bundle's kicker pool).
 #   3. Re-score (projection, components, ranges, boom/bust, P(top N), bootstrap CI) for ESPN + decimal; keeps
 #      the weekly-run values as the "since Tuesday" baseline.
 #   4. Writes re-scored report parts to work/, runs 54_k_report.R there, copies the page to site/k/index.html
@@ -72,10 +73,43 @@ wx_hist <- tryCatch(wx_update(WX_CSV, wk_games, NOW), error = function(e) { mess
 wx_all <- wx_latest(wx_hist) %>% filter(game_id %in% games$game_id)
 wx_use <- wx_all %>% select(game_id, temp_new = temp, wind_new = wind)
 
+## ---- 3b. Who kicks (Andrew 2026-10-14) ----
+# A kicker who has been released (on neither Sleeper's nor Ourlads' list for his team) or ruled out (Out / IR) is replaced by the
+# team's current K1 (starters.R kicker_swaps()), and that team is re-scored with the new kicker's own career features from the
+# bundle's kicker pool (league priors for a kicker with no NFL kicks), in his team's environment. Started games are not touched.
+source(file.path(PROJ_DIR, "scripts/starters.R"))
+te_k <- B$te; k_swapped <- NULL
+tryCatch({
+  S_k <- starter_sources(SEASON, WEEK, sort(unique(P$pred$team)), cache = file.path(WORK_DIR, "starter_sources.rds"), now = NOW,
+                         snap_dir = file.path(PROJ_DIR, "data/lines/sources"))
+  started_t <- c(lines$home_team[lines$locked], lines$away_team[lines$locked])
+  sw <- kicker_swaps(S_k, P$pred %>% filter(!team %in% started_t) %>%
+                       transmute(team, kicker_id = if ("kicker_id" %in% names(P$pred)) kicker_id else NA_character_, kicker))
+  if (nrow(sw) && is.null(B$k_pool)) {
+    message("kickers: ", paste(sprintf("%s %s → %s", sw$team, sw$old_kicker, sw$kicker), collapse = ", "),
+            " — this bundle has no kicker pool (rerun 50_k_model.R); projections kept")
+  } else if (nrow(sw)) {
+    j <- vapply(seq_len(nrow(sw)), function(r) k_pool_find(B$k_pool, sw$kicker[r], sw$kicker_id[r], st_norm), 1L)
+    te_k <- k_pool_swap(te_k, B$k_pool, sw$team, j)
+    pid <- B$k_pool$feat$kicker_id[j]; i <- match(sw$team, P$pred$team)
+    P$pred$kicker[i] <- sw$kicker
+    if ("kicker_id" %in% names(P$pred)) P$pred$kicker_id[i] <- ifelse(pid == "ROOKIE", sw$kicker_id, pid)
+    D <- B$k_pool$disp; jd <- match(pid, D$kicker_id)
+    for (v in intersect(setdiff(names(D), "kicker_id"), names(P$pred))) P$pred[[v]][i] <- D[[v]][jd]
+    if (all(c("k_fgoe_ver", "k_fgoe_disp") %in% names(P$pred))) {
+      fv <- sub("^kicker_", "k_", P$pred$k_fgoe_ver[i])
+      P$pred$k_fgoe_disp[i] <- vapply(seq_along(i), function(r) if (fv[r] %in% names(D)) D[[fv[r]]][jd[r]] else NA_real_, 0)
+    }
+    for (v in intersect(c("injury", "practice"), names(P$pred))) P$pred[[v]][i] <- NA      # the weekly run's report rows were for the old kicker
+    k_swapped <- sw %>% mutate(pool = ifelse(pid == "ROOKIE", "league priors (no NFL kicks)", "own career"))
+    message("kickers: auto-swap · ", paste(sprintf("%s %s → %s (%s; %s)", sw$team, sw$old_kicker, sw$kicker, sw$reason, k_swapped$pool), collapse = " · "))
+  }
+}, error = function(e) message("kickers: roster check failed — ", conditionMessage(e)))
+
 ## ---- 4. Re-score ----
 l2 <- bind_rows(lines %>% transmute(game_id, team = home_team, sp = home_spread, tot = total),
                 lines %>% transmute(game_id, team = away_team, sp = -home_spread, tot = total))
-te_now <- B$te %>% left_join(l2, by = c("game_id", "team")) %>% left_join(wx_use, by = "game_id") %>%
+te_now <- te_k %>% left_join(l2, by = c("game_id", "team")) %>% left_join(wx_use, by = "game_id") %>%
   mutate(spread = coalesce(sp, spread), total_line = coalesce(tot, total_line),
          wind_known = ifelse(indoor == 0 & !is.na(wind_new), 1L, wind_known),
          temp = coalesce(temp_new, temp), wind = coalesce(wind_new, wind)) %>%
@@ -105,7 +139,10 @@ ks <- tryCatch({
   log_starters(file.path(PROJ_DIR, "data/lines/starter_history.csv"), NOW, SEASON, WEEK,
                k %>% filter(!team %in% started) %>% left_join(P$pred %>% select(team, kicker, any_of("kicker_id")), by = "team") %>%
                  transmute(team, pos = "K", player = kicker, player_id = if ("kicker_id" %in% names(.)) kicker_id else "", status = coalesce(k_status, ""),
-                           rule = "weekly run (status check only)", note = ifelse(is.na(k_alt), "", paste("replacement:", k_alt))))
+                           rule = if (is.null(k_swapped)) "weekly run (status check only)" else
+                             ifelse(team %in% k_swapped$team, paste("auto-swap:", k_swapped$reason[match(team, k_swapped$team)]), "weekly run (status check only)"),
+                           note = ifelse(team %in% k_swapped$team, paste("replaces", k_swapped$old_kicker[match(team, k_swapped$team)]),
+                                         ifelse(is.na(k_alt), "", paste("replacement:", k_alt)))))
   message(sprintf("kickers: status checked (%s) · flagged: %s", paste(S$ok, collapse = ", "),
                   if (any(!is.na(k$k_status))) paste(sprintf("%s %s", k$team, k$k_status)[!is.na(k$k_status)], collapse = ", ") else "none"))
   k }, error = function(e) { message("kickers: status check failed — ", conditionMessage(e)); NULL })

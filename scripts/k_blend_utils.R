@@ -164,3 +164,21 @@ k_sim_probs <- function(S, te, proj, sy, U) {
   out$sim_sd <- apply(D[[sy]], 1, stats::sd); out$sim_check <- max(abs(rowMeans(Mj) - proj))
   tibble::as_tibble(out)
 }
+
+## ---- Kicker pool: swap in another kicker without refitting (Andrew 2026-10-14; bundles from 50_k_model.R on/after that date) ----
+# B$k_pool = list(feat = kicker_id, kicker + every kicker feature as of this week, week-centred exactly like B$te, + k_long_share_raw;
+#                 disp = kicker_id + the raw career rates shown on the page). Covers every kicker with an NFL kick in the last
+#                 5 seasons; "ROOKIE" = the league priors the model gives a kicker with no NFL kicks.
+# k_pool_find(): pool row for a kicker (gsis id first, then exact normalised name; else ROOKIE). k_pool_swap(): te with those rows'
+# kicker features on the given teams (team, environment and Vegas columns untouched; derive_env() afterwards rebuilds wind_x_long).
+k_pool_find <- function(pool, name, id = NA, norm = function(x) gsub("[^a-z]", "", tolower(x))) {
+  f <- pool$feat; j <- if (!is.na(id) && nzchar(id)) match(id, f$kicker_id) else NA_integer_
+  if (is.na(j)) { m <- which(norm(f$kicker) == norm(name) & f$kicker_id != "ROOKIE"); if (length(m) == 1) j <- m }
+  if (is.na(j)) j <- match("ROOKIE", f$kicker_id)
+  as.integer(j)
+}
+k_pool_swap <- function(te, pool, team, j) {
+  cols <- intersect(setdiff(names(pool$feat), c("kicker_id", "kicker")), names(te))
+  for (r in seq_along(team)) { i <- match(team[r], te$team); if (!is.na(i)) te[i, cols] <- pool$feat[j[r], cols] }
+  te
+}
