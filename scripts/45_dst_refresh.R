@@ -18,6 +18,10 @@
 #   charts, nflverse schedule, data/lines/qb_override.csv) and re-scores a changed starter exactly with the bundle's
 #   QB scenarios (40_dst_model.R 9d); games that have kicked off keep their last pre-kickoff starter.
 #   Choices are logged to data/lines/starter_history.csv.
+#   Player availability (Andrew 2026-10-22): each refresh re-checks every defender and offensive lineman behind this week's
+#   availability features (official report, Sleeper, Ourlads; dst_blend_utils.R avail_live_status()) and re-scores with the
+#   recomputed shares out / gone (swap_avail()). Games that have kicked off keep their last pre-kickoff values
+#   (data/lines/avail_history.csv). The team hover lists who is missing.
 #   Also (site_utils.R): Open-Meteo forecasts incl. gusts / rain for this week's outdoor games (display only for
 #   D/ST; logged to data/lines/weather_history.csv and reused by the kicker refresh), the projection history
 #   behind the trend sparklines (data/lines/proj_history.csv) and the per-team "drivers" hover text.
@@ -39,6 +43,7 @@ source(file.path(PROJ_DIR, "scripts/dst_blend_utils.R"))
 source(file.path(PROJ_DIR, "scripts/site_utils.R"))
 source(file.path(PROJ_DIR, "scripts/starters.R"))
 QBO_CSV <- file.path(PROJ_DIR, "data/lines/qb_override.csv"); ST_CSV <- file.path(PROJ_DIR, "data/lines/starter_history.csv")
+AV_CSV  <- file.path(PROJ_DIR, "data/lines/avail_history.csv")
 WX_CSV <- file.path(PROJ_DIR, "data/lines/weather_history.csv"); PH_CSV <- file.path(PROJ_DIR, "data/lines/proj_history.csv")
 
 ## ---- 1. Which week? newest bundle across systems ----
@@ -180,6 +185,43 @@ if (!is.null(starters)) {
                                                            if (nzchar(flag$disagree[i])) paste0(" | other sources: ", flag$disagree[i]) else ""))
 }
 
+## ---- 3d. Player availability: live statuses for every player behind this week's features ----
+av <- NULL
+if (!is.null(b1$avail) && !is.null(b1$avail$shares)) {
+  if (!isTRUE(b1$avail$shares_diff < 1e-6)) message("availability: this week's bundle shares don't rebuild its values - weekly values kept") else
+  av <- tryCatch({
+    sf <- Sys.getenv("AVAIL_STATUS_FILE")                       # testing: a saved status table (team, player, out, gone, why)
+    st <- if (nzchar(sf)) { x <- read.csv(sf, stringsAsFactors = FALSE, colClasses = c(player = "character")); attr(x, "sources") <- basename(sf); x } else
+      avail_live_status(b1, SEASON, WEEK)
+    if (is.null(st)) stop("no live statuses")
+    raw_now <- swap_avail(b1, st)$raw
+    ko_t <- if (!is.null(wk_games)) c(setNames(wk_games$kickoff, wk_games$home_team), setNames(wk_games$kickoff, wk_games$away_team)) else NULL
+    started <- if (is.null(ko_t)) character() else raw_now$team[!is.na(ko_t[raw_now$team]) & NOW >= ko_t[raw_now$team]]
+    # history: one row per team not yet kicked off; started teams use their last pre-kickoff row (else the weekly values)
+    hist_av <- if (file.exists(AV_CSV)) read.csv(AV_CSV, stringsAsFactors = FALSE) else NULL
+    ovr <- NULL
+    if (length(started) && !is.null(hist_av)) {
+      h <- hist_av[hist_av$season == SEASON & hist_av$week == WEEK & hist_av$team %in% started, ]
+      if (nrow(h)) { h$t <- utc(h$time); h <- h[!is.na(h$t) & h$t < as.POSIXct(ko_t[h$team], tz = "UTC"), ]
+        ovr <- h %>% group_by(team) %>% slice_max(t, n = 1, with_ties = FALSE) %>% ungroup() %>% select(team, any_of(b1$avail$cols)) }
+    }
+    if (length(started)) { miss <- setdiff(started, ovr$team)      # kicked off with no pre-kickoff row: weekly values
+      if (length(miss)) ovr <- bind_rows(ovr, b1$avail$raw %>% filter(team %in% miss) %>% select(team, all_of(b1$avail$cols))) }
+    new_rows <- swap_avail(b1, st, ovr)$raw %>% filter(!team %in% started)
+    if (nrow(new_rows)) {
+      add <- new_rows %>% mutate(time = format(NOW, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"), season = SEASON, week = WEEK, .before = 1) %>% select(-game_id)
+      dir.create(dirname(AV_CSV), recursive = TRUE, showWarnings = FALSE)
+      write.csv(bind_rows(if (!is.null(hist_av)) hist_av %>% mutate(across(everything(), as.character)), add %>% mutate(across(everything(), as.character))) %>%
+                  mutate(across(any_of(c("season", "week", b1$avail$cols)), as.numeric)), AV_CSV, row.names = FALSE)
+    }
+    nout <- sum(st$out); ngone <- sum(st$gone)
+    chg <- swap_avail(b1, st, ovr)$changed
+    message(sprintf("availability: %d players checked (%s) · %d out · %d gone · teams changed since the weekly run: %s", nrow(st), attr(st, "sources"), nout, ngone,
+                    if (length(chg)) paste(chg, collapse = ", ") else "none"))
+    list(status = st, override = ovr, note = avail_note(b1, st), sources = attr(st, "sources"))
+  }, error = function(e) { message("availability: failed - ", conditionMessage(e), " (weekly values kept)"); NULL })
+}
+
 ## ---- 4. Re-score each system ----
 apply_lines <- function(te, lines) {
   l <- bind_rows(lines %>% transmute(game_id, team = home, sp = home_spread, tot = total),
@@ -210,11 +252,15 @@ for (s in names(bundles)) {
   base <- score(b, b$te) %>% transmute(team, spread_base = spread, total_base = total_line, implied_opp_base = implied_opp, proj_base = proj,
               rank_base = rank(-proj, ties.method = "first"))
   sw <- swap_qbs(b, if (can_swap && !is.null(starters)) starters %>% select(team, qb_id, qb_name) else NULL)
+  if (!is.null(av) && !is.null(b$avail)) { b_av <- b; b_av$te <- sw$te; sw$te <- swap_avail(b_av, av$status, av$override)$te }
   te_now <- apply_lines(sw$te, lines)
   now  <- score(b, te_now)
   # what drives each team's projection (vs an average team this week, Vegas excluded)
-  dr <- drivers(te_now, function(t) blend_pred(b$main, t, b$SC, b$specs, b$final_models), dst_groups(setdiff(names(b$te), c("game_id", "team", "opp", "gameday"))))
+  dr <- drivers(te_now, function(t) blend_pred(b$main, t, b$SC, b$specs, b$final_models), dst_groups(setdiff(names(b$te), c("game_id", "team", "opp", "gameday"))),
+                always = c("Defensive availability", "Opp. OL availability"))     # shown whenever they cross the threshold
   now$why <- dr$text[match(now$team, te_now$team)]
+  if (!is.null(av) && !is.null(av$note)) { nt <- av$note$note[match(now$team, av$note$team)]
+    now$why <- ifelse(!is.na(nt) & nzchar(nt), paste0(coalesce(now$why, ""), "\n", nt), now$why) }
   info <- bind_rows(lines %>% transmute(team = home, ko, line_time, n_books, locked, src), lines %>% transmute(team = away, ko, line_time, n_books, locked, src))
   parts$pred <- parts$pred %>% select(-any_of(c(dyn_cols, names(base)[-1], names(info)[-1], "rank"))) %>%
     left_join(now, by = "team") %>% left_join(base, by = "team") %>% left_join(info, by = "team") %>%
@@ -240,7 +286,8 @@ for (s in names(bundles)) {
     parts$pred$ecr_rank <- ecr_def$rank[i]; parts$pred$ecr_avg <- ecr_def$ecr_avg[i]; parts$pred$ecr_sd <- ecr_def$ecr_sd[i] }
   parts$refresh <- list(time = NOW, n_priced = sum(lines$src == "sportsbooks"), n_locked = sum(lines$locked),
                         books = if (any(!is.na(lines$n_books))) median(lines$n_books, na.rm = TRUE) else NA, model_fit = b$created,
-                        qb_sources = if (!is.null(starters)) attr(starters, "sources") else NULL, qb_rescore = can_swap)
+                        qb_sources = if (!is.null(starters)) attr(starters, "sources") else NULL, qb_rescore = can_swap,
+                        avail_sources = if (!is.null(av)) av$sources else NULL)
   dir.create(file.path(WORK_DIR, "output/dst", s), recursive = TRUE, showWarnings = FALSE)
   out_parts[[s]] <- list(parts = parts, file = file.path(WORK_DIR, "output/dst", s, basename(pf)), fit = b$created)
   message(sprintf("%s: re-scored · biggest move %s", b$SC$label,

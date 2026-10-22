@@ -142,3 +142,158 @@ dst_sim_probs <- function(S, te, proj, SC) {
   out <- sim_probs(dst_sim_draws(S, te, SC), proj, S$cuts, step = 1, seed = S$seed, offset = as.list(DST_SIM_OFFSET[[SC$label]]))
   out[setdiff(names(out), DST_SIM_KERNEL[[SC$label]])]
 }
+
+## ---- Player availability (Andrew 2026-10-22; 40_dst_model.R 9e) ----
+# b$avail: cols (feature names), raw (this week's values before centring: game_id, team, cols), shares (game_id, team = the
+# player's team, fam = rush / front / db / cov / ol, player = gsis id, name, position, share, out, gone), locked (games already
+# played at the weekly run), center. status = tibble(team, player, out, gone) for the players in shares (NULL = keep the weekly
+# values). Rebuilds raw from the shares: d_<fam>_out / _gone = sum of the shares of this team's players who are out / gone;
+# o_ol_out / _gone = the same for the opponent's linemen. Locked games and teams in `keep` keep their values. Then re-centres
+# the week (value − mean over this week's rows) as build_frame() does.
+AVAIL_FAM_COL <- c(rush = "d_rush", front = "d_front", db = "d_db", cov = "d_cov", tfl = "d_tfl", ol = "o_ol")
+avail_raw_from <- function(A, st) {                      # st: shares with logical out / gone → raw per (game_id, team = the D/ST)
+  s <- A$shares
+  if (!is.null(st)) s <- dplyr::left_join(dplyr::select(s, -dplyr::any_of(c("out", "gone"))), st, by = c("team", "player")) %>%
+    dplyr::mutate(out = dplyr::coalesce(out, FALSE), gone = dplyr::coalesce(gone, FALSE) & !out)
+  agg <- s %>% dplyr::group_by(game_id, team, fam) %>% dplyr::summarise(out = sum(share[out]), gone = sum(share[gone]), .groups = "drop")
+  r <- dplyr::select(A$raw, game_id, team)
+  rows <- A$raw %>% dplyr::select(game_id, team)
+  opp <- rows %>% dplyr::group_by(game_id) %>% dplyr::mutate(opp = rev(team)) %>% dplyr::ungroup()
+  for (f in names(AVAIL_FAM_COL)) {
+    if (!any(paste0(AVAIL_FAM_COL[[f]], c("_out", "_gone")) %in% A$cols)) next   # families this bundle doesn't use
+    a <- agg[agg$fam == f, ]
+    key_team <- if (f == "ol") opp$opp else opp$team            # o_ol_* = the opponent's linemen
+    i <- match(paste(opp$game_id, key_team), paste(a$game_id, a$team))
+    r[[paste0(AVAIL_FAM_COL[[f]], "_out")]]  <- dplyr::coalesce(a$out[i], 0)
+    r[[paste0(AVAIL_FAM_COL[[f]], "_gone")]] <- dplyr::coalesce(a$gone[i], 0)
+  }
+  r
+}
+avail_weekly_status <- function(b) if (is.null(b$avail$shares)) NULL else dplyr::distinct(b$avail$shares, team, player, out, gone)
+# override = tibble(team, <cols>): values to use for those teams instead (e.g. games that have kicked off keep their last
+# pre-kickoff availability).
+swap_avail <- function(b, status, override = NULL) {
+  A <- b$avail; te <- b$te
+  if (is.null(A)) return(list(te = te, raw = NULL, changed = character()))
+  raw <- A$raw
+  if (!is.null(status) && !is.null(A$shares)) {
+    new <- avail_raw_from(A, status)
+    lock <- raw$game_id %in% A$locked
+    for (v in A$cols) raw[[v]] <- ifelse(lock, raw[[v]], new[[v]][match(paste(raw$game_id, raw$team), paste(new$game_id, new$team))])
+  }
+  if (!is.null(override) && nrow(override)) {
+    k <- match(raw$team, override$team); ok <- !is.na(k) & !(raw$game_id %in% A$locked)
+    for (v in intersect(A$cols, names(override))) raw[[v]][ok] <- override[[v]][k[ok]]
+  }
+  i <- match(paste(te$game_id, te$team), paste(raw$game_id, raw$team))
+  for (v in intersect(A$cols, names(te))) { x <- raw[[v]][i]; te[[v]] <- if (isTRUE(A$center)) x - mean(x, na.rm = TRUE) else x }
+  ch <- if (is.null(status)) character() else raw$team[rowSums(abs(as.matrix(raw[A$cols]) - as.matrix(A$raw[A$cols]))) > 1e-9]
+  list(te = te, raw = raw, changed = ch)
+}
+
+# Live statuses for every player in b$avail$shares. Needs starters.R (st_get, st_canon, st_norm, st_team, st_title) and
+# S = starter_sources() (its injury report is QB / K only, so the report is re-read here for all positions). Sources:
+#   official report (nflverse injuries, this week): game status Out / Doubtful once it exists
+#   Sleeper (all players, one call): team, roster status (IR, PUP, NFI, suspended, practice squad, inactive) and injury status
+#   Ourlads depth charts (all positions, 32 pages): O / D / IR / PUP / SUS / NFI flags
+# out  = IR / PUP / NFI / suspended in any source, or the report's Out / Doubtful, or (no report game status yet) Sleeper or
+#        Ourlads Out / Doubtful - the same rule as player_status() for QBs and kickers
+# gone = not out, and Sleeper has him on another team, no team, or the practice squad / inactive list
+# A source that fails is skipped; if Sleeper fails, gone keeps the weekly value.
+avail_sleeper_all <- function() {
+  txt <- st_get("https://api.sleeper.app/v1/players/nfl", 90); if (is.null(txt)) stop("no response from Sleeper")
+  js <- jsonlite::fromJSON(txt, simplifyVector = FALSE)
+  g <- function(p, f) { v <- p[[f]]; if (is.null(v) || !length(v)) NA_character_ else as.character(v[[1]]) }
+  tibble::tibble(team = st_team(vapply(js, g, "", "team")), name = dplyr::coalesce(vapply(js, g, "", "full_name"), paste(vapply(js, g, "", "first_name"), vapply(js, g, "", "last_name"))),
+                 gsis_id = trimws(vapply(js, g, "", "gsis_id")), roster = vapply(js, g, "", "status"), injury = vapply(js, g, "", "injury_status")) %>%
+    dplyr::mutate(gsis_id = ifelse(grepl("^00-", gsis_id), gsis_id, NA_character_))
+}
+avail_ourlads_all <- function(teams, pause = 0.5) {
+  ent <- function(x) gsub("&#39;|&#039;|&apos;", "'", gsub("&amp;", "&", gsub("&nbsp;|&#160;", " ", x)))
+  strip <- function(x) trimws(gsub("\\s+", " ", ent(gsub("<[^>]+>", " ", x))))
+  out <- list()
+  for (tm in teams) {
+    code <- if (exists("OL_CODE") && tm %in% names(OL_CODE)) OL_CODE[[tm]] else tm
+    html <- st_get(paste0("https://www.ourlads.com/nfldepthcharts/depthchart/", code), 30); Sys.sleep(pause)
+    if (is.null(html)) next
+    rows <- regmatches(html, gregexpr("(?is)<tr[^>]*>.*?</tr>", html, perl = TRUE))[[1]]
+    for (r in rows) {
+      cells <- regmatches(r, gregexpr("(?is)<td[^>]*>.*?</td>", r, perl = TRUE))[[1]]
+      if (length(cells) < 3) next
+      pos <- toupper(strip(cells[1])); if (!grepl("^[A-Z]{1,5}$", pos)) next
+      cells <- cells[-1]; txt <- strip(cells)
+      keep <- nzchar(txt) & !grepl("^[0-9]+$", txt) & grepl("[A-Za-z]", txt); cells <- cells[keep]; txt <- txt[keep]; if (!length(txt)) next
+      has_a <- grepl("(?i)<a[^>]*>", cells, perl = TRUE)
+      nm <- ifelse(has_a, strip(sub("(?is)^.*?<a[^>]*>(.*?)</a>.*$", "\\1", cells, perl = TRUE)), sub("\\s+\\S*[0-9/]\\S*.*$", "", txt))
+      rest <- ifelse(has_a, strip(sub("(?is)^.*?</a>", "", cells, perl = TRUE)), sub("^.*?\\s+(\\S*[0-9/]\\S*.*)$", "\\1", txt))
+      last <- toupper(sub("^.*\\s", "", paste("", rest)))
+      flag <- ifelse(last %in% c("O", "D", "Q", "IR", "PUP", "SUS", "NFI"), last, NA_character_)
+      out[[length(out) + 1]] <- tibble::tibble(team = tm, pos = pos, name = st_title(nm), flag = flag)
+    }
+  }
+  if (!length(out)) stop("no Ourlads pages parsed")
+  dplyr::bind_rows(out)
+}
+avail_report_all <- function(season, week) {
+  d <- tibble::as_tibble(nv_rds("injuries", sprintf("injuries_%d.rds", season)))
+  d <- d[d$week == week & d$game_type %in% "REG", ]
+  tibble::tibble(team = st_team(d$team), name = d$full_name, gsis_id = d$gsis_id, status = st_canon(d$report_status))
+}
+avail_canon <- function(x) {                             # st_canon() plus Sleeper's long roster-status wording
+  u <- toupper(trimws(as.character(x)))
+  dplyr::coalesce(st_canon(x), dplyr::case_when(grepl("INJURED RESERVE|^RESERVE", u) ~ "IR", grepl("PHYSICALLY|PUP", u) ~ "PUP",
+                                                grepl("NON.?FOOTBALL", u) ~ "NFI", grepl("SUSPEN", u) ~ "Suspended", TRUE ~ NA_character_))
+}
+avail_live_status <- function(b, season, week, teams = unique(b$te$team), sources = c("report", "sleeper", "ourlads")) {
+  sh <- b$avail$shares; if (is.null(sh)) return(NULL)
+  pl <- dplyr::distinct(sh, team, player, name, out0 = out, gone0 = gone)
+  get <- function(nm, f) tryCatch(f(), error = function(e) { message("availability: ", nm, " unavailable - ", conditionMessage(e)); NULL })
+  rep <- if ("report" %in% sources) get("report", function() avail_report_all(season, week)) else NULL
+  sl  <- if ("sleeper" %in% sources) get("Sleeper", avail_sleeper_all) else NULL
+  ol  <- if ("ourlads" %in% sources) get("Ourlads", function() avail_ourlads_all(teams)) else NULL
+  key <- st_norm(pl$name)
+  by_id_or_name <- function(tab, same_team = TRUE) {     # row index in tab per player: gsis id, else team + name (last name if unique)
+    if (is.null(tab) || !nrow(tab)) return(rep(NA_integer_, nrow(pl)))
+    i <- if ("gsis_id" %in% names(tab)) match(pl$player, tab$gsis_id) else rep(NA_integer_, nrow(pl))
+    tk <- paste(tab$team, st_norm(tab$name)); j <- match(paste(pl$team, key), tk)
+    i[is.na(i)] <- j[is.na(i)]; i
+  }
+  ir <- by_id_or_name(rep); is <- by_id_or_name(sl); io <- by_id_or_name(ol)
+  if (is.null(rep) && is.null(sl) && is.null(ol)) { message("availability: no live source - weekly values kept"); return(NULL) }
+  r_st <- if (!is.null(rep)) rep$status[ir] else rep(NA_character_, nrow(pl))
+  s_inj <- if (!is.null(sl)) avail_canon(sl$injury[is]) else rep(NA_character_, nrow(pl))
+  s_ros <- if (!is.null(sl)) sl$roster[is] else rep(NA_character_, nrow(pl))
+  s_hard <- if (!is.null(sl)) avail_canon(s_ros) else rep(NA_character_, nrow(pl))
+  o_st <- if (!is.null(ol)) avail_canon(ol$flag[io]) else rep(NA_character_, nrow(pl))
+  hard <- s_inj %in% ST_HARD | s_hard %in% ST_HARD | o_st %in% ST_HARD
+  out <- hard | r_st %in% c("Out", "Doubtful") | (is.na(r_st) & (s_inj %in% c("Out", "Doubtful") | o_st %in% c("Out", "Doubtful")))
+  if (is.null(sl)) out <- out | dplyr::coalesce(pl$out0, FALSE)     # without Sleeper, IR / PUP lists are unknown: keep the weekly outs
+  gone <- if (!is.null(sl)) !out & !is.na(is) & (is.na(sl$team[is]) | sl$team[is] != pl$team | toupper(dplyr::coalesce(s_ros, "")) %in% c("INACTIVE", "PRACTICE SQUAD")) else
+    dplyr::coalesce(pl$gone0, FALSE) & !out
+  src <- paste(c(if (!is.null(rep)) "report", if (!is.null(sl)) "Sleeper", if (!is.null(ol)) "Ourlads"), collapse = ", ")
+  pick <- function(x, ok) ifelse(ok, x, NA_character_)
+  why <- ifelse(out, dplyr::coalesce(pick(s_hard, s_hard %in% ST_HARD), pick(s_inj, s_inj %in% ST_HARD), pick(o_st, o_st %in% ST_HARD),
+                                     pick(r_st, r_st %in% c("Out", "Doubtful")), pick(s_inj, s_inj %in% c("Out", "Doubtful")), o_st, ""),
+                ifelse(gone, "not with the team", ""))
+  out_tbl <- tibble::tibble(team = pl$team, player = pl$player, name = pl$name, out = out, gone = gone & !out, why = why)
+  attr(out_tbl, "sources") <- src
+  out_tbl
+}
+# "Missing" note per D/ST for the page (biggest shares first): its defenders out / gone and the opponent's linemen
+avail_note <- function(b, status, min_share = 0.25, min_rush = 0.08) {
+  sh <- b$avail$shares; if (is.null(sh) || is.null(status)) return(NULL)
+  s <- dplyr::left_join(dplyr::select(sh, -dplyr::any_of(c("out", "gone"))), dplyr::select(status, team, player, out, gone, why), by = c("team", "player")) %>%
+    dplyr::filter(out | gone) %>%
+    dplyr::filter((fam %in% c("front", "db", "ol") & share >= min_share) | (fam %in% c("rush", "cov", "tfl") & share >= min_rush)) %>%
+    dplyr::filter(is.na(position) | (fam == "ol") == (position %in% c("T", "G", "C", "OL", "OT", "OG")),          # defenders in the defense line,
+                  is.na(position) | fam == "ol" | !position %in% c("QB", "RB", "FB", "WR", "TE", "K", "P", "LS")) %>%   # linemen in the OL line
+    dplyr::group_by(game_id, team, player, name, position, why) %>% dplyr::summarise(share = max(share), ol = any(fam == "ol"), .groups = "drop") %>%
+    dplyr::arrange(dplyr::desc(share))
+  rows <- dplyr::distinct(b$te, game_id, team) %>% dplyr::group_by(game_id) %>% dplyr::mutate(opp = rev(team)) %>% dplyr::ungroup()
+  lab <- function(x) if (!nrow(x)) "" else paste(sprintf("%s (%s%s)", x$name, x$position, ifelse(nzchar(x$why), paste0(", ", x$why), "")), collapse = "; ")
+  tibble::tibble(team = rows$team,
+                 note = vapply(seq_len(nrow(rows)), function(k) {
+                   d <- lab(s[s$game_id == rows$game_id[k] & s$team == rows$team[k] & !s$ol, ])
+                   o <- lab(s[s$game_id == rows$game_id[k] & s$team == rows$opp[k] & s$ol, ])
+                   paste(c(if (nzchar(d)) paste("Defense missing:", d), if (nzchar(o)) paste0(rows$opp[k], " OL missing: ", o)), collapse = "\n") }, ""))
+}

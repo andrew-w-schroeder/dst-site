@@ -183,14 +183,17 @@ sparkline <- function(pts, w = NULL, h = 24, min_span = 1) {
 ## ---- Drivers: occlusion attribution ----
 # For each feature group: projection minus the projection with that group set to this week's league average
 # (all 32 teams). Positive = the group raises this team's projection. Exact for any model; Vegas groups are excluded.
-drivers <- function(te, pred_fun, groups, top = 4, min_abs = 0.05) {
+# always = groups shown whenever they move the projection by min_abs or more, even outside the top `top` (Andrew 2026-10-22:
+# player availability always appears once it crosses the threshold)
+drivers <- function(te, pred_fun, groups, top = 4, min_abs = 0.05, always = character()) {
   full <- pred_fun(te)
   M <- sapply(names(groups), function(g) {
     v <- intersect(groups[[g]], names(te)); if (!length(v)) return(rep(0, nrow(te)))
     t2 <- te; for (cc in v) t2[[cc]] <- mean(te[[cc]], na.rm = TRUE); full - pred_fun(t2) })
   M <- matrix(M, nrow = nrow(te), dimnames = list(NULL, names(groups)))
   txt <- apply(M, 1, function(r) { r <- r[abs(r) >= min_abs]; if (!length(r)) return("No feature group moves this projection by 0.05+ from an average team.")
-    r <- r[order(-abs(r))][seq_len(min(top, length(r)))]; paste(sprintf("%+.2f  %s", r, names(r)), collapse = "\n") })
+    keep <- names(r)[order(-abs(r))][seq_len(min(top, length(r)))]; keep <- union(keep, intersect(always, names(r)))
+    r <- r[keep]; r <- r[order(-abs(r))]; paste(sprintf("%+.2f  %s", r, names(r)), collapse = "\n") })
   list(text = txt, matrix = M)
 }
 # D/ST feature groups: model family × side (mirrors family_of() in 40_dst_model.R)
@@ -218,8 +221,10 @@ dst_groups <- function(vars) {
     b %in% c("ngs_ttt", "ngs_sep", "ngs_yacoe", "ngs_pa") ~ "passing (NGS)",
     b %in% c("ngs_ryoe", "ngs_ybco", "ngs_stuff", "ngs_light", "ngs_stacked") ~ "run game (NGS)",
     startsWith(b, "ftn_") ~ "charting (FTN)",
+    b %in% c("rush_out", "front_out", "db_out", "cov_out", "tfl_out", "rush_gone", "front_gone", "db_gone", "cov_gone", "tfl_gone") ~ "Defensive availability",   # Andrew 2026-10-22
+    b %in% c("ol_out", "ol_gone") ~ "Opp. OL availability",
     TRUE ~ "other")
-  side <- ifelse(grepl("^d_", vars) & !fam %in% c("vegas") & !grepl("^(Venue|Opp\\.|Pass-rush|Turnover)", fam), "This D: ",
+  side <- ifelse(grepl("^d_", vars) & !fam %in% c("vegas") & !grepl("^(Venue|Opp\\.|Pass-rush|Turnover|Defensive avail)", fam), "This D: ",
                  ifelse(grepl("^o_", vars) & !grepl("^(Venue|Opp\\.|Pass-rush|Turnover)", fam), "Opp. offense: ",
                         ifelse(grepl("^t_", vars), "Own offense: ", "")))
   lab <- paste0(side, fam)
@@ -393,6 +398,7 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
   if (!identical(TR$version, 2L)) return(NULL)
   mm <- TR$metrics[TR$metrics$pos == pos, ]; if (!nrow(mm)) return(NULL)
   has18 <- all(c("ndcg_lin18", "ndcg_s12") %in% names(mm)) && any(!is.na(mm$ndcg_lin18))   # NDCG@18 (Andrew 2026-10-06; 62 from then on)
+  hasss <- all(c("start12", "sit12") %in% names(mm)) && any(!is.na(mm$start12))              # start / sit accuracy (Andrew 2026-10-22)
   units <- if (pos == "DEF") "D/STs" else "kickers"
   wlab <- function(w) if (length(w) > 1) sprintf("weeks %d–%d", min(w), max(w)) else sprintf("week %d", w)
   bf <- sort(unique(mm$week[mm$kind == "backfilled"]))
@@ -405,7 +411,9 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
                   "<b>Top-weighted score</b>: like rank correlation but mistakes near the top of the list cost the most (NDCG: 1 = perfect order). ",
                   if (has18) "<b>NDCG@18, linear</b> and <b>NDCG@18, S-curve</b>: the same score over the top 18 only (about how many are rostered in 12-team leagues; ranks 19+ count for nothing), with gentler weights: linear = rank 1 counts 1, each rank lower 1/22 less (rank 2 0.95, rank 12 0.50, rank 18 0.23); S-curve = nearly flat through the top 6, half weight at rank 12 (the start line), 0.12 at rank 18. On these, a random order scores about 0.69, and a ranking with rank correlation about 0.3 (typical for these positions) about 0.78. " else "",
                   "<b>RMSE</b>: typical projection error in points (lower = better). ",
-                  "<b>Top-12 average</b>: actual points of each source's weekly top 12. <b>Start/sit calls</b>: every pair of ", units, " two sources ranked in opposite order is one call; points gained per call by following ours.</p>")
+                  "<b>Top-12 average</b>: actual points of each source's weekly top 12. ",
+                  if (hasss) paste0("<b>Starts correct</b>: share of each source's top 12 that actually finished in the top 12; <b>sits correct</b>: share of its ", units, " ranked 13th or lower that actually finished outside the top 12 (a random order gets about 38% and 62% with 32 teams). ") else "",
+                  "<b>Start/sit calls</b>: every pair of ", units, " two sources ranked in opposite order is one call; points gained per call by following ours.</p>")
   sec <- vapply(names(systems), function(sy) {
     m <- mm[mm$system == sy & mm$source %in% names(TR_SLOT), ]; if (!nrow(m)) return("")
     ser <- intersect(names(TR_SLOT), unique(m$source))
@@ -420,12 +428,16 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
       if (has18) tr_chart(tr_cum(m, "ndcg_s12"), "NDCG@18, S-curve (half weight at 12)", "higher = better", function(v) sprintf("%.3f", v)) else "",
       tr_chart(tr_cum(m, "rmse"), "RMSE (points)", "lower = better"),
       tr_chart(tr_cum(m, "top12"), "Top-12 average (points)", "higher = better"),
+      if (hasss) tr_chart(tr_cum(m, "start12"), "Starts correct (top 12 that finished top 12)", "higher = better", function(v) sprintf("%.0f%%", 100 * v)) else "",
+      if (hasss) tr_chart(tr_cum(m, "sit12"), "Sits correct (13+ that finished outside the top 12)", "higher = better", function(v) sprintf("%.0f%%", 100 * v)) else "",
       if (!is.null(ss_cum)) tr_chart(ss_cum, "Our start/sit gain vs each (pts per call)", "above 0 = ours better", function(v) sprintf("%+.2f", v)) else "")
     # season-to-date summary: one row per source
     if (!has18) { m$ndcg_lin18 <- NA_real_; m$ndcg_s12 <- NA_real_ }
+    if (!hasss) { m$start12 <- NA_real_; m$sit12 <- NA_real_ }
     sm <- m %>% dplyr::group_by(source) %>% dplyr::summarise(weeks = dplyr::n(), rho_rank = mean(rho_rank), rho_proj = mean(rho_proj), ndcg = mean(ndcg),
                                                              ndcg_lin18 = mean(ndcg_lin18), ndcg_s12 = mean(ndcg_s12),
-                                                             rmse = sqrt(sum(n * rmse^2) / sum(n)), bias = weighted.mean(bias, n), top12 = mean(top12), .groups = "drop")
+                                                             rmse = sqrt(sum(n * rmse^2) / sum(n)), bias = weighted.mean(bias, n), top12 = mean(top12),
+                                                             start12 = mean(start12), sit12 = mean(sit12), .groups = "drop")
     sm <- sm[order(match(sm$source, names(TR_SLOT))), ]
     # (right / gain before calls: inside summarise() a later `calls = sum(calls)` would overwrite the per-week column)
     sp <- if (nrow(ss)) ss %>% dplyr::group_by(vs) %>% dplyr::summarise(right = sum(calls * right, na.rm = TRUE) / sum(calls[!is.na(right)]),
@@ -441,6 +453,8 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
       list(h = "RMSE", v = .f(sm$rmse), cls = best(sm$rmse, FALSE)),
       list(h = "Bias", v = .sg(sm$bias), tip = "average projection minus average actual (+ = projects too high)"),
       list(h = "Top-12 avg", v = .f(sm$top12), cls = best(sm$top12)),
+      if (hasss) list(h = "Starts correct", v = .pc(sm$start12), cls = best(sm$start12), tip = "share of the source's weekly top 12 that finished in the actual top 12"),
+      if (hasss) list(h = "Sits correct", v = .pc(sm$sit12), cls = best(sm$sit12), tip = "share of the source's 13th-and-lower that finished outside the actual top 12"),
       list(h = "Calls vs ours", v = ifelse(is.na(j), "", format(sp$calls[j], big.mark = ",")), tip = "start/sit calls: pairs this source and ours ranked in opposite order"),
       list(h = "Ours right", v = ifelse(is.na(j), "", .pc(sp$right[j])), tip = "share of those calls where our pick scored more"),
       list(h = "Pts/call", v = ifelse(is.na(j), "", .sg(sp$gain[j])), cls = ifelse(is.na(j), "", .cls(sp$gain[j])), tip = "points gained per call by following ours")), left = 1)
@@ -450,7 +464,8 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
                           list(h = "NDCG", v = .f(weekly$ndcg, 3)),
                           if (has18) list(h = "NDCG@18 lin.", v = .f(weekly$ndcg_lin18, 3)), if (has18) list(h = "NDCG@18 S", v = .f(weekly$ndcg_s12, 3)),
                           list(h = "RMSE", v = .f(weekly$rmse)), list(h = "Bias", v = .sg(weekly$bias)),
-                          list(h = "Top-12 avg", v = .f(weekly$top12))), left = 3)
+                          list(h = "Top-12 avg", v = .f(weekly$top12)),
+                          if (hasss) list(h = "Starts correct", v = .pc(weekly$start12)), if (hasss) list(h = "Sits correct", v = .pc(weekly$sit12))), left = 3)
     cal <- TR$calibration[TR$calibration$pos == pos & TR$calibration$system == sy, ]
     cal_txt <- if (nrow(cal)) sprintf("<p class='s'>Our calibration, %s: %s of actual scores landed inside our 80%% range (should be about 80%%); P(boom) averaged %s vs %s that boomed; P(bust) %s vs %s that busted.</p>",
                                       wlab(sort(cal$week)), .pc(weighted.mean(cal$cov80, cal$n)), .pc(weighted.mean(cal$p_boom, cal$n)), .pc(weighted.mean(cal$boom, cal$n)),
