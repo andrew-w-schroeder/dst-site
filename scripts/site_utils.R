@@ -413,13 +413,16 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
                   "<b>RMSE</b>: typical projection error in points (lower = better). ",
                   "<b>Top-12 average</b>: actual points of each source's weekly top 12. ",
                   if (hasss) paste0("<b>Starts correct</b>: share of each source's top 12 that actually finished in the top 12; <b>sits correct</b>: share of its ", units, " ranked 13th or lower that actually finished outside the top 12 (a random order gets about 38% and 62% with 32 teams). ") else "",
-                  "<b>Start/sit calls</b>: every pair of ", units, " two sources ranked in opposite order is one call; points gained per call by following ours.</p>")
+                  "<b>Start/sit calls, top 20</b>: the same, counting only pairs that either source ranks in its top 20 (the teams you'd actually choose between). <b>Start/sit calls</b>: every pair of ", units, " two sources ranked in opposite order is one call; points gained per call by following ours.</p>")
   sec <- vapply(names(systems), function(sy) {
     m <- mm[mm$system == sy & mm$source %in% names(TR_SLOT), ]; if (!nrow(m)) return("")
     ser <- intersect(names(TR_SLOT), unique(m$source))
     ss <- TR$startsit[TR$startsit$pos == pos & TR$startsit$system == sy, ]
     ss_cum <- if (nrow(ss)) dplyr::bind_rows(lapply(split(ss[order(ss$vs, ss$week), ], ss$vs[order(ss$vs, ss$week)]), function(g)
       tibble::tibble(week = g$week, series = g$vs, value = cumsum(g$calls * dplyr::coalesce(g$gain, 0)) / pmax(cumsum(g$calls), 1)))) else NULL
+    has20 <- nrow(ss) && all(c("calls20", "gain20", "right20") %in% names(ss)) && any(ss$calls20 > 0, na.rm = TRUE)   # top-20 calls (Andrew 2026-10-22)
+    ss20_cum <- if (has20) dplyr::bind_rows(lapply(split(ss[order(ss$vs, ss$week), ], ss$vs[order(ss$vs, ss$week)]), function(g)
+      tibble::tibble(week = g$week, series = g$vs, value = cumsum(dplyr::coalesce(g$calls20, 0) * dplyr::coalesce(g$gain20, 0)) / pmax(cumsum(dplyr::coalesce(g$calls20, 0)), 1)))) else NULL
     charts <- paste0(
       tr_chart(tr_cum(m, "rho_rank"), "Rank correlation", "higher = better"),
       tr_chart(tr_cum(m, "rho_proj"), "Projection correlation", "higher = better"),
@@ -430,7 +433,8 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
       tr_chart(tr_cum(m, "top12"), "Top-12 average (points)", "higher = better"),
       if (hasss) tr_chart(tr_cum(m, "start12"), "Starts correct (top 12 that finished top 12)", "higher = better", function(v) sprintf("%.0f%%", 100 * v)) else "",
       if (hasss) tr_chart(tr_cum(m, "sit12"), "Sits correct (13+ that finished outside the top 12)", "higher = better", function(v) sprintf("%.0f%%", 100 * v)) else "",
-      if (!is.null(ss_cum)) tr_chart(ss_cum, "Our start/sit gain vs each (pts per call)", "above 0 = ours better", function(v) sprintf("%+.2f", v)) else "")
+      if (!is.null(ss20_cum)) tr_chart(ss20_cum, "Our start/sit gain vs each, top 20 (pts per call)", "above 0 = ours better; pairs either ranks top 20", function(v) sprintf("%+.2f", v)) else "",
+      if (!is.null(ss_cum)) tr_chart(ss_cum, "Our start/sit gain vs each, all teams (pts per call)", "above 0 = ours better", function(v) sprintf("%+.2f", v)) else "")
     # season-to-date summary: one row per source
     if (!has18) { m$ndcg_lin18 <- NA_real_; m$ndcg_s12 <- NA_real_ }
     if (!hasss) { m$start12 <- NA_real_; m$sit12 <- NA_real_ }
@@ -441,7 +445,11 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
     sm <- sm[order(match(sm$source, names(TR_SLOT))), ]
     # (right / gain before calls: inside summarise() a later `calls = sum(calls)` would overwrite the per-week column)
     sp <- if (nrow(ss)) ss %>% dplyr::group_by(vs) %>% dplyr::summarise(right = sum(calls * right, na.rm = TRUE) / sum(calls[!is.na(right)]),
-                                                                          gain = sum(calls * gain, na.rm = TRUE) / sum(calls[!is.na(gain)]), calls = sum(calls), .groups = "drop") else NULL
+                                                                          gain = sum(calls * gain, na.rm = TRUE) / sum(calls[!is.na(gain)]),
+                                                                          right20 = if (has20) sum(calls20 * right20, na.rm = TRUE) / sum(calls20[!is.na(right20)]) else NA_real_,
+                                                                          gain20 = if (has20) sum(calls20 * gain20, na.rm = TRUE) / sum(calls20[!is.na(gain20)]) else NA_real_,
+                                                                          calls20 = if (has20) sum(calls20, na.rm = TRUE) else NA_real_,
+                                                                          calls = sum(calls), .groups = "drop") else NULL
     j <- if (!is.null(sp)) match(sm$source, sp$vs) else rep(NA_integer_, nrow(sm))
     best <- function(x, hi = TRUE) ifelse(!is.na(x) & x == (if (hi) max(x, na.rm = TRUE) else min(x, na.rm = TRUE)), "best", "")
     tbl <- tr_table(list(
@@ -455,6 +463,9 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
       list(h = "Top-12 avg", v = .f(sm$top12), cls = best(sm$top12)),
       if (hasss) list(h = "Starts correct", v = .pc(sm$start12), cls = best(sm$start12), tip = "share of the source's weekly top 12 that finished in the actual top 12"),
       if (hasss) list(h = "Sits correct", v = .pc(sm$sit12), cls = best(sm$sit12), tip = "share of the source's 13th-and-lower that finished outside the actual top 12"),
+      if (has20) list(h = "Calls, top 20", v = ifelse(is.na(j), "", format(sp$calls20[j], big.mark = ",")), tip = "start/sit calls among teams either ranking has in its top 20 (the ones you'd actually choose between)"),
+      if (has20) list(h = "Ours right, top 20", v = ifelse(is.na(j), "", .pc(sp$right20[j])), tip = "share of those calls where our pick scored more"),
+      if (has20) list(h = "Pts/call, top 20", v = ifelse(is.na(j), "", .sg(sp$gain20[j])), cls = ifelse(is.na(j), "", .cls(sp$gain20[j])), tip = "points gained per top-20 call by following ours"),
       list(h = "Calls vs ours", v = ifelse(is.na(j), "", format(sp$calls[j], big.mark = ",")), tip = "start/sit calls: pairs this source and ours ranked in opposite order"),
       list(h = "Ours right", v = ifelse(is.na(j), "", .pc(sp$right[j])), tip = "share of those calls where our pick scored more"),
       list(h = "Pts/call", v = ifelse(is.na(j), "", .sg(sp$gain[j])), cls = ifelse(is.na(j), "", .cls(sp$gain[j])), tip = "points gained per call by following ours")), left = 1)

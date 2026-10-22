@@ -297,3 +297,31 @@ avail_note <- function(b, status, min_share = 0.25, min_rush = 0.08) {
                    o <- lab(s[s$game_id == rows$game_id[k] & s$team == rows$opp[k] & s$ol, ])
                    paste(c(if (nzchar(d)) paste("Defense missing:", d), if (nzchar(o)) paste0(rows$opp[k], " OL missing: ", o)), collapse = "\n") }, ""))
 }
+
+## ---- Start/sit calls in the rosterable range (Andrew 2026-10-22) ----
+# Every pair of teams inside the range a manager would consider (either source ranks both in its top `band`) that the two
+# sources order differently is one start/sit call; gain = actual points of our pick minus theirs. Used as a check on model
+# changes (39, 39b, 42) and on the Track record tab (62). a = ours, b = the other source, y = actual points.
+start_sit_band <- function(a, b, y, band = 20) {
+  ok <- !is.na(a) & !is.na(b) & !is.na(y); a <- a[ok]; b <- b[ok]; y <- y[ok]
+  ra <- rank(-a, ties.method = "first"); rb <- rank(-b, ties.method = "first"); k <- which(ra <= band | rb <= band)
+  if (length(k) < 2) return(tibble::tibble(calls = 0L, right = NA_real_, gain = NA_real_))
+  ij <- utils::combn(k, 2); i <- ij[1, ]; j <- ij[2, ]
+  dis <- sign(a[i] - a[j]) * sign(b[i] - b[j]) < 0
+  if (!any(dis)) return(tibble::tibble(calls = 0L, right = NA_real_, gain = NA_real_))
+  i <- i[dis]; j <- j[dis]; ours <- ifelse(a[i] > a[j], i, j); theirs <- ifelse(a[i] > a[j], j, i); g <- y[ours] - y[theirs]
+  tibble::tibble(calls = length(g), right = mean(g > 0) + 0.5 * mean(g == 0), gain = mean(g))
+}
+# per week: start/sit calls of column `col` vs column `ref` (default the Vegas-only baseline) in a back-test prediction table
+band_by_week <- function(p, col, ref = "vegas_lm", band = 20)
+  dplyr::bind_rows(lapply(split(p, paste(p$season, p$week)), function(d)
+    dplyr::bind_cols(tibble::tibble(season = d$season[1], week = d$week[1]), start_sit_band(d[[col]], d[[ref]], d$fp, band)))) %>%
+  dplyr::arrange(season, week)
+# summary + paired weekly t of `col` in p vs `col0` in p0 (same weeks): points per call vs Vegas
+band_compare <- function(p, col, p0 = NULL, col0 = col) {
+  a <- band_by_week(p, col)
+  out <- c(band_calls = mean(a$calls), band_right = stats::weighted.mean(a$right, a$calls, na.rm = TRUE), band_gain = stats::weighted.mean(a$gain, a$calls, na.rm = TRUE))
+  if (!is.null(p0)) { b <- band_by_week(p0, col0); m <- merge(a, b, by = c("season", "week")); d <- m$gain.x - m$gain.y; d <- d[!is.na(d)]
+    out <- c(out, band_gain_vs_ref = mean(d), band_t_vs_ref = if (length(d) > 2 && stats::sd(d) > 0) mean(d) / (stats::sd(d) / sqrt(length(d))) else NA_real_) }
+  out
+}
