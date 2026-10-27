@@ -8,16 +8,16 @@ name: Site refresh
 
 on:
   schedule:
-    - cron: "0 14 * * 2-6"  # Tue-Sat 10:00 am EDT: daily line and props movement
-    - cron: "0 22 * * 2-3"  # Tue-Wed 6:00 pm EDT: evening look (two trend points a day)
-    - cron: "0 22 * * 5-6"  # Fri-Sat 6:00 pm EDT: evening look (two trend points a day)
-    - cron: "30 22 * * 4"   # Thu 6:30 pm EDT: before Thursday Night Football
-    - cron: "0 12 * * 0"    # Sun 8:00 am EDT: before London games
-    - cron: "45 15 * * 0"   # Sun 11:45 am EDT: after inactives for the 1 pm games
-    - cron: "35 16 * * 0"   # Sun 12:35 pm EDT: last look before 1 pm kickoffs
-    - cron: "5 19 * * 0"    # Sun 3:05 pm EDT: after inactives for the 4:05 / 4:25 games
-    - cron: "15 23 * * 0"   # Sun 7:15 pm EDT: before Sunday Night Football
-    - cron: "0 23 * * 1"    # Mon 7:00 pm EDT: before Monday Night Football
+    - cron: "0 15 * * 2-6"  # Tue-Sat 10:00 am EST: daily line and props movement
+    - cron: "0 23 * * 2-3"  # Tue-Wed 6:00 pm EST: evening look (two trend points a day)
+    - cron: "0 23 * * 5-6"  # Fri-Sat 6:00 pm EST: evening look (two trend points a day)
+    - cron: "30 23 * * 4"   # Thu 6:30 pm EST: before Thursday Night Football
+    - cron: "0 13 * * 0"    # Sun 8:00 am EST: before London games
+    - cron: "45 16 * * 0"   # Sun 11:45 am EST: after inactives for the 1 pm games
+    - cron: "35 17 * * 0"   # Sun 12:35 pm EST: last look before 1 pm kickoffs
+    - cron: "5 20 * * 0"    # Sun 3:05 pm EST: after inactives for the 4:05 / 4:25 games
+    - cron: "15 0 * * 1"    # Sun 7:15 pm EST: before Sunday Night Football
+    - cron: "0 0 * * 2"     # Mon 7:00 pm EST: before Monday Night Football
   push:                      # site_publish.R from RStudio, or a file edited on GitHub
     branches: [main]
     paths: ["output/**", "scripts/**", "data/lines/qb_override.csv", "data/dfs/DKSalaries*.csv", "data/players/props_ci_*.csv", ".github/workflows/site_refresh.yml"]
