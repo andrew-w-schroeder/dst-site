@@ -231,6 +231,10 @@ TR_F <- track_file(PROJ_DIR, SEASON)
 if (file.exists(TR_F)) { tt <- tryCatch(track_tab(readRDS(TR_F), "DEF", setNames(map_chr(parts, ~ .x$SC$label), names(parts)), unit = "D/ST"),
                                         error = function(e) { message("track record tab skipped: ", conditionMessage(e)); NULL })
   if (!is.null(tt)) tabs <- append(tabs, list(`Track record` = tt), after = length(tabs) - 1) }
+# Beta tab (41b_dst_beta.R, Andrew 2026-10-28): candidate models scored week by week, after the Track record
+BETA_F <- file.path(dirname(TR_F), sprintf("beta_%d.rds", SEASON))
+if (file.exists(BETA_F)) { bt <- tryCatch(beta_tab(readRDS(BETA_F)), error = function(e) { message("beta tab skipped: ", conditionMessage(e)); NULL })
+  if (!is.null(bt)) tabs <- append(tabs, list(Beta = bt), after = length(tabs) - 1) }
 css <- ':root{--bg:#fff;--fg:#1d1d1f;--muted:#666;--line:#ddd;--head:#f3f3f3;--top:#e3f4e8;--bot:#fbe6e6;--accent:#1f5fbf;--rng80:#c9dcf5;--rng50:#6f9ee0}
 @media (prefers-color-scheme: dark){:root{--bg:#141414;--fg:#e8e8e8;--muted:#9a9a9a;--line:#333;--head:#222;--top:#17351f;--bot:#3a1a1a;--accent:#7fb0ff;--rng80:#26395a;--rng50:#4f7fc4}}
 body{font-family:system-ui,sans-serif;max-width:1800px;margin:1.5rem auto;padding:0 16px;color:var(--fg);background:var(--bg)}

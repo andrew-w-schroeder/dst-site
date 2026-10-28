@@ -412,7 +412,7 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
                   if (has18) "<b>NDCG@18, linear</b> and <b>NDCG@18, S-curve</b>: the same score over the top 18 only (about how many are rostered in 12-team leagues; ranks 19+ count for nothing), with gentler weights: linear = rank 1 counts 1, each rank lower 1/22 less (rank 2 0.95, rank 12 0.50, rank 18 0.23); S-curve = nearly flat through the top 6, half weight at rank 12 (the start line), 0.12 at rank 18. On these, a random order scores about 0.69, and a ranking with rank correlation about 0.3 (typical for these positions) about 0.78. " else "",
                   "<b>RMSE</b>: typical projection error in points (lower = better). ",
                   "<b>Top-12 average</b>: actual points of each source's weekly top 12. ",
-                  if (hasss) paste0("<b>Starts correct</b>: share of each source's top 12 that actually finished in the top 12; <b>sits correct</b>: share of its ", units, " ranked 13th or lower that actually finished outside the top 12 (a random order gets about 38% and 62% with 32 teams). ") else "",
+                  if (hasss) paste0("<b>Starts correct</b>: share of each source's top 12 that actually finished in the top 12; <b>sits correct</b>: share of its bottom 12 that actually finished in the bottom 12 (a random order gets about 38% on each with 32 teams). ") else "",
                   "<b>Start/sit calls, top 20</b>: the same, counting only pairs that either source ranks in its top 20 (the teams you'd actually choose between). <b>Start/sit calls</b>: every pair of ", units, " two sources ranked in opposite order is one call; points gained per call by following ours.</p>")
   sec <- vapply(names(systems), function(sy) {
     m <- mm[mm$system == sy & mm$source %in% names(TR_SLOT), ]; if (!nrow(m)) return("")
@@ -432,7 +432,7 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
       tr_chart(tr_cum(m, "rmse"), "RMSE (points)", "lower = better"),
       tr_chart(tr_cum(m, "top12"), "Top-12 average (points)", "higher = better"),
       if (hasss) tr_chart(tr_cum(m, "start12"), "Starts correct (top 12 that finished top 12)", "higher = better", function(v) sprintf("%.0f%%", 100 * v)) else "",
-      if (hasss) tr_chart(tr_cum(m, "sit12"), "Sits correct (13+ that finished outside the top 12)", "higher = better", function(v) sprintf("%.0f%%", 100 * v)) else "",
+      if (hasss) tr_chart(tr_cum(m, "sit12"), "Sits correct (bottom 12 that finished bottom 12)", "higher = better", function(v) sprintf("%.0f%%", 100 * v)) else "",
       if (!is.null(ss20_cum)) tr_chart(ss20_cum, "Our start/sit gain vs each, top 20 (pts per call)", "above 0 = ours better; pairs either ranks top 20", function(v) sprintf("%+.2f", v)) else "",
       if (!is.null(ss_cum)) tr_chart(ss_cum, "Our start/sit gain vs each, all teams (pts per call)", "above 0 = ours better", function(v) sprintf("%+.2f", v)) else "")
     # season-to-date summary: one row per source
@@ -462,7 +462,7 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
       list(h = "Bias", v = .sg(sm$bias), tip = "average projection minus average actual (+ = projects too high)"),
       list(h = "Top-12 avg", v = .f(sm$top12), cls = best(sm$top12)),
       if (hasss) list(h = "Starts correct", v = .pc(sm$start12), cls = best(sm$start12), tip = "share of the source's weekly top 12 that finished in the actual top 12"),
-      if (hasss) list(h = "Sits correct", v = .pc(sm$sit12), cls = best(sm$sit12), tip = "share of the source's 13th-and-lower that finished outside the actual top 12"),
+      if (hasss) list(h = "Sits correct", v = .pc(sm$sit12), cls = best(sm$sit12), tip = "share of the source's weekly bottom 12 that finished in the actual bottom 12"),
       if (has20) list(h = "Calls, top 20", v = ifelse(is.na(j), "", format(sp$calls20[j], big.mark = ",")), tip = "start/sit calls among teams either ranking has in its top 20 (the ones you'd actually choose between)"),
       if (has20) list(h = "Ours right, top 20", v = ifelse(is.na(j), "", .pc(sp$right20[j])), tip = "share of those calls where our pick scored more"),
       if (has20) list(h = "Pts/call, top 20", v = ifelse(is.na(j), "", .sg(sp$gain20[j])), cls = ifelse(is.na(j), "", .cls(sp$gain20[j])), tip = "points gained per top-20 call by following ours"),
@@ -505,6 +505,100 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
   }
   paste0(intro, paste(sec, collapse = ""), dis)
 }
+## ---- Beta tab (41b_dst_beta.R, Andrew 2026-10-28): shadow models scored week by week next to the live model ----
+# B = output/track/beta_<season>.rds. Season-to-date report card per format: the 13 metrics + main score + season points;
+# a Beta cell is green / red when the whole 90% luck range of its difference from Live is better / worse.
+BETA_LAB <- c(M0 = "Live", `Vegas-only` = "Vegas-only", M1 = "M1", M1p = "M1p", M2 = "M2", M3 = "M3", M4 = "M4", M4n = "M4n")
+BETA_COLS <- list(   # metric, header, digits ("pct" = percent), higher is better, tip
+  list("rank_cor", "Rank corr.", 3, TRUE, "Spearman rank correlation with the actual finish, all teams"),
+  list("proj_cor", "Projection corr.", 3, TRUE, "Pearson correlation of projected and actual points (magnitude counts)"),
+  list("ndcg", "NDCG", 3, TRUE, "top-weighted ranking score, all teams (1 = perfect)"),
+  list("ndcg_lin18", "NDCG@18 lin.", 3, TRUE, "top 18 only; weight 1 at rank 1, falling 1/22 per rank"),
+  list("ndcg_s12", "NDCG@18 S", 3, TRUE, "top 18 only; nearly flat through rank 6, half weight at rank 12"),
+  list("rmse", "RMSE", 2, FALSE, "typical projection error in points (lower = better)"),
+  list("top12", "Top-12 avg", 2, TRUE, "actual points of each model's weekly top 12"),
+  list("start12", "Starts correct", "pct", TRUE, "share of its top 12 that finished in the actual top 12 (random: about 38%)"),
+  list("sit12", "Sits correct", "pct", TRUE, "share of its bottom 12 that finished in the actual bottom 12 (random: about 38%)"),
+  list("b20_gain", "Calls vs Vegas, top 20", 2, TRUE, "points gained per start/sit call vs Vegas-only, pairs either ranks in its top 20"),
+  list("calls_gain", "Calls vs Vegas, all", 2, TRUE, "points gained per start/sit call vs Vegas-only, every pair"),
+  list("rank_cor_top18", "Rank corr. own top 18", 3, TRUE, "Spearman within the model's own top 18"),
+  list("rank_cor_act18", "Rank corr. actual top 18", 3, TRUE, "Spearman of where it ranked the teams that actually finished top 18"))
+beta_tab <- function(B) {
+  if (!identical(B$version, 1L) || !length(B$formats)) return(NULL)
+  fmtv <- function(x, d) if (identical(d, "pct")) .pc(x) else .f(x, d)
+  fmtd <- function(x, d) if (identical(d, "pct")) ifelse(is.na(x), "—", sprintf("%+.0f pts", 100 * x)) else .sg(x, d)
+  wlab <- function(w) if (length(w) > 1) sprintf("weeks %d–%d", min(w), max(w)) else sprintf("week %d", w)
+  mods <- B$models
+  intro <- paste0("<p class='s'><b>Beta: candidate models running in the background.</b> Not used for any projection on this site. ",
+    "After each week's games, every model below is fitted on all games before that week and projects it with the closing lines (the same protocol as the back-test), ",
+    "so the rows are compared under identical conditions. <b>Live</b> is the live model's recipe re-run that way; the site's own published numbers are on the Track record tab. ",
+    "<b>Vegas-only</b> is a regression on the betting lines alone. Every Beta model uses every feature family (none dropped; each family's strongest variable is never shrunk away) plus the new features: ",
+    "ESPN win-rate matchups (raw and opponent-adjusted, own offense and opponent offense), red zone and red zone+ efficiency, and neutral-situation pass rate and pass rate over expected.</p>",
+    "<p class='s'><b>Main score</b>: % better than Vegas-only on squared error and on the boom (10+) and bust (under 3) probabilities, averaged (higher = better; the model-tuning objective). ",
+    "<b>Season pts vs Live</b>: actual points of its weekly top 12 minus Live's, per 18-week season (what following it would have gained in a 12-team league, all starts summed). ",
+    "Other columns as on the Track record tab (sits correct = share of its bottom 12 that finished in the actual bottom 12). ",
+    "Hover a cell for its difference from Live and the 90% luck range (from resampling whole weeks): <span class='bt-k gain'>green</span> = better than Live even at the unlucky end of the range, ",
+    "<span class='bt-k loss'>red</span> = worse even at the lucky end; bold = best in the column.</p>",
+    "<p class='s'>", paste(sprintf("<b>%s</b>: %s", names(mods), .tr_esc(mods)), collapse = " · "), "</p>")
+  sec <- vapply(B$formats, function(X) {
+    sets <- intersect(names(BETA_LAB), unique(X$card$set))
+    val  <- function(m, s) { r <- X$card[X$card$set == s & X$card$metric == m, ]; if (nrow(r)) r else NULL }
+    pts  <- X$points[match(sets, X$points$set), ]
+    hpts <- if (!is.null(X$hold_points)) X$hold_points[match(sets, X$hold_points$set), ] else NULL
+    best <- function(x, hi = TRUE) { if (all(is.na(x))) return(rep("", length(x))); b <- if (hi) max(x, na.rm = TRUE) else min(x, na.rm = TRUE); ifelse(!is.na(x) & abs(x - b) < 1e-9, "best", "") }
+    msd <- if (all(c("ms_lo90", "ms_hi90") %in% names(pts))) pts else NULL
+    ms_cls <- if (is.null(msd)) rep("", length(sets)) else ifelse(sets == "M0" | is.na(msd$ms_lo90), "", ifelse(msd$ms_lo90 > 0, "gain", ifelse(msd$ms_hi90 < 0, "loss", "")))
+    ms_tip <- if (is.null(msd)) rep("", length(sets)) else ifelse(sets == "M0", "", sprintf("vs Live %+.2f (luck range %+.2f to %+.2f)", pts$main_score - pts$main_score[sets == "M0"], msd$ms_lo90, msd$ms_hi90))
+    cols <- list(
+      list(h = "Model", v = unname(BETA_LAB[sets])),
+      list(h = "Main score", v = .f(pts$main_score), cls = paste(best(pts$main_score), ms_cls), raw = TRUE,
+           tip = "% better than Vegas-only (squared error + boom / bust probability scores)"),
+      list(h = "Season pts vs Live", v = ifelse(sets == "M0", "—", .sg(pts$top12_pts_vs_ref_per_season, 1)),
+           cls = vapply(sets, function(s) { r <- val("top12", s); if (is.null(r) || s == "M0" || is.na(r$lo90)) "" else if (r$lo90 > 0) "gain" else if (r$hi90 < 0) "loss" else "" }, ""),
+           tip = "top-12 points vs Live per 18-week season (green / red: the top-12 average's whole luck range is better / worse)"))
+    if (!is.null(msd)) cols[[2]]$v <- sprintf('<span title="%s">%s</span>', .tr_esc(ms_tip), .f(pts$main_score))
+    for (cc in BETA_COLS) {
+      m <- cc[[1]]; rows <- lapply(sets, function(s) val(m, s)); if (all(vapply(rows, is.null, NA))) next
+      v  <- vapply(rows, function(r) if (is.null(r)) NA_real_ else r$value, 0)
+      d  <- vapply(rows, function(r) if (is.null(r)) NA_real_ else r$diff_vs_ref, 0)
+      lo <- vapply(rows, function(r) if (is.null(r)) NA_real_ else r$lo90, 0); hi <- vapply(rows, function(r) if (is.null(r)) NA_real_ else r$hi90, 0)
+      good <- if (cc[[4]]) !is.na(lo) & lo > 0 else !is.na(hi) & hi < 0
+      bad  <- if (cc[[4]]) !is.na(hi) & hi < 0 else !is.na(lo) & lo > 0
+      tip <- ifelse(is.na(d), "", sprintf("vs Live %s (luck range %s to %s)", fmtd(d, cc[[3]]), fmtd(lo, cc[[3]]), fmtd(hi, cc[[3]])))
+      cols[[length(cols) + 1]] <- list(h = cc[[2]], tip = cc[[5]], raw = TRUE,
+        v = ifelse(nzchar(tip), sprintf('<span title="%s">%s</span>', .tr_esc(tip), fmtv(v, cc[[3]])), fmtv(v, cc[[3]])),
+        cls = paste(best(v, cc[[4]]), ifelse(good, "gain", ifelse(bad, "loss", ""))))
+    }
+    if (!is.null(hpts)) cols[[length(cols) + 1]] <- list(h = "Back-test main score", v = .f(hpts$main_score), cls = best(hpts$main_score),
+                                                          tip = "main score on the 2024 + 2025 holdout seasons (each predicted from earlier seasons): for context; fixed")
+    tbl <- tr_table(cols, left = 1)
+    # headline: best main score, and how many metrics each Beta model clearly beats / trails Live on
+    clear <- vapply(setdiff(sets, c("M0", "Vegas-only")), function(s) {
+      r <- X$card[X$card$set == s & X$card$metric %in% vapply(BETA_COLS, `[[`, "", 1), ]
+      hi_b <- vapply(r$metric, function(m) BETA_COLS[[which(vapply(BETA_COLS, `[[`, "", 1) == m)]][[4]], NA)
+      c(better = sum(ifelse(hi_b, r$lo90 > 0, r$hi90 < 0), na.rm = TRUE), worse = sum(ifelse(hi_b, r$hi90 < 0, r$lo90 > 0), na.rm = TRUE)) }, c(0, 0))
+    bm <- setdiff(sets, c("M0", "Vegas-only")); bi <- bm[which.max(pts$main_score[match(bm, sets)])]
+    head <- sprintf("<p class='s'><b>%s, %s:</b> best Beta main score %s %s (Live %s, Vegas-only 0 by definition). Metrics clearly better / worse than Live (whole luck range): %s.</p>",
+                    X$label, wlab(X$weeks), BETA_LAB[bi], .f(pts$main_score[sets == bi]), .f(pts$main_score[sets == "M0"]),
+                    paste(sprintf("%s %d / %d", BETA_LAB[colnames(clear)], clear["better", ], clear["worse", ]), collapse = " · "))
+    if (length(X$provisional)) head <- paste0(head, sprintf("<p class='s'><i>Provisional: %s (the ESPN win rates those games should use weren't on file yet; refitted next run).</i></p>", wlab(sort(X$provisional))))
+    # season to date after each week: main score, rank correlation, season points
+    thru <- function(metric, d, title, hi = TRUE) {
+      cm <- X$cum[X$cum$metric == metric & X$cum$set %in% sets, ]; if (!nrow(cm)) return("")
+      wk <- sort(unique(cm$week))
+      cl <- c(list(list(h = "Through", v = sprintf("wk %d", wk))), lapply(sets, function(s) {
+        v <- vapply(wk, function(w) { x <- cm$value[cm$set == s & cm$week == w]; if (length(x)) x else NA_real_ }, 0)
+        list(h = unname(BETA_LAB[s]), v = fmtv(v, d), cls_v = v) }))
+      M <- sapply(cl[-1], `[[`, "cls_v"); if (is.null(dim(M))) M <- matrix(M, nrow = 1)
+      for (j in seq_along(cl)[-1]) cl[[j]]$cls <- ifelse(apply(M, 1, function(r) if (all(is.na(r))) NA else if (hi) max(r, na.rm = TRUE) else min(r, na.rm = TRUE)) == M[, j - 1], "best", "")
+      paste0("<h4>", title, "</h4>", tr_table(lapply(cl, function(z) { z$cls_v <- NULL; z }), left = 1)) }
+    paste0(sprintf("<h3>%s</h3>", X$label), head, tbl,
+           "<details><summary>Season to date after each week</summary>",
+           thru("main_score", 2, "Main score"), thru("rank_cor", 3, "Rank correlation"), thru("rmse", 2, "RMSE (lower = better)", FALSE),
+           thru("top12", 2, "Top-12 average"), thru("b20_gain", 2, "Start/sit calls vs Vegas-only, top 20 (pts per call)"), "</details>")
+  }, "")
+  paste0(intro, paste(sec, collapse = ""), sprintf("<p class='s'>Updated %s (Beta version %s).</p>", format(B$generated, "%Y-%m-%d"), .tr_esc(B$beta_version %||% "")))
+}
 TRACK_CSS <- '
 .track td.ltxt{text-align:left}.track td.gain{background:var(--t2,#e0f3e6)}.track td.loss{background:var(--t5,#fbe3e3)}.track td.best{font-weight:700}
 .tc-grid-wrap{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px 18px;margin:.4rem 0 1rem}
@@ -517,7 +611,9 @@ TRACK_CSS <- '
 .tc-s3{stroke:var(--tc3);fill:var(--tc3);background:var(--tc3)}.tc-s4{stroke:var(--tc4);fill:var(--tc4);background:var(--tc4)}
 .tc-line{fill:none;stroke-width:2;stroke-linejoin:round}.tc-dot{stroke:var(--bg,#fff);stroke-width:2}
 .tc-grid{stroke:var(--line,var(--bd,#ddd));stroke-width:1}.tc-zero{stroke:var(--muted,var(--mut,#888))}.tc-ax{font-size:10.5px;fill:var(--muted,var(--mut,#666))}
-.tc-lab{font-size:11px;fill:var(--fg,#222)}'
+.tc-lab{font-size:11px;fill:var(--fg,#222)}
+.bt-k{padding:0 4px;border-radius:3px}.bt-k.gain{background:var(--t2,#e0f3e6)}.bt-k.loss{background:var(--t5,#fbe3e3)}
+.panel h4{font-size:13px;margin:.8rem 0 .2rem}'
 SITE_CSS <- paste0(SITE_CSS, TRACK_CSS)
 
 ## ---- Site navigation: one headline tab bar on every page (D/ST · Kickers · ROS · Players · DFS) ----
