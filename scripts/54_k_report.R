@@ -179,6 +179,10 @@ panes <- c(paste0("<p class='s'>Colours follow the tiers: dark green = tier 1, l
            sys_html("espn"), sys_html("dec"),
            if (!is.null(tt)) tt, P$backtest_html, html_table(glossary, id = "t_gloss"))
 if (!is.null(tt)) tabs <- c("Compare", SC$espn$label, SC$dec$label, "Track record", "Back-test", "Glossary")
+# Beta tab (51b_k_beta.R, Andrew 2026-10-29): candidate kicker models scored week by week, after the Track record
+BETA_KF <- file.path(dirname(TR_F), sprintf("beta_k_%d.rds", SEASON))
+bk <- if (file.exists(BETA_KF)) tryCatch(beta_tab_k(readRDS(BETA_KF)), error = function(e) { message("kicker beta tab skipped: ", conditionMessage(e)); NULL }) else NULL
+if (!is.null(bk)) { at <- match(if ("Track record" %in% tabs) "Track record" else SC$dec$label, tabs); tabs <- append(tabs, "Beta", at); panes <- append(panes, bk, at) }
 if (!identical(Sys.getenv("SHOW_COMPARE"), "1")) { keep <- tabs != "Compare"; tabs <- tabs[keep]; panes <- panes[keep] }   # Compare hidden (Andrew 2026-09-29)
 
 ## ---- page ----
