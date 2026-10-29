@@ -53,6 +53,7 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq libcurl4-openssl-dev libssl-dev
           Rscript -e 'pk <- c("dplyr", "tidyr", "purrr", "stringr", "tibble", "jsonlite", "curl", "lpSolve"); install.packages(pk); bad <- pk[!vapply(pk, requireNamespace, NA, quietly = TRUE)]; if (length(bad)) stop("R packages failed to install: ", paste(bad, collapse = ", "))'
+          Rscript -e 'tryCatch(install.packages("xgboost"), error = function(e) message("xgboost not installed (DFS ownership uses its softmax part only): ", conditionMessage(e)))'
 
       - name: D/ST (lines, starting QBs, re-score)
         id: dst

@@ -11,7 +11,8 @@
 #   3. DK projection = DK points of the expected stats + 3 x each yardage-bonus probability (94's fits), P(boom),
 #      P(4x salary), ceiling and range from 94's outcome distribution; D/ST = the Yahoo D/ST projection (the D/ST page's
 #      last pre-kickoff refresh, data/lines/proj_history.csv) with outcome odds from the Yahoo bundle's back-test residuals.
-#   4. Points per $1K, value vs the slate's salary curve, projected ownership (BETA formula) and leverage.
+#   4. Points per $1K, value vs the slate's salary curve, projected ownership (fitted model, 90 / own_model_*.rds; BETA
+#      formula if missing) and leverage.
 #   5. Writes site/dfs/index.html (+ archive) and data/dfs/dfs_proj_<season>_wk<ww>.csv (latest table; for fitting
 #      ownership and a track record later).
 # Usage: Rscript scripts/96_dfs_refresh.R   (env FF_PROJ_DIR, REFRESH_NOW, DK_MOCK_DIR for tests, NO_DK=1 to skip DK)
@@ -197,11 +198,47 @@ for (p in unique(rows$pos)) { i <- which(rows$pos == p & !is.na(rows$salary) & r
 ## recent form (94's table: this season's DK points per player-game)
 fm <- form_points(S$form)
 rows <- rows |> left_join(fm, by = "gsis_id")
+## Projected ownership. The fitted model (90_dfs_own_fit.R, Andrew 2026-10-29: 70% softmax + 30% xgboost, per contest)
+## over EVERY player on the DK salary list, as it was trained; the BETA formula only if the model file is missing or fails.
+OWN_M <- lapply(c(pa = "pa", milly = "milly"), \(k) { f <- file.path(PROJ_DIR, "output/dfs", sprintf("own_model_%s.rds", k))
+  if (file.exists(f)) tryCatch(readRDS(f), error = function(e) NULL) else NULL })
+own_src <- "BETA"; rows$own_milly <- NA_real_
+if (!is.null(OWN_M$pa) && !is.null(sal) && nrow(sal) && nrow(rows)) tryCatch({
+  pool <- bind_rows(sk_ |> select(dk_id, name, dk_pos, team, salary, any_of(c("dk_avg", "status")), game_id, gsis_id),
+                    sd_ |> inner_join(gl |> select(game_id, team), by = "team") |> select(dk_id, name, dk_pos, team, salary, any_of(c("dk_avg", "status")), game_id, gsis_id)) |>
+    distinct(dk_id, .keep_all = TRUE)
+  for (cc in c("dk_avg", "status")) if (!cc %in% names(pool)) pool[[cc]] <- NA
+  ## projection as in training: props-based for skill players (fallback projections count as none), Vegas-only for D/ST
+  pj <- rows |> transmute(gsis_id, pj = ifelse(pos == "DST", coalesce(if ("dk_proj_vegas" %in% names(rows)) dk_proj_vegas else NA_real_, dk_proj),
+                                                ifelse(fallback %in% TRUE, NA_real_, dk_proj)))
+  ## salary on his previous main slate this season (archived DKSalaries_<season>_wk<ww>.csv), by name + team
+  pf_ <- list.files(file.path(PROJ_DIR, "data/dfs"), pattern = sprintf("^DKSalaries_%d_wk(\\d{2})\\.csv$", SEASON), full.names = TRUE)
+  pw <- suppressWarnings(as.integer(sub(".*_wk(\\d{2})\\.csv$", "\\1", pf_))); pf_ <- pf_[!is.na(pw) & pw < WEEK]; pw <- pw[!is.na(pw) & pw < WEEK]
+  prev <- if (length(pf_)) bind_rows(lapply(order(-pw), \(j) tryCatch(dk_parse_csv(pf_[j]), error = function(e) NULL))) |>
+    mutate(k = ifelse(dk_pos == "DST", paste0("DST_", team), paste(own_key(name), team))) |> distinct(k, .keep_all = TRUE) else NULL
+  tot_g <- imp |> group_by(game_id) |> summarise(total_g = sum(implied), .groups = "drop")
+  it <- imp |> left_join(tot_g, by = "game_id") |> transmute(team, imp_team = implied, spread_team = spread, total_g)
+  fm0 <- form_points(S$form)
+  pool <- pool |> mutate(pos = ifelse(dk_pos == "DST", "DST", dk_pos), k = ifelse(pos == "DST", paste0("DST_", team), paste(own_key(name), team))) |>
+    left_join(pj, by = "gsis_id") |> left_join(fm0 |> select(gsis_id, form, last_pts), by = "gsis_id") |>
+    left_join(it, by = "team") |> left_join(gl |> distinct(team, home), by = "team") |>
+    mutate(proj = pj, sal_prev = if (is.null(prev)) NA_real_ else prev$salary[match(k, prev$k)],
+           imp = ifelse(pos == "DST", total_g - imp_team, imp_team), inj = status) |> filter(pos %in% c("QB", "RB", "WR", "TE", "DST"))
+  Fo <- own_live_features(pool, OWN_M$pa$proj_fill)
+  for (k in names(OWN_M)) if (!is.null(OWN_M[[k]])) pool[[paste0("own_", k)]] <- own_model_predict(OWN_M[[k]], Fo, say = message)
+  rows$own <- pool$own_pa[match(rows$gsis_id, pool$gsis_id)]
+  if ("own_milly" %in% names(pool)) rows$own_milly <- pool$own_milly[match(rows$gsis_id, pool$gsis_id)]
+  own_src <- "model"
+  message(sprintf("dfs: ownership model (%s) over %d salaried players (%d with props, %d with last week's salary); shown players sum to %.0f%% of 900%%",
+                  OWN_M$pa$chosen %||% OWN_M$pa$type, nrow(pool), sum(!is.na(pool$proj) & pool$pos != "DST"), sum(!is.na(pool$sal_prev)), 100 * sum(rows$own, na.rm = TRUE)))
+}, error = function(e) message("dfs: ownership model failed (", conditionMessage(e), "): BETA formula instead"))
+if (own_src == "BETA") {
 avail <- !(rows$inj_out %in% TRUE) & !(rows$dk_status %in% c("O", "OUT", "IR", "Out"))
 rows$own <- if (any(!is.na(rows$salary))) own_project(rows |> transmute(pos, salary, proj = dk_proj, form,
               imp = ifelse(pos == "DST", -implied, implied), avail = avail), n_games = max(length(slate_games), 2)) else NA_real_
-rows$own <- as.numeric(rows$own)
-if (any(!is.na(rows$salary))) message(sprintf("dfs: projected ownership implies a $%s average lineup (target $49,700)",
+}
+rows$own <- coalesce(as.numeric(rows$own), 0)
+if (own_src == "BETA" && any(!is.na(rows$salary))) message(sprintf("dfs: projected ownership implies a $%s average lineup (target $49,700)",
   format(round(sum(rows$own * coalesce(rows$salary, 0), na.rm = TRUE)), big.mark = ",")))
 rows$lev <- rows$p_4x - rows$own
 rows <- rows |> mutate(player_name = ifelse(pos == "DST", paste(coalesce(unname(DST_NAMES[team]), team), "D/ST"), player_name))
@@ -255,7 +292,7 @@ last_pull <- if (nrow(cur) && "t" %in% names(cur) && any(!is.na(cur$t))) max(cur
 P <- list(season = SEASON, week = WEEK, now = NOW, rows = rows, spec = S, slate = slate, site_base = SITE_BASE,
           sal_time = if (!is.null(sal) && nrow(sal)) utc(max(sal$pulled_at)) else as.POSIXct(NA), sal_src = sal_src,
           last_pull = last_pull, n_locked = if (!is.null(slate)) sum(slate$ko <= NOW) else 0L, n_slate = if (!is.null(slate)) nrow(slate) else nrow(games),
-          n_unmatched = n_unm, dk_err = if (is.null(sal)) dk_err else NA_character_, lu = LU)
+          n_unmatched = n_unm, dk_err = if (is.null(sal)) dk_err else NA_character_, lu = LU, own_src = own_src)
 html <- dfs_page(P)
 for (kind in c("cash", "gpp")) { dir.create(file.path(SITE_DIR, "dfs", kind), recursive = TRUE, showWarnings = FALSE)
   writeLines(dfs_lineup_page(P, kind), file.path(SITE_DIR, "dfs", kind, "index.html")) }
@@ -271,7 +308,7 @@ writeLines(c('<!doctype html><html><head><meta charset="utf-8"><meta name="viewp
 out <- rows |> transmute(season = SEASON, week = WEEK, refreshed = isoz(NOW), game_id, gsis_id, player_name, pos, team, opp, kickoff = isoz(ko), locked,
                          fallback, salary, dk_proj = round(dk_proj, 3), dk_bonus = round(dk_bonus, 3), p_boom = round(p_boom, 4), p_4x = round(p_4x, 4),
                          q90 = round(q90, 2), ppk = round(ppk, 3), value = round(value, 3), form = round(form, 2), last_pts = last_pts,
-                         implied, own = round(own, 4), lev = round(lev, 4), dk_status, inj_status)
+                         implied, own = round(own, 4), own_milly = round(own_milly, 4), lev = round(lev, 4), dk_status, inj_status)
 write.csv(out, file.path(PROJ_DIR, sprintf("data/dfs/dfs_proj_%d_wk%02d.csv", SEASON, WEEK)), row.names = FALSE)
 message(sprintf("dfs: page written (%d rows: %s; %d slate games; salaries %s)", nrow(rows),
                 paste(names(table(rows$pos)), table(rows$pos), collapse = " "), length(slate_games), if (is.na(sal_src)) "none yet" else sal_src))

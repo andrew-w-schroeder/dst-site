@@ -231,8 +231,10 @@ dk_parse_csv <- function(file) {
   x <- utils::read.csv(file, stringsAsFactors = FALSE, check.names = FALSE)
   names(x) <- trimws(names(x))
   tibble(dk_id = as.character(x$ID), name = x$Name, first = NA_character_, last = NA_character_, dk_pos = x$Position,
-         team = dk_team(x$TeamAbbrev), salary = as.numeric(x$Salary), status = "", disabled = FALSE,
-         game = sub(" .*$", "", x$`Game Info`), start = NA_character_) |>
+         team = dk_team(x$TeamAbbrev), salary = as.numeric(x$Salary),
+         status = if (!is.null(x$Status)) ifelse(is.na(x$Status) | x$Status %in% c("None", "NA"), "", as.character(x$Status)) else "", disabled = FALSE,
+         game = sub(" .*$", "", x$`Game Info`), start = NA_character_,
+         dk_avg = if (!is.null(x$AvgPointsPerGame)) suppressWarnings(as.numeric(x$AvgPointsPerGame)) else NA_real_) |>
     distinct(dk_id, .keep_all = TRUE)
 }
 
@@ -287,6 +289,58 @@ own_project <- function(d, n_games = 12, spec = OWN_BETA) {
   own <- shares(lambda); attr(own, "lambda") <- lambda; attr(own, "avg_salary") <- sum(own * coalesce(d$salary, 0))
   own
 }
+## ---- 6b. Fitted ownership model (Andrew 2026-10-29; replaces OWN_BETA when output/dfs/own_model_<contest>.rds exists) ----
+## Fitted by 90_dfs_own_fit.R on 60 real main slates 2023-26 (stat-api: every salaried player's actual ownership in
+## Play-Action and in the biggest-field contest). Model = 70% softmax per position (the BETA idea with fitted weights) +
+## 30% xgboost, both rescaled so each position adds up to its usual total. Scored leaving seasons out: error on the 25
+## most-owned players 6.8 -> 5.7 ownership points (Play-Action), better than BETA on cross-entropy too.
+## Features (all known before lock) are built for EVERY player on the DK salary list, as in training:
+##   salary, Vegas projection (props; players without props get proj_fill(salary, DK average)), value, DK's displayed
+##   average, last game, decay form, salary change vs his last main slate, implied total (D/ST: the opponent's), spread,
+##   game total, home, DK injury status, games on the slate.
+own_key <- function(x) { x <- tolower(iconv(x, to = "ASCII//TRANSLIT")); x <- gsub("[^a-z ]", "", x)
+  x <- gsub("\\b(jr|sr|ii|iii|iv|v)\\b", "", x); gsub("\\s+", "", x) }
+## pool: one row per salaried player: pos (QB/RB/WR/TE/DST), salary, proj (props-based DK projection, NA if none;
+## D/ST: Vegas-only), dk_avg, form, last_pts, sal_prev, imp, spread_team (+ = favoured), total_g, home (1/0), inj (DK status)
+own_live_features <- function(pool, proj_fill) {
+  zs <- function(x) { s <- sd(x, na.rm = TRUE); if (!is.finite(s) || s == 0) s <- 1; (x - mean(x, na.rm = TRUE)) / s }
+  d <- pool |> mutate(slate = "live", sal_k = salary / 1000, has_proj = !is.na(proj) & proj > 0,
+    inj = tolower(coalesce(inj, "")), inj_q = as.numeric(inj %in% c("q", "gtd")), inj_d = as.numeric(inj %in% c("d", "o", "ir", "out")),
+    proj_f = ifelse(has_proj, proj, NA_real_), sal_chg = ifelse(is.na(sal_prev), 0, (salary - sal_prev) / 1000), has_prev_sal = as.numeric(!is.na(sal_prev)),
+    dk_avg0 = pmax(coalesce(dk_avg, 0), 0), form0 = pmax(coalesce(form, 0), 0), last0 = pmax(coalesce(last_pts, 0), 0),
+    has_form = as.numeric(!is.na(form)), home = coalesce(as.numeric(home), 0.5), n_games = n_distinct(game_id))
+  i <- which(is.na(d$proj_f) & d$pos != "DST")
+  if (length(i) && !is.null(proj_fill)) d$proj_f[i] <- pmax(as.numeric(stats::predict(proj_fill, newdata = d[i, ])), 0.3)
+  d$proj_f[is.na(d$proj_f)] <- 3
+  d |> group_by(pos) |> mutate(z_lv = zs(log(pmax(proj_f, 0.3) / sal_k)), z_lp = zs(log1p(pmax(proj_f, 0))), z_dk = zs(log1p(dk_avg0)),
+    z_form = zs(log1p(form0)), z_last = zs(log1p(last0)), z_imp = zs(coalesce(imp, mean(imp, na.rm = TRUE))), z_sal = zs(sal_k),
+    val_rank = rank(-proj_f / sal_k, ties.method = "average") / n(), n_pos = n()) |> ungroup() |>
+    mutate(spread0 = coalesce(spread_team, 0), total0 = coalesce(total_g, 44), lsal = log(sal_k), lown_prev = log(0.002), has_own_prev = 0)
+}
+own_pred_softmax <- function(M, d) {
+  y <- rep(0, nrow(d))
+  for (p in names(M$pos)) { i <- which(d$pos == p); if (!length(i)) next
+    X <- as.matrix(d[i, M$feats]); X[!is.finite(X)] <- 0; eta <- drop(X %*% M$pos[[p]]$b)
+    e <- exp(eta - max(eta)); y[i] <- e / sum(e) * M$pos[[p]]$total }
+  y
+}
+own_pred_boost <- function(M, d) {
+  d$pos_i <- match(d$pos, c("QB", "RB", "WR", "TE", "DST")); X <- as.matrix(d[, M$feats]); X[!is.finite(X)] <- NA
+  pr <- if (identical(M$engine, "ranger")) { X[is.na(X)] <- -999; stats::predict(M$forest, data = as.data.frame(X))$predictions } else {
+    b <- xgboost::xgb.load.raw(if (!is.null(M$raw_json)) M$raw_json else M$raw); stats::predict(b, X) }
+  r <- pmax(exp(pr) - 0.01, 1e-5) / d$n_pos
+  d |> mutate(r = r) |> group_by(pos) |> mutate(o = r / sum(r) * M$totals[pos[1]]) |> pull(o)
+}
+## predicted ownership (fraction) for every row of the feature table; the blend falls back to its softmax part if the tree
+## model can't run here (package missing / model format), and says so
+own_model_predict <- function(M, d, say = message) {
+  if (identical(M$type, "softmax")) return(own_pred_softmax(M, d))
+  if (identical(M$type, "boost")) return(own_pred_boost(M, d))
+  p1 <- own_pred_softmax(M$softmax, d)
+  p2 <- tryCatch(own_pred_boost(M$boost, d), error = function(e) { say("ownership: tree part unavailable (", conditionMessage(e), "), softmax part only"); NULL })
+  if (is.null(p2)) p1 else M$w * p1 + (1 - M$w) * p2
+}
+
 ## hist: gsis_id, week, dk_pts (games played this season); returns one row per player: form, last_pts, last_wk, n_g
 form_points <- function(hist, lambda = 0.5) {
   if (is.null(hist) || !nrow(hist)) return(tibble(gsis_id = character(), form = numeric(), last_pts = numeric(), last_wk = integer(), n_g = integer()))

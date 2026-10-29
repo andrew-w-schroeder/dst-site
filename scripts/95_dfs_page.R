@@ -13,7 +13,7 @@ DFS_TIP <- c(
   "±" = "Model uncertainty of the projection (half of its 90% interval), from the Players page's PPR bootstrap (resampled sportsbooks + calibration refits); DK differs from PPR only by INT / fumble -1 and the bonuses.",
   "Pts/$1K" = "Projection per $1,000 of salary (the usual DFS value number). 4.0 = 4x salary. Cheap players always look good here; see Value.",
   Value = "Projection minus what a typical player at his position and salary on this slate projects for (a straight-line fit of projection on salary per position). + = more points than his price suggests. Unlike Pts/$1K this doesn't favour minimum-price players.",
-  "Own%" = "PROJECTED ownership in large DK tournaments (BETA: a placeholder formula, not yet fitted to real contest ownership). Within each position, a share driven by value (points per $1K, strongest), projection, recent DK points (decay-weighted: last game counts as much as all earlier ones together) and team implied total, scaled so the positions add up to DK's 9 roster spots (QB 100%, RB ~232%, WR ~336%, TE ~132%, D/ST 100%).",
+  "Own%" = "PROJECTED ownership in the $3 Play-Action tournament (large field, 20-entry max): the share of lineups expected to play him. Fitted to 60 real DraftKings main slates; computed over every player on the salary list (not only those shown), so each position adds up to DK's roster spots (QB 100%, RB ~231%, WR ~336%, TE ~120%, D/ST 100%). See Ownership model in the Glossary.",
   Lev = "Leverage = P(4x) minus projected ownership, in points of %. + = he reaches a tournament-winning score more often than the field plays him (under-owned upside); - = the field is over-exposed to him.",
   "P(boom)" = "Chance of a DK boom week, cut-offs set so they happen as often as the Players page's half-PPR boom (see Glossary). From the outcome distribution at his projection (2023+ results).",
   "P(4x)" = "Chance of scoring at least 4x his salary in DK points (e.g. $7,000 -> 28 points), the usual tournament target. Same outcome distribution as P(boom).",
@@ -126,7 +126,8 @@ dfs_glossary <- function(P) {
     "Back-test" = paste0("Leave-one-season-out, ", paste(range(bt$seasons %||% NA), collapse = "-"), ", core players: ", acc, "."),
     "Italic row: no props yet" = "His game's player props aren't posted yet; the projection is the Players page's history-based fallback, in DK scoring.",
     "Italic*" = "No sportsbook line for this stat: from his career average (as on the Players page).",
-    "Ownership (BETA)" = "The ownership formula is a placeholder until it is fitted to real DraftKings ownership (contest standings). Treat it as a ranking of who the field is likely to play, not an exact percentage.")
+    "Ownership model" = if (identical(P$own_src, "model")) "Fitted on 60 real DraftKings main slates (2023-26: every salaried player's actual ownership in the $3 Play-Action tournament). 70% a per-position share model with fitted weights + 30% gradient-boosted trees. Drivers, strongest first: having Vegas props at all, value, projection, DK's displayed season average, recent form and last game, a salary rise since last week; injured players faded; the implied team total barely matters. Scored on seasons it wasn't fitted on: about 5.7 ownership points of error on the 25 most-owned players (the old formula: 6.8). The Millionaire's ownership (bigger, more casual field) is modelled separately and saved in the data file." else
+      "The ownership formula is a placeholder (the fitted model file wasn't found). Treat it as a ranking of who the field is likely to play, not an exact percentage.")
   gl <- tibble(Term = c(names(DFS_TIP), names(extra)), Definition = c(unname(DFS_TIP), unname(extra)))
   paste0('<div class="tw"><table><thead><tr><th>Term</th><th>Definition</th></tr></thead><tbody>',
          paste0("<tr><td class='l'><b>", pp_esc(gl$Term), "</b></td><td class='l wrap'>", pp_esc(gl$Definition), "</td></tr>", collapse = ""), "</tbody></table></div>")
@@ -176,6 +177,8 @@ p.legend{margin:.2rem 0}
   sprintf("<p class='s'>%s %s%s Vegas-only projections in DK scoring (the Players page's props, plus the odds of DK's yardage bonuses) next to DK salaries. Hover a column header for its definition; click to sort.</p>", slate, props, unm),
   site_key(list(                                                                  # shared page key (Andrew 2026-10-07)
     key_row("Value", kit(ksw("vg2"), "best fifth on the tab"), kit(ksw("vg1"), "second fifth"), kit(ksw("vb1"), "worst fifth"), kit("(Pts/$1K, Value, P(4x))")),
+    if (identical(P$own_src, "model")) key_row("Own%", kit(ksw("ow1"), "5%+"), kit(ksw("ow2"), "10%+"), kit(ksw("ow3"), "20%+ projected Play-Action ownership"),
+            kit("fitted to 60 real DK main slates")) else
     key_row("Own% <span class='beta'>BETA</span>", kit(ksw("ow1"), "5%+"), kit(ksw("ow2"), "10%+"), kit(ksw("ow3"), "20%+ projected tournament ownership"),
             kit("placeholder formula, not yet fitted to real DK ownership")),
     key_row("Lev", kit("P(4x) minus Own%"), kit(ksw("vg2"), ksw("vg1"), "under-owned upside (+5 / +2 points)"), kit(ksw("vb2"), ksw("vb1"), "over-owned (−5 / −2)")),
