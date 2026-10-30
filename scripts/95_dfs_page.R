@@ -218,8 +218,8 @@ const v=r=>{const s=r.children[i].innerText.replace(/[$,%+*\\u{1F512}]/gu,"").tr
 
 ## ---- Sub-navigation of the DFS section and the two lineup pages (Andrew 2026-10-04) ----
 dfs_subnav <- function(active, b) {
-  it <- c(players = "Players", cash = "Cash (double-ups)", floor = "High floor (tournaments)", gpp = "High ceiling (top 1%)")
-  hr <- c(players = paste0(b, "dfs/"), cash = paste0(b, "dfs/cash/"), floor = paste0(b, "dfs/floor/"), gpp = paste0(b, "dfs/gpp/"))
+  it <- c(players = "Players", cash = "Cash (double-ups)", floor = "High floor (tournaments)", gpp = "High ceiling (top 1%)", max = "Max ceiling (top 0.01%)")
+  hr <- c(players = paste0(b, "dfs/"), cash = paste0(b, "dfs/cash/"), floor = paste0(b, "dfs/floor/"), gpp = paste0(b, "dfs/gpp/"), max = paste0(b, "dfs/max/"))
   paste0('<div class="subnav">', paste0(sprintf('<a class="%s" href="%s">%s</a>', ifelse(names(it) == active, "on", ""), hr, it), collapse = ""), '</div>')
 }
 DFS_SUBNAV_CSS <- '.subnav{display:flex;flex-wrap:wrap;gap:6px;margin:.2rem 0 .8rem}.subnav a{padding:6px 14px;border:1px solid var(--bd);border-radius:999px;text-decoration:none;color:var(--fg);font-size:14px}
@@ -232,8 +232,8 @@ DFS_LU_CSS <- '.lus{display:grid;grid-template-columns:repeat(auto-fill,minmax(4
 .kpi span{font-size:12px;color:var(--mut)}a.btn{display:inline-block;padding:8px 14px;border-radius:6px;background:var(--acc);color:#fff;text-decoration:none;font-weight:600;margin:.4rem 0}
 td.sl{font-weight:700;color:var(--mut);width:1%}'
 dfs_lineup_page <- function(P, kind) {
-  b <- P$site_base; LU <- P$lu; is_gpp <- kind == "gpp"; is_floor <- kind == "floor"
-  title <- c(cash = "Cash lineups (double-ups)", floor = "High-floor lineups", gpp = "High-ceiling lineups")[[kind]]
+  b <- P$site_base; LU <- P$lu; is_max <- kind == "max"; is_gpp <- kind %in% c("gpp", "max"); is_floor <- kind == "floor"
+  title <- c(cash = "Cash lineups (double-ups)", floor = "High-floor lineups", gpp = "High-ceiling lineups", max = "Max-ceiling lineups")[[kind]]
   head <- paste0('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
     sprintf("<title>DK %s %d wk %d</title>", title, P$season, P$week),
     '<style>:root{--bg:#fff;--fg:#1d1d1f;--mut:#666;--bd:#ddd;--th:#f3f3f5;--acc:#2b6cb0}
@@ -247,14 +247,14 @@ table{border-collapse:collapse;font-size:13px;white-space:nowrap}th,td{border:1p
   L <- LU[[kind]]; nl <- n_distinct(L$lineup)
   when <- paste0(if (isTRUE(LU$frozen)) "<b>Frozen at the slate's first kickoff</b> (built " else "Built ", pp_et(LU$built, "%a %b %d %I:%M %p"), " ET",
                  if (isTRUE(LU$frozen)) ")" else "; rebuilt at every refresh until the first kickoff, then frozen", ".")
-  csv <- sprintf("DK_%s_lineups_%d_wk%02d.csv", c(cash = "cash", floor = "high_floor", gpp = "tournament")[[kind]], P$season, P$week)
+  csv <- sprintf("DK_%s_lineups_%d_wk%02d.csv", c(cash = "cash", floor = "high_floor", gpp = "tournament", max = "max_ceiling")[[kind]], P$season, P$week)
   kp <- function(v, l) sprintf('<div class="kpi"><b>%s</b><span>%s</span></div>', v, l)
-  pt <- LU$port; et <- format(100 * (LU$lines$gpp_top %||% 0.01))
+  pt <- if (is_max) LU$port_max else LU$port; et <- format(100 * (LU$lines$gpp_top %||% 0.01))
   gq <- LU$lines$gcash_q %||% 0.76
   pc_lab <- sprintf("beats the field's %s percentile (Play-Action / Millionaire pay ~ the top %.0f%%)", paste0(round(100 * gq), "th"), 100 * (1 - gq))
   kpis <- if (is_gpp && !is.null(pt)) paste0(kp(dfs_pct(pt$any_top, 0), sprintf("P(at least one of the %d in the top 1%%)", nl)),
                              kp(dfs_pct(pt$any_top01, 1), "… in the top 0.1%"), kp(dfs_pct(pt$any_elite, 1), sprintf("… in the top %s%%", et)),
-                             kp(sprintf("%.1f of %d", LU$gpp_n_cash %||% NA, nl), "expected to cash"),
+                             kp(sprintf("%.1f of %d", (if (is_max) LU$max_n_cash else LU$gpp_n_cash) %||% NA, nl), "expected to cash"),
                              kp(sprintf("%.0f%% vs %.0f%%", 100 * pt$mean_own, 100 * pt$field_mean_own), "average ownership of our players vs the field's")) else if (is_gpp)
     paste0(kp(dfs_pct(LU$any_top, 1), "P(at least one in the top 1%)"), kp(sprintf("%.0f", LU$lines$top_med), "top-1% line, median DK points")) else
     if (is_floor) paste0(kp(sprintf("%.1f of %d", LU$floor_n_cash %||% NA, nl), "expected to cash in a big tournament"),
@@ -263,7 +263,14 @@ table{border-collapse:collapse;font-size:13px;white-space:nowrap}th,td{border:1p
     paste0(kp(sprintf("%.1f of %d", LU$n_cash, nl), "expected to cash (double-up)"),
            kp(dfs_pct(mean(distinct(L, lineup, p_cash)$p_cash), 0), "average P(cash)"),
            kp(sprintf("%.0f", LU$lines$cash_med), "double-up line, median DK points"))
-  how <- if (is_gpp) paste0("For the top of big tournaments (Play-Action, Millionaire). ", format(LU$n_cand, big.mark = ","), " candidate lineups (projection with random noise, ",
+  mr <- LU$max_recipe
+  how <- if (is_max) paste0("Aimed at the very top of the Play-Action / Millionaire (top 0.01%: the big prizes). Every lineup: QB + ", mr$k %||% 3, " of his WR / TE",
+      if (isTRUE(mr$bb %||% TRUE)) " + a bring-back from his opponent" else "", ", at least ", dfs_money(mr$floor %||% 49900), " of salary, aimed at each player's 90th-percentile score ",
+      "(with randomness, so the ", nl, " differ by at least 3 players), nobody facing our own D/ST. Chosen by a search of 216 build recipes x 40 lineups on 61 real 2023–26 slates (527K lineups): ",
+      "bigger QB stacks and using the full cap raised the top-0.01% rate (QB + 3 + bring-back about 3x QB + 1), going under $48K cut it by about 60%, heavy ownership fades didn't help. ",
+      "This recipe's 20 a week reached the top 0.01% in 5 of 116 contest-weeks (QB + 1 by projection: 0), but it was picked from 216 on the same data, so expect less. ",
+      "Few cashes: this is a lottery-ticket build. Odds below = shares of ", format(LU$S, big.mark = ","), " simulated weeks.") else
+    if (is_gpp) paste0("For the top of big tournaments (Play-Action, Millionaire). ", format(LU$n_cand, big.mark = ","), " candidate lineups (projection with random noise, ",
       "random stack rules, some with a $49.9K salary floor or a light ownership discount, never a player facing our own D/ST) are ranked by ",
       if (identical(LU$ranker, "trait")) "the trait model: which lineup traits finished in the top 1% more often at the same projection in 61 real 2023–26 Play-Action and Millionaire slates (QB stacks, 3+ receivers most; lower total ownership; never against our own D/ST). " else
         "simulated P(top 1%) (the trait model file was missing). ",
@@ -280,7 +287,8 @@ table{border-collapse:collapse;font-size:13px;white-space:nowrap}th,td{border:1p
     rows <- paste0(sprintf("<tr><td class='sl l'>%s</td><td class='l'>%s</td><td class='l'>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>",
       x$slot, pp_esc(x$name), paste(x$team, ifelse(is.na(x$opp), "", paste0("v ", x$opp))), dfs_money(x$player_salary), pp_f(x$player_proj, 1), dfs_pct(x$player_own, 0)), collapse = "")
     sprintf('<div class="lu"><h3><span>#%d</span><span>%s</span></h3><table><thead><tr><th class="l">Slot</th><th class="l">Player</th><th class="l">Team</th><th>Salary</th><th>Proj</th><th>Own</th></tr></thead><tbody>%s</tbody></table><div class="ft">%s · proj %.1f · 90th pct %.1f · own %.0f%% total · %s</div></div>',
-      k, if (is_gpp && "rel_top1" %in% names(x)) sprintf("×%s · top 1%% %s · cash %s", if (x$rel_top1[1] >= 99.5) "99+" else sprintf("%.1f", x$rel_top1[1]), dfs_pct(x$p_top[1], 1), dfs_pct(x$p_cash[1], 0)) else
+      k, if (is_max) sprintf("top 0.01%% %s · 0.1%% %s · 1%% %s", dfs_pct(x$p_elite[1], 2), dfs_pct(x$p_top01[1], 1), dfs_pct(x$p_top[1], 1)) else
+         if (is_gpp && "rel_top1" %in% names(x)) sprintf("×%s · top 1%% %s · cash %s", if (x$rel_top1[1] >= 99.5) "99+" else sprintf("%.1f", x$rel_top1[1]), dfs_pct(x$p_top[1], 1), dfs_pct(x$p_cash[1], 0)) else
          if (is_gpp && "p_elite" %in% names(x)) sprintf("top 0.01%% %s · 0.1%% %s · 1%% %s", dfs_pct(x$p_elite[1], 2), dfs_pct(x$p_top01[1], 1), dfs_pct(x$p_top[1], 1)) else
          if (is_gpp) sprintf("P(top 1%%) %s · P(cash) %s", dfs_pct(x$p_top[1], 1), dfs_pct(x$p_cash[1])) else sprintf("P(cash) %s · P(top 1%%) %s", dfs_pct(x$p_cash[1]), dfs_pct(x$p_top[1], 1)),
       rows, dfs_money(x$salary[1]), x$proj[1], x$q90[1], 100 * x$own_sum[1],
@@ -290,7 +298,7 @@ table{border-collapse:collapse;font-size:13px;white-space:nowrap}th,td{border:1p
     paste0(sprintf("<tr><td class='l'>%s</td><td class='l'>%s</td><td class='l'>%s</td><td>%d of %d</td></tr>", pp_esc(x$name), x$pos, x$team, x$n, nl), collapse = ""), "</tbody></table></div>")
   ex_html <- paste0(ex_tab(ex[ex$n >= 2, ]), if (any(ex$n < 2)) sprintf("<details><summary class='s'>%d players in one lineup</summary>%s</details>", sum(ex$n < 2), ex_tab(ex[ex$n < 2, ])) else "")
   st_html <- ""
-  if (is_gpp && !is.null(LU$stacks) && nrow(LU$stacks) && "mean_elite10" %in% names(LU$stacks)) { st <- head(LU$stacks, 14)
+  if (kind == "gpp" && !is.null(LU$stacks) && nrow(LU$stacks) && "mean_elite10" %in% names(LU$stacks)) { st <- head(LU$stacks, 14)
     st_html <- paste0("<h2>Which stacks the simulations favour this week</h2><p class='s'>Every candidate lineup grouped by the stack it ended up with, ranked by the average P(top 0.01%) of its 10 best lineups ",
       "(a fair comparison for groups with many candidates). With about 10 elite weeks per lineup in the simulation, differences under 0.02 points are noise.</p>",
       '<div class="tw"><table><thead><tr><th class="l">Stack</th><th>Candidates</th><th>Top-10 avg P(top 0.01%)</th><th>Best P(top 0.01%)</th><th>Best P(top 1%)</th><th>Best P(cash)</th></tr></thead><tbody>',

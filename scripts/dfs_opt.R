@@ -26,6 +26,9 @@ suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(purrr) 
 
 ## Tournament target (Andrew 2026-10-04, NFL $700K Play-Action: $3, 277,447 entries, 20-entry max, $50K to 1st): 20 lineups
 ## maximising P(at least one finishes in the top 0.01%, about the top 28 places), which is where the prize money is.
+## max ceiling (Andrew 2026-10-30; 91e build search, 527K back-test lineups): QB + 3 receivers + a bring-back, >= $49.9K, aimed at the
+## 90th percentile, no ownership discount, nobody facing our D/ST
+MAX_RECIPE <- list(k = 3, bb = TRUE, floor = 49900, aim = "ceil", fade = 0, sd = 0.20, n = 20, tries = 600)
 OPT <- list(S = 10000, F = 20000, cash_q = 0.55, gcash_q = 0.76, top_q = 0.99, n_gpp_cand = 2500, n_cash_cand = 300, n_lineups = 10, floor_n = 20,
             gpp_n = 20, gpp_top = 1e-4, contest_n = 277447, min_diff = 3, max_expo_frac = 0.5, smooth = 2.5,
             field_stack = 0.60, cap = 50000, field_min_sal = 48500, seed = 7)
@@ -278,7 +281,15 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
   hf <- lp_best_n(P, P$dk_proj, base, lp_join(lp_stack(P, STACKS$qb1), nvd), opt$floor_n, opt$min_diff)
   for (l in hf) { cands[[length(cands) + 1]] <- l; typ <- c(typ, "floor") }
   say(sprintf("opt: %d high-floor lineups (%.0f s)", length(hf), el()))
-  ## high ceiling candidates (as 91c): projection x noise under a random stack rule, 30% with a $49.9K floor, 25% with a light
+  ## max ceiling: MAX_RECIPE draws until 20 lineups that each differ by 3+ players
+  mr <- MAX_RECIPE; mx <- list(); exm <- lp_join(lp_stack(P, list(k = mr$k, bb = mr$bb, rbd = FALSE)), nvd, list(A = list(P$salary), dir = ">=", rhs = mr$floor))
+  for (it in seq_len(mr$tries)) { if (length(mx) >= mr$n) break
+    w <- (if (mr$aim == "ceil") q90 * exp(rnorm(nrow(P), 0, mr$sd)) else P$dk_proj * exp(rnorm(nrow(P), 0, mr$sd))) * (1 - P$own)^mr$fade
+    l <- lp_solve_lineup(w, base, exm); if (is.null(l) || length(unique(P$game_id[l])) < 2) next; l <- sort(l)
+    if (all(vapply(mx, \(j) 9 - length(intersect(l, j)) >= opt$min_diff, TRUE))) mx[[length(mx) + 1]] <- l }
+  for (l in mx) { cands[[length(cands) + 1]] <- l; typ <- c(typ, "max") }
+  say(sprintf("opt: %d max-ceiling lineups (%.0f s)", length(mx), el()))
+  ## high ceiling candidates (as 91c); q90 is set above: projection x noise under a random stack rule, 30% with a $49.9K floor, 25% with a light
   ## ownership discount; nobody facing our D/ST
   for (it in seq_len(opt$n_gpp_cand)) {
     sdv <- sample(c(0.08, 0.15, 0.25, 0.40), 1); st_n <- sample(names(STACKS), 1)
@@ -315,6 +326,7 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
   key <- apply(Lc, 1, paste, collapse = "-")
   kf <- match(vapply(hf, paste, "", collapse = "-"), key); kf <- kf[!is.na(kf)]
   kc <- pick_cash(p_cash, Lc, opt$n_lineups, opt$min_diff)                             # double-ups: the 10 best P(cash)
+  km <- match(vapply(mx, paste, "", collapse = "-"), key); km <- km[!is.na(km)]
   Tt <- lineup_traits(Lc, P) |> mutate(proj = rowSums(matrix(P$dk_proj[Lc], nC)), ceil = rowSums(matrix(q90[Lc], nC)))
   ci <- which(typ == "ceiling")
   sc <- if (!is.null(trait_model)) trait_score(Tt, trait_model) else qlogis(pmin(pmax(p_top, 1e-4), 1 - 1e-4))
@@ -337,8 +349,9 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
   any_hits <- function(keep, line) { if (!length(keep)) return(NA); hit <- rep(FALSE, opt$S)
     for (ch in split(seq_len(opt$S), ceiling(seq_len(opt$S) / 2000))) hit[ch] <- colSums(sweep(lineup_scores(Lc[keep, , drop = FALSE], X[, ch, drop = FALSE]), 2, lines[ch, line], ">")) > 0
     mean(hit) }
-  port <- tibble(any_elite = any_hits(kg, "elite"), any_top01 = any_hits(kg, "top01"), any_top = any_hits(kg, "top"),
-                 exp_elite = sum(p_elite[kg]), mean_own = mean(P$own[c(Lc[kg, ])]), field_mean_own = sum(P$own^2) / sum(P$own))
+  port_of <- function(k) tibble(any_elite = any_hits(k, "elite"), any_top01 = any_hits(k, "top01"), any_top = any_hits(k, "top"),
+                 exp_elite = sum(p_elite[k]), mean_own = mean(P$own[c(Lc[k, ])]), field_mean_own = sum(P$own^2) / sum(P$own))
+  port <- port_of(kg); port_max <- if (length(km)) port_of(km) else NULL
   n_cash <- if (length(kc)) mean(colSums(hcash[kc, , drop = FALSE])) else NA
   ## stack exploration: every tournament candidate's odds by the stack it ended up with
   stx <- tibble(stack = lab, p_top = p_top, p_elite = p_elite, p_cash = p_cash) |> group_by(stack) |>
@@ -346,7 +359,8 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
               best_top = max(p_top), best_cash = max(p_cash), .groups = "drop") |> arrange(desc(mean_elite10))
   say(sprintf("opt: done in %.0f s; tournament P(any of %d in the top %s%%) %.1f%% (top 0.1%%: %.1f%%, top 1%%: %.1f%%); double-up expected cashes %.1f of %d",
               el(), length(kg), format(100 * opt$gpp_top), 100 * port$any_elite, 100 * port$any_top01, 100 * port$any_top, n_cash, length(kc)))
-  list(cash = mk(kc, "cash"), floor = mk(kf, "floor"), gpp = mk(kg, "gpp"), any_top = port$any_top, port = port, n_cash = n_cash, stacks = stx,
+  list(cash = mk(kc, "cash"), floor = mk(kf, "floor"), gpp = mk(kg, "gpp"), max = mk(km, "max"), any_top = port$any_top, port = port, port_max = port_max,
+       max_n_cash = if (length(km)) mean(colSums(hgcash[km, , drop = FALSE])) else NA, max_recipe = MAX_RECIPE, n_cash = n_cash, stacks = stx,
        ranker = if (!is.null(trait_model)) "trait" else "sim",
        floor_n_cash = if (length(kf)) mean(colSums(hgcash[kf, , drop = FALSE])) else NA, gpp_n_cash = if (length(kg)) mean(colSums(hgcash[kg, , drop = FALSE])) else NA,
        lines = tibble(cash_med = median(lines[, "cash"]), gcash_med = median(lines[, "gcash"]), gcash_q = opt$gcash_q, top_med = median(lines[, "top"]), top01_med = median(lines[, "top01"]),

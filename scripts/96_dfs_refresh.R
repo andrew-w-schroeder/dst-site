@@ -283,10 +283,11 @@ if (file.exists(OPT_RDS) && (started || nzchar(Sys.getenv("NO_OPT")))) { LU <- r
   LU <- c(R, list(built = NOW, frozen = FALSE)); saveRDS(LU, OPT_RDS)
 }, error = function(e) message("dfs: optimizer failed — ", conditionMessage(e)))
 if (!is.null(LU)) {
-  for (kd in c("cash", "floor", "gpp")) dir.create(file.path(SITE_DIR, "dfs", kd), recursive = TRUE, showWarnings = FALSE)
+  for (kd in c("cash", "floor", "gpp", "max")) dir.create(file.path(SITE_DIR, "dfs", kd), recursive = TRUE, showWarnings = FALSE)
   if (!exists("dk_upload_csv")) source(file.path(PROJ_DIR, "scripts/dfs_opt.R"))
   dk_upload_csv(LU$cash, file.path(SITE_DIR, "dfs", "cash", sprintf("DK_cash_lineups_%d_wk%02d.csv", SEASON, WEEK)))
   dk_upload_csv(LU$gpp, file.path(SITE_DIR, "dfs", "gpp", sprintf("DK_tournament_lineups_%d_wk%02d.csv", SEASON, WEEK)))
+  if (!is.null(LU$max)) dk_upload_csv(LU$max, file.path(SITE_DIR, "dfs", "max", sprintf("DK_max_ceiling_lineups_%d_wk%02d.csv", SEASON, WEEK)))
   if (!is.null(LU$floor)) dk_upload_csv(LU$floor, file.path(SITE_DIR, "dfs", "floor", sprintf("DK_high_floor_lineups_%d_wk%02d.csv", SEASON, WEEK)))
 }
 
@@ -298,7 +299,7 @@ P <- list(season = SEASON, week = WEEK, now = NOW, rows = rows, spec = S, slate 
           last_pull = last_pull, n_locked = if (!is.null(slate)) sum(slate$ko <= NOW) else 0L, n_slate = if (!is.null(slate)) nrow(slate) else nrow(games),
           n_unmatched = n_unm, dk_err = if (is.null(sal)) dk_err else NA_character_, lu = LU, own_src = own_src)
 html <- dfs_page(P)
-for (kind in c("cash", "floor", "gpp")) { dir.create(file.path(SITE_DIR, "dfs", kind), recursive = TRUE, showWarnings = FALSE)
+for (kind in c("cash", "floor", "gpp", "max")) { dir.create(file.path(SITE_DIR, "dfs", kind), recursive = TRUE, showWarnings = FALSE)
   writeLines(dfs_lineup_page(P, kind), file.path(SITE_DIR, "dfs", kind, "index.html")) }
 dir.create(file.path(SITE_DIR, "dfs", "archive"), recursive = TRUE, showWarnings = FALSE)
 arch_name <- sprintf("dfs_%d_wk%02d.html", SEASON, WEEK)
