@@ -218,8 +218,8 @@ const v=r=>{const s=r.children[i].innerText.replace(/[$,%+*\\u{1F512}]/gu,"").tr
 
 ## ---- Sub-navigation of the DFS section and the two lineup pages (Andrew 2026-10-04) ----
 dfs_subnav <- function(active, b) {
-  it <- c(players = "Players", cash = "Cash (double-ups)", floor = "High floor (tournaments)", gpp = "High ceiling (top 1%)", max = "Max ceiling (top 0.01%)")
-  hr <- c(players = paste0(b, "dfs/"), cash = paste0(b, "dfs/cash/"), floor = paste0(b, "dfs/floor/"), gpp = paste0(b, "dfs/gpp/"), max = paste0(b, "dfs/max/"))
+  it <- c(players = "Players", cash = "Cash (double-ups)", floor = "High floor (tournaments)", gpp = "High ceiling (top 1%)", max = "Max ceiling (top 0.01%)", track = "Track record")
+  hr <- c(players = paste0(b, "dfs/"), cash = paste0(b, "dfs/cash/"), floor = paste0(b, "dfs/floor/"), gpp = paste0(b, "dfs/gpp/"), max = paste0(b, "dfs/max/"), track = paste0(b, "dfs/track/"))
   paste0('<div class="subnav">', paste0(sprintf('<a class="%s" href="%s">%s</a>', ifelse(names(it) == active, "on", ""), hr, it), collapse = ""), '</div>')
 }
 DFS_SUBNAV_CSS <- '.subnav{display:flex;flex-wrap:wrap;gap:6px;margin:.2rem 0 .8rem}.subnav a{padding:6px 14px;border:1px solid var(--bd);border-radius:999px;text-decoration:none;color:var(--fg);font-size:14px}
@@ -327,4 +327,52 @@ table{border-collapse:collapse;font-size:13px;white-space:nowrap}th,td{border:1p
     "<p class='s'>Caveats: the simulation treats our projections as the true averages, so the odds are optimistic in absolute terms; ",
     "they rank lineups well against each other. Projected ownership (which sets the field) is the fitted Play-Action model when it is available (see the Players tab).</p>",
     "</body></html>")
+}
+
+## ---- Track record of the four lineup tabs (98b_dfs_track.R; Andrew 2026-10-30) ----
+dfs_track_page <- function(P) {
+  b <- P$site_base; TR <- P$track; season <- P$season
+  head <- paste0('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
+    sprintf("<title>DFS track record %d</title>", season),
+    '<style>:root{--bg:#fff;--fg:#1d1d1f;--mut:#666;--bd:#ddd;--th:#f3f3f5;--acc:#2b6cb0;--pos:#1f7a3a;--neg:#b42318}
+@media (prefers-color-scheme:dark){:root{--bg:#141416;--fg:#e8e8ea;--mut:#9a9aa0;--bd:#333;--th:#1f1f23;--acc:#7fb0ef;--pos:#5fd68a;--neg:#ff8a80}}
+body{background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;max-width:1500px;margin:1.5rem auto;padding:0 16px}
+h1{font-size:1.4rem;margin:.2rem 0}h2{font-size:1.1rem;margin:1.4rem 0 .4rem}.s{color:var(--mut);font-size:13px}a{color:var(--acc)}.tw{overflow-x:auto}
+table{border-collapse:collapse;font-size:13px;white-space:nowrap}th,td{border:1px solid var(--bd);padding:3px 7px;text-align:right}th{background:var(--th)}td.l,th.l{text-align:left}
+td.p{color:var(--pos)}td.n{color:var(--neg)}tr.tot td{font-weight:600;background:var(--th)}span.tag{font-size:11px;padding:1px 6px;border-radius:999px;border:1px solid var(--bd);color:var(--mut)}span.live{border-color:var(--acc);color:var(--acc)}',
+    DFS_SUBNAV_CSS, DFS_LU_CSS, SITE_CSS, '</style></head><body>', site_nav("dfs", b), dfs_subnav("track", b),
+    sprintf("<h1>DFS lineup track record — %d</h1>", season))
+  if (is.null(TR) || is.null(TR$track) || !nrow(TR$track)) return(paste0(head, "<p>No track record yet: run 98b_dfs_track.R on Stratus, then publish.</p></body></html>"))
+  T <- TR$track |> filter(season == !!season)
+  if (!nrow(T)) return(paste0(head, "<p>No scored weeks for this season yet.</p></body></html>"))
+  lf <- TR$live_from %||% c(season = season, week = 8)
+  cols <- tibble(tab = c("cash", "floor", "floor", "gpp", "gpp", "max", "max"), contest = c("double-up", "pa", "milly", "pa", "milly", "pa", "milly"),
+                 head = c("Cash (double-ups)", "High floor · PA", "High floor · Milly", "High ceiling · PA", "High ceiling · Milly", "Max ceiling · PA", "Max ceiling · Milly"))
+  cell <- function(r) if (is.na(r)) "<td></td>" else sprintf("<td class='%s'>%+.0f%%</td>", if (r >= 0) "p" else "n", 100 * r)
+  agg <- function(d) vapply(seq_len(nrow(cols)), \(j) { x <- d[d$tab == cols$tab[j] & d$contest == cols$contest[j], ]; if (!nrow(x)) NA_real_ else sum(x$won) / sum(x$fees) - 1 }, 0)
+  wk <- sort(unique(T$week))
+  rows <- vapply(wk, \(w) { d <- T[T$week == w, ]; src <- d$source[1]
+    hit <- d |> filter(contest != "double-up") |> summarise(t = paste(c(if (any(top001, na.rm = TRUE)) "top 0.01%", if (any(top01 & !top001, na.rm = TRUE)) "top 0.1%"), collapse = ", "))
+    paste0("<tr><td class='l'>", w, "</td><td class='l'><span class='tag", if (src == "live") " live" else "", "'>", src, "</span></td>",
+           paste(vapply(agg(d), cell, ""), collapse = ""), "<td class='l'>", hit$t, "</td></tr>") }, "")
+  pre <- T |> filter(week < lf[["week"]]); tot_pre <- if (nrow(pre)) paste0("<tr class='tot'><td class='l' colspan='2'>Through week ", lf[["week"]] - 1, "</td>", paste(vapply(agg(pre), cell, ""), collapse = ""), "<td></td></tr>") else ""
+  tot <- paste0("<tr class='tot'><td class='l' colspan='2'>Season to date</td>", paste(vapply(agg(T), cell, ""), collapse = ""), "<td></td></tr>")
+  money <- T |> group_by(tab_label, contest_label) |> summarise(weeks = n(), fees = sum(fees), won = sum(won), cashes = sum(cashes, na.rm = TRUE), entries = sum(entries),
+    top1 = sum(top1, na.rm = TRUE), top01 = sum(top01, na.rm = TRUE), top001 = sum(top001, na.rm = TRUE), .groups = "drop") |>
+    mutate(roi = won / fees - 1, ord = match(tab_label, c("Cash (double-ups)", "High floor", "High ceiling", "Max ceiling"))) |> arrange(ord, contest_label)
+  mt <- paste0('<div class="tw"><table><thead><tr><th class="l">Tab</th><th class="l">Contest</th><th>Weeks</th><th>Entry fees</th><th>Won</th><th>ROI</th><th>Cash rate</th><th>Top-1% weeks</th><th>Top-0.1%</th><th>Top-0.01%</th></tr></thead><tbody>',
+    paste0(sprintf("<tr><td class='l'>%s</td><td class='l'>%s</td><td>%d</td><td>%s</td><td>%s</td>%s<td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>", money$tab_label, money$contest_label, money$weeks,
+      dfs_money(round(money$fees)), dfs_money(round(money$won)), vapply(money$roi, cell, ""), dfs_pct(money$cashes / money$entries), ifelse(money$contest_label == "Double-up", "", money$top1),
+      ifelse(money$contest_label == "Double-up", "", money$top01), ifelse(money$contest_label == "Double-up", "", money$top001)), collapse = ""), "</tbody></table></div>")
+  past <- TR$track |> filter(season < !!season) |> group_by(tab_label, contest_label) |> summarise(weeks = n(), roi = sum(won) / sum(fees) - 1, top001 = sum(top001, na.rm = TRUE), .groups = "drop") |>
+    mutate(ord = match(tab_label, c("Cash (double-ups)", "High floor", "High ceiling", "Max ceiling"))) |> arrange(ord, contest_label)
+  pt_html <- if (nrow(past)) paste0("<h2>Back-test, earlier seasons (rebuilt the same way)</h2><div class='tw'><table><thead><tr><th class='l'>Tab</th><th class='l'>Contest</th><th>Weeks</th><th>ROI</th><th>Top-0.01% weeks</th></tr></thead><tbody>",
+    paste0(sprintf("<tr><td class='l'>%s</td><td class='l'>%s</td><td>%d</td>%s<td>%s</td></tr>", past$tab_label, past$contest_label, past$weeks, vapply(past$roi, cell, ""),
+      ifelse(past$contest_label == "Double-up", "", past$top001)), collapse = ""), "</tbody></table></div>") else ""
+  paste0(head,
+    sprintf("<p class='s'>ROI = winnings ÷ entry fees − 1, per tab and contest: 20 entries in the Play-Action ($3) and in the Millionaire ($20) for the three tournament tabs, 10 double-ups for the cash tab. <b>live</b> = the lineups the page froze at that slate's first kickoff (from week %d); <b>backfill</b> = earlier weeks rebuilt with today's code from that week's pre-game data, with models fitted without that season (so it is what the tabs would have done, not what was posted). Finishes and payouts come from the real contests (stat-api): exact payouts in the top ~1,000 places, then a smooth line to the real min cash. Double-ups: a lineup cashes at the score of 44.4%% of the Play-Action field and pays 1.8× (an approximation: we have no double-up standings). Updated %s.</p>",
+      lf[["week"]], format(TR$built, "%b %d")),
+    "<h2>Week by week</h2><div class='tw'><table><thead><tr><th class='l'>Week</th><th class='l'>Lineups</th>", paste0("<th>", cols$head, "</th>", collapse = ""), "<th class='l'>Big finishes</th></tr></thead><tbody>",
+    paste(rows, collapse = ""), tot_pre, tot, "</tbody></table></div>",
+    "<h2>Season totals</h2>", mt, pt_html, "</body></html>")
 }

@@ -299,6 +299,9 @@ P <- list(season = SEASON, week = WEEK, now = NOW, rows = rows, spec = S, slate 
           last_pull = last_pull, n_locked = if (!is.null(slate)) sum(slate$ko <= NOW) else 0L, n_slate = if (!is.null(slate)) nrow(slate) else nrow(games),
           n_unmatched = n_unm, dk_err = if (is.null(sal)) dk_err else NA_character_, lu = LU, own_src = own_src)
 html <- dfs_page(P)
+P$track <- tryCatch(readRDS(file.path(PROJ_DIR, "output/dfs/dfs_track.rds")), error = function(e) NULL)      # 98b_dfs_track.R (published by site_publish.R)
+dir.create(file.path(SITE_DIR, "dfs", "track"), recursive = TRUE, showWarnings = FALSE)
+writeLines(dfs_track_page(P), file.path(SITE_DIR, "dfs", "track", "index.html"))
 for (kind in c("cash", "floor", "gpp", "max")) { dir.create(file.path(SITE_DIR, "dfs", kind), recursive = TRUE, showWarnings = FALSE)
   writeLines(dfs_lineup_page(P, kind), file.path(SITE_DIR, "dfs", kind, "index.html")) }
 dir.create(file.path(SITE_DIR, "dfs", "archive"), recursive = TRUE, showWarnings = FALSE)
