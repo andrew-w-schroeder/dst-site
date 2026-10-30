@@ -7,13 +7,15 @@
 ##    are tied together by a Gaussian copula with 94's role-pair correlations for that game's environment (QB + his
 ##    receivers, RB + his D/ST, D/ST vs the opposing QB, RB + opposing WR in blowouts, opposing WRs in shootouts, ...).
 ## 2. The field: F lineups drawn from projected ownership under the $50K cap (60% stack their QB with a teammate). In every
-##    simulation the cash line is the field's 76th percentile (Play-Action / Millionaire pay ~ the top 22-25%; was the 55th,
-##    double-ups, until 2026-10-29) and the top-1% line its 99th.
+##    simulation two cash lines: the field's 55th percentile (double-ups / 50-50s pay ~ the top 45%) and its 76th
+##    (Play-Action / Millionaire pay ~ the top 22-25%); the top-1% line is its 99th.
 ## 3. Candidates: lineups from an integer program (lpSolve) that maximises points of one simulated week, or the
 ##    projection with noise and an ownership discount, under different stack rules (none; QB + 1 or 2 pass catchers;
 ##    + a bring-back; RB + his D/ST). Each candidate's P(cash) and P(top 1%) = its share of simulations above the line.
 ## 4. Portfolios (Andrew 2026-10-29, from the 2023-26 back-tests 91b / 91c on real Play-Action + Millionaire results):
-##    high floor ("cash" page) = the 20 best projections with a QB stack (QB + 1+ of his WR / TE) and no player facing our
+##    cash ("cash" page, double-ups; Andrew 2026-10-29: keep it, 7-8 of 10 cashed) = the 10 best simulated P(beat the 55th
+##      percentile), each differing by 3+ players (as since 2026-10-04);
+##    high floor ("floor" page, tournament cashing) = the 20 best projections with a QB stack (QB + 1+ of his WR / TE) and no player facing our
 ##      own D/ST, each differing by 3+ players (most cashes: 8.4 / 9.7 of 20 per week in the Millionaire / Play-Action);
 ##    high ceiling ("gpp" page) = ~2,500 candidate lineups (projection x noise, random stack rules, some with a $49.9K floor
 ##      or a light ownership discount; nobody facing our D/ST) ranked by the trait model (91c: which traits finish top 1%
@@ -24,7 +26,7 @@ suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(purrr) 
 
 ## Tournament target (Andrew 2026-10-04, NFL $700K Play-Action: $3, 277,447 entries, 20-entry max, $50K to 1st): 20 lineups
 ## maximising P(at least one finishes in the top 0.01%, about the top 28 places), which is where the prize money is.
-OPT <- list(S = 10000, F = 20000, cash_q = 0.76, top_q = 0.99, n_gpp_cand = 2500, n_cash_cand = 300, n_lineups = 20,
+OPT <- list(S = 10000, F = 20000, cash_q = 0.55, gcash_q = 0.76, top_q = 0.99, n_gpp_cand = 2500, n_cash_cand = 300, n_lineups = 10, floor_n = 20,
             gpp_n = 20, gpp_top = 1e-4, contest_n = 277447, min_diff = 3, max_expo_frac = 0.5, smooth = 2.5,
             field_stack = 0.60, cap = 50000, field_min_sal = 48500, seed = 7)
 
@@ -256,15 +258,15 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
   ## the field; per simulation: cash line (55th pct), top 1%, top 0.1%, and the elite line = the k-th best field score
   ## with k = F x gpp_top (F = 20,000, top 0.01%: the 2nd best), i.e. "beats all but 0.01% of the field"
   FL <- sim_field(P, opt$F, opt, say = say); nF <- nrow(FL)
-  kk <- c(cash = round(opt$cash_q * nF), top = round(opt$top_q * nF), top01 = round(0.999 * nF), elite = nF - max(1, round(nF * opt$gpp_top)) + 1)
-  lines <- matrix(NA_real_, opt$S, 4, dimnames = list(NULL, names(kk)))
+  kk <- c(cash = round(opt$cash_q * nF), gcash = round(opt$gcash_q * nF), top = round(opt$top_q * nF), top01 = round(0.999 * nF), elite = nF - max(1, round(nF * opt$gpp_top)) + 1)
+  lines <- matrix(NA_real_, opt$S, length(kk), dimnames = list(NULL, names(kk)))
   for (ch in split(seq_len(opt$S), ceiling(seq_len(opt$S) / 500))) {
     FS <- matrix(0, nF, length(ch)); for (j in 1:9) FS <- FS + X[FL[, j], ch, drop = FALSE]
     lines[ch, ] <- t(apply(FS, 2, \(v) sort(v, partial = kk)[kk])) }
   field_own <- tabulate(FL, nrow(P)) / nF
   fkey <- apply(t(apply(FL, 1, sort)), 1, paste, collapse = "-")
-  say(sprintf("opt: field of %s lineups; median lines: cash %.1f, top 1%% %.1f, top 0.1%% %.1f, top %s%% %.1f (%.0f s)", format(nF, big.mark = ","),
-              median(lines[, "cash"]), median(lines[, "top"]), median(lines[, "top01"]), format(100 * opt$gpp_top), median(lines[, "elite"]), el()))
+  say(sprintf("opt: field of %s lineups; median lines: double-up %.1f, tournament cash %.1f, top 1%% %.1f, top 0.1%% %.1f, top %s%% %.1f (%.0f s)", format(nF, big.mark = ","),
+              median(lines[, "cash"]), median(lines[, "gcash"]), median(lines[, "top"]), median(lines[, "top01"]), format(100 * opt$gpp_top), median(lines[, "elite"]), el()))
   ## candidates. Tournament: lineups that are best in one simulated week (with and without an ownership discount), and
   ## projection / ceiling lineups that pay for ownership (game theory: a player the field owns at 40% lifts 40% of the
   ## field when he hits, so he barely moves you up; the elite target already rewards being different, this widens the
@@ -273,7 +275,7 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
   q90 <- Q[, which.min(abs(OPT_U - 0.9))]
   nvd <- lp_no_vs_dst(P); floor_c <- list(A = list(P$salary), dir = ">=", rhs = 49900)
   ## high floor: the 20 best projections with a QB stack and nobody facing our D/ST
-  hf <- lp_best_n(P, P$dk_proj, base, lp_join(lp_stack(P, STACKS$qb1), nvd), opt$n_lineups, opt$min_diff)
+  hf <- lp_best_n(P, P$dk_proj, base, lp_join(lp_stack(P, STACKS$qb1), nvd), opt$floor_n, opt$min_diff)
   for (l in hf) { cands[[length(cands) + 1]] <- l; typ <- c(typ, "floor") }
   say(sprintf("opt: %d high-floor lineups (%.0f s)", length(hf), el()))
   ## high ceiling candidates (as 91c): projection x noise under a random stack rule, 30% with a $49.9K floor, 25% with a light
@@ -283,21 +285,27 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
     w <- P$dk_proj * exp(rnorm(nrow(P), 0, sdv)) * (if (runif(1) < 0.25) (1 - P$own)^runif(1, 0.05, 0.5) else 1)
     ex <- lp_join(lp_stack(P, STACKS[[st_n]]), nvd); if (runif(1) < 0.3) ex <- lp_join(ex, floor_c)
     l <- lp_solve_lineup(w, base, ex); if (!is.null(l)) { cands[[length(cands) + 1]] <- l; typ <- c(typ, "ceiling") } }
+  ## double-up candidates (as since 2026-10-04): projection + noise with a small variance penalty
+  q25 <- Q[, which.min(abs(OPT_U - 0.25))]
+  for (it in seq_len(opt$n_cash_cand)) {
+    st_n <- c("none", "qb1")[(it - 1) %% 2 + 1]
+    w <- P$dk_proj + rnorm(nrow(P), 0, 0.8) - (q90 - q25) * runif(1, 0, 0.15)
+    l <- lp_solve_lineup(w, base, lp_stack(P, STACKS[[st_n]])); if (!is.null(l)) { cands[[length(cands) + 1]] <- l; typ <- c(typ, "cash") } }
   Lc <- t(vapply(cands, \(l) sort(l), integer(9)))
   ok <- apply(Lc, 1, \(l) length(unique(P$game_id[l])) >= 2) & !duplicated(Lc)        # DK: players from 2+ games
   Lc <- Lc[ok, , drop = FALSE]; typ <- typ[ok]
   say(sprintf("opt: %d distinct candidates (%.0f s)", nrow(Lc), el()))
   ## odds per candidate (scores in chunks of simulations)
   nC <- nrow(Lc); p_cash <- p_top <- p_top01 <- p_elite <- mean_sc <- q90_sc <- numeric(nC)
-  helite <- matrix(0, nC, opt$S); htop <- matrix(FALSE, nC, opt$S); hcash <- matrix(FALSE, nC, opt$S)
+  helite <- matrix(0, nC, opt$S); htop <- matrix(FALSE, nC, opt$S); hcash <- matrix(FALSE, nC, opt$S); hgcash <- matrix(FALSE, nC, opt$S)
   for (ch in split(seq_len(opt$S), ceiling(seq_len(opt$S) / 1000))) {
     SC <- lineup_scores(Lc, X[, ch, drop = FALSE])
-    hcash[, ch] <- sweep(SC, 2, lines[ch, "cash"], ">"); htop[, ch] <- sweep(SC, 2, lines[ch, "top"], ">")
+    hcash[, ch] <- sweep(SC, 2, lines[ch, "cash"], ">"); hgcash[, ch] <- sweep(SC, 2, lines[ch, "gcash"], ">"); htop[, ch] <- sweep(SC, 2, lines[ch, "top"], ">")
     p_top01 <- p_top01 + rowSums(sweep(SC, 2, lines[ch, "top01"], ">"))
     p_elite <- p_elite + rowSums(sweep(SC, 2, lines[ch, "elite"], ">"))
     helite[, ch] <- plogis(sweep(SC, 2, lines[ch, "elite"], "-") / opt$smooth)
     mean_sc <- mean_sc + rowSums(SC) }
-  p_cash <- rowMeans(hcash); p_top <- rowMeans(htop); p_top01 <- p_top01 / opt$S; p_elite <- p_elite / opt$S; mean_sc <- mean_sc / opt$S
+  p_cash <- rowMeans(hcash); p_gcash <- rowMeans(hgcash); p_top <- rowMeans(htop); p_top01 <- p_top01 / opt$S; p_elite <- p_elite / opt$S; mean_sc <- mean_sc / opt$S
   q90_sc <- apply(lineup_scores(Lc, X[, seq_len(min(opt$S, 4000)), drop = FALSE]), 1, quantile, 0.9, names = FALSE)
   ## expected copies of each lineup among the contest's other entries (exact matches in the simulated field, scaled up)
   dup <- tabulate(match(fkey, apply(Lc, 1, paste, collapse = "-")), nC) / nF * opt$contest_n
@@ -305,7 +313,8 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
   ## high floor = the rules lineups in the order found; high ceiling = the 20 best by the trait model (simulated P(top 1%)
   ## if there is no model file)
   key <- apply(Lc, 1, paste, collapse = "-")
-  kc <- match(vapply(hf, paste, "", collapse = "-"), key); kc <- kc[!is.na(kc)]
+  kf <- match(vapply(hf, paste, "", collapse = "-"), key); kf <- kf[!is.na(kf)]
+  kc <- pick_cash(p_cash, Lc, opt$n_lineups, opt$min_diff)                             # double-ups: the 10 best P(cash)
   Tt <- lineup_traits(Lc, P) |> mutate(proj = rowSums(matrix(P$dk_proj[Lc], nC)), ceil = rowSums(matrix(q90[Lc], nC)))
   ci <- which(typ == "ceiling")
   sc <- if (!is.null(trait_model)) trait_score(Tt, trait_model) else qlogis(pmin(pmax(p_top, 1e-4), 1 - 1e-4))
@@ -315,9 +324,10 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
   lab <- vapply(seq_len(nC), \(k) stack_label(Lc[k, ], P), "")
   mk <- function(keep, kind) {
     if (!length(keep)) return(tibble())
-    bind_rows(lapply(seq_along(keep), \(r) { k <- keep[r]; sl <- dk_slots(Lc[k, ], P)
+    pk_cash <- if (kind == "cash") p_cash else p_gcash                                 # double-up line for the cash page, tournament line otherwise
+    bind_rows(lapply(seq_along(keep), \(r) { k <- keep[r]; sl <- dk_slots(Lc[k, ], P); pc_k <- pk_cash[k]
       tibble(kind = kind, lineup = r, slot = c("QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"), idx = sl,
-             p_cash = p_cash[k], p_top = p_top[k], p_top01 = p_top01[k], p_elite = p_elite[k], dup = dup[k],
+             p_cash = pc_k, p_dbl = p_cash[k], p_gcash = p_gcash[k], p_top = p_top[k], p_top01 = p_top01[k], p_elite = p_elite[k], dup = dup[k],
              proj = sum(P$dk_proj[sl]), salary = sum(P$salary[sl]), own_sum = sum(P$own[sl]), own_prod = prod(pmax(P$own[sl], 1e-3)),
              mean_score = mean_sc[k], q90 = q90_sc[k], stack = lab[k], rel_top1 = rel[k]) })) |>
       mutate(name = P$player_name[idx], pos = P$pos[idx], team = P$team[idx], opp = P$opp[idx], player_salary = P$salary[idx],
@@ -334,11 +344,12 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
   stx <- tibble(stack = lab, p_top = p_top, p_elite = p_elite, p_cash = p_cash) |> group_by(stack) |>
     summarise(n = n(), best_elite = max(p_elite), mean_elite10 = mean(sort(p_elite, decreasing = TRUE)[1:min(10, n())]),
               best_top = max(p_top), best_cash = max(p_cash), .groups = "drop") |> arrange(desc(mean_elite10))
-  say(sprintf("opt: done in %.0f s; tournament P(any of %d in the top %s%%) %.1f%% (top 0.1%%: %.1f%%, top 1%%: %.1f%%); cash expected cashes %.1f of %d",
+  say(sprintf("opt: done in %.0f s; tournament P(any of %d in the top %s%%) %.1f%% (top 0.1%%: %.1f%%, top 1%%: %.1f%%); double-up expected cashes %.1f of %d",
               el(), length(kg), format(100 * opt$gpp_top), 100 * port$any_elite, 100 * port$any_top01, 100 * port$any_top, n_cash, length(kc)))
-  list(cash = mk(kc, "cash"), gpp = mk(kg, "gpp"), any_top = port$any_top, port = port, n_cash = n_cash, stacks = stx,
-       ranker = if (!is.null(trait_model)) "trait" else "sim", gpp_n_cash = if (length(kg)) mean(colSums(hcash[kg, , drop = FALSE])) else NA,
-       lines = tibble(cash_med = median(lines[, "cash"]), top_med = median(lines[, "top"]), top01_med = median(lines[, "top01"]),
+  list(cash = mk(kc, "cash"), floor = mk(kf, "floor"), gpp = mk(kg, "gpp"), any_top = port$any_top, port = port, n_cash = n_cash, stacks = stx,
+       ranker = if (!is.null(trait_model)) "trait" else "sim",
+       floor_n_cash = if (length(kf)) mean(colSums(hgcash[kf, , drop = FALSE])) else NA, gpp_n_cash = if (length(kg)) mean(colSums(hgcash[kg, , drop = FALSE])) else NA,
+       lines = tibble(cash_med = median(lines[, "cash"]), gcash_med = median(lines[, "gcash"]), gcash_q = opt$gcash_q, top_med = median(lines[, "top"]), top01_med = median(lines[, "top01"]),
                       elite_med = median(lines[, "elite"]), cash_q = opt$cash_q, top_q = opt$top_q, gpp_top = opt$gpp_top),
        field_own = tibble(id = P$gsis_id, name = P$player_name, pos = P$pos, own = P$own, field = field_own),
        n_cand = nC, S = opt$S, F = nF, contest_n = opt$contest_n, gpp_n = opt$gpp_n, secs = el())

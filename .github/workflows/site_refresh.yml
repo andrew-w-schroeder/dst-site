@@ -98,7 +98,8 @@ jobs:
           fi
           # a publish from RStudio can land while this runs: rebase onto it and try again
           for i in 1 2 3 4 5; do
-            if git pull --rebase origin main && git push origin HEAD:main; then exit 0; fi
+            # -X theirs: when this run and another one both rebuilt the same generated file, keep this run's (newer) copy
+            if git pull --rebase -X theirs origin main && git push origin HEAD:main; then exit 0; fi
             git rebase --abort 2>/dev/null || true
             echo "Push raced a publish; retrying ($i of 5)"; sleep $((5 + RANDOM % 15))
           done

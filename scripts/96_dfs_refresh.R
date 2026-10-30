@@ -259,7 +259,7 @@ if ("dk_proj_vegas" %in% names(rows) && any(!is.na(rows$dk_proj_vegas))) {
   rows <- bind_rows(rows, dv)
 }
 
-## ---- 5b. Lineup optimizer: 20 high-floor (cash) and 20 high-ceiling (tournament) lineups (dfs_opt.R; Andrew 2026-10-04,
+## ---- 5b. Lineup optimizer: 10 double-up (cash), 20 high-floor and 20 high-ceiling tournament lineups (dfs_opt.R; Andrew 2026-10-04,
 ## builds from the 2023-26 back-tests 2026-10-29; the high-ceiling ranking uses output/dfs/trait_model.rds from 91c) ----
 ## Re-optimised at every refresh until the slate's first kickoff, then frozen (data/dfs/lineups_<s>_wk<ww>.rds), so the
 ## lineups you entered stay on the page. NO_OPT=1 skips it; OPT_S / OPT_F / OPT_CAND change the simulation sizes.
@@ -283,10 +283,11 @@ if (file.exists(OPT_RDS) && (started || nzchar(Sys.getenv("NO_OPT")))) { LU <- r
   LU <- c(R, list(built = NOW, frozen = FALSE)); saveRDS(LU, OPT_RDS)
 }, error = function(e) message("dfs: optimizer failed — ", conditionMessage(e)))
 if (!is.null(LU)) {
-  dir.create(file.path(SITE_DIR, "dfs", "cash"), recursive = TRUE, showWarnings = FALSE); dir.create(file.path(SITE_DIR, "dfs", "gpp"), recursive = TRUE, showWarnings = FALSE)
+  for (kd in c("cash", "floor", "gpp")) dir.create(file.path(SITE_DIR, "dfs", kd), recursive = TRUE, showWarnings = FALSE)
   if (!exists("dk_upload_csv")) source(file.path(PROJ_DIR, "scripts/dfs_opt.R"))
   dk_upload_csv(LU$cash, file.path(SITE_DIR, "dfs", "cash", sprintf("DK_cash_lineups_%d_wk%02d.csv", SEASON, WEEK)))
   dk_upload_csv(LU$gpp, file.path(SITE_DIR, "dfs", "gpp", sprintf("DK_tournament_lineups_%d_wk%02d.csv", SEASON, WEEK)))
+  if (!is.null(LU$floor)) dk_upload_csv(LU$floor, file.path(SITE_DIR, "dfs", "floor", sprintf("DK_high_floor_lineups_%d_wk%02d.csv", SEASON, WEEK)))
 }
 
 ## ---- 6. Page + table ----
@@ -297,7 +298,7 @@ P <- list(season = SEASON, week = WEEK, now = NOW, rows = rows, spec = S, slate 
           last_pull = last_pull, n_locked = if (!is.null(slate)) sum(slate$ko <= NOW) else 0L, n_slate = if (!is.null(slate)) nrow(slate) else nrow(games),
           n_unmatched = n_unm, dk_err = if (is.null(sal)) dk_err else NA_character_, lu = LU, own_src = own_src)
 html <- dfs_page(P)
-for (kind in c("cash", "gpp")) { dir.create(file.path(SITE_DIR, "dfs", kind), recursive = TRUE, showWarnings = FALSE)
+for (kind in c("cash", "floor", "gpp")) { dir.create(file.path(SITE_DIR, "dfs", kind), recursive = TRUE, showWarnings = FALSE)
   writeLines(dfs_lineup_page(P, kind), file.path(SITE_DIR, "dfs", kind, "index.html")) }
 dir.create(file.path(SITE_DIR, "dfs", "archive"), recursive = TRUE, showWarnings = FALSE)
 arch_name <- sprintf("dfs_%d_wk%02d.html", SEASON, WEEK)
