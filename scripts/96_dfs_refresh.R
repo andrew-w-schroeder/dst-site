@@ -259,7 +259,8 @@ if ("dk_proj_vegas" %in% names(rows) && any(!is.na(rows$dk_proj_vegas))) {
   rows <- bind_rows(rows, dv)
 }
 
-## ---- 5b. Lineup optimizer: 10 cash lineups and 10 tournament lineups (dfs_opt.R; Andrew 2026-10-04) ----
+## ---- 5b. Lineup optimizer: 20 high-floor (cash) and 20 high-ceiling (tournament) lineups (dfs_opt.R; Andrew 2026-10-04,
+## builds from the 2023-26 back-tests 2026-10-29; the high-ceiling ranking uses output/dfs/trait_model.rds from 91c) ----
 ## Re-optimised at every refresh until the slate's first kickoff, then frozen (data/dfs/lineups_<s>_wk<ww>.rds), so the
 ## lineups you entered stay on the page. NO_OPT=1 skips it; OPT_S / OPT_F / OPT_CAND change the simulation sizes.
 OPT_RDS <- file.path(PROJ_DIR, sprintf("data/dfs/lineups_%d_wk%02d.rds", SEASON, WEEK)); LU <- NULL
@@ -276,7 +277,9 @@ if (file.exists(OPT_RDS) && (started || nzchar(Sys.getenv("NO_OPT")))) { LU <- r
   tot <- imp |> group_by(game_id) |> summarise(total = sum(implied), .groups = "drop")
   env_tab <- imp |> left_join(tot, by = "game_id") |> transmute(game_id, team, env = dfs_env(spread, total), fav = spread > 0)
   if (is.null(S$cor)) message("dfs: no game correlations in this week's DFS fit (rerun 94): players simulated independently")
-  R <- dfs_optimize(rows |> filter(pos != "DSTV"), S, dst_b$unc, env_tab, OPT, say = message)
+  TM <- tryCatch(readRDS(file.path(PROJ_DIR, "output/dfs/trait_model.rds")), error = function(e) NULL)
+  if (is.null(TM)) message("dfs: no trait model (output/dfs/trait_model.rds): high-ceiling lineups ranked by simulated P(top 1%)")
+  R <- dfs_optimize(rows |> filter(pos != "DSTV"), S, dst_b$unc, env_tab, OPT, say = message, trait_model = TM)
   LU <- c(R, list(built = NOW, frozen = FALSE)); saveRDS(LU, OPT_RDS)
 }, error = function(e) message("dfs: optimizer failed — ", conditionMessage(e)))
 if (!is.null(LU)) {
