@@ -87,7 +87,12 @@ dk_exceed <- function(v, cut, t, pos, ex, grid = DK_GRID) {
 ## Alternative (spec "Q"): P(DK >= c) read off a fine grid of quantile regressions y ~ v per position (taus 0.02 ... 0.98):
 ## the predicted quantiles are sorted (monotone) and c is located between them; beyond the 98th percentile an
 ## exponential tail matched to the 90th-98th percentile gap. qg: tibble(pos, tau, term, coef) on that grid
-dk_exceed_q <- function(v, cut, pos, qg) {
+## boom tail (94 section 5b): generalised Pareto above the 90th percentile; tail = tibble(pos, v, scale, shape) on a v grid
+dk_tail_par <- function(v, p, tail) { r <- tail[tail$pos == p, ]
+  list(scale = approx(r$v, r$scale, xout = v, rule = 2)$y, shape = approx(r$v, r$shape, xout = v, rule = 2)$y) }
+dk_gpd_S <- function(x, sc, sh) { z <- 1 + sh * x / sc; ifelse(abs(sh) < 1e-6, exp(-x / sc), ifelse(z > 0, z^(-1 / sh), 0)) }
+dk_gpd_Q <- function(pe, sc, sh) ifelse(abs(sh) < 1e-6, -sc * log(pe), sc / sh * (pe^(-sh) - 1))     # excess with P(exceed) = pe
+dk_exceed_q <- function(v, cut, pos, qg, tail = NULL) {
   out <- rep(NA_real_, length(v)); taus <- sort(unique(qg$tau))
   for (p in unique(pos)) {
     i <- which(pos == p); r <- qg[qg$pos == p, ]
@@ -95,7 +100,9 @@ dk_exceed_q <- function(v, cut, pos, qg) {
     b1 <- r$coef[r$term == "v"][match(taus, r$tau[r$term == "v"])]
     Q <- outer(v[i], b1) + matrix(b0, nrow = length(i), ncol = length(taus), byrow = TRUE)
     Q <- t(apply(Q, 1, sort)); Q <- matrix(Q, nrow = length(i))
+    tp <- if (!is.null(tail) && any(tail$pos == p)) dk_tail_par(v[i], p, tail) else NULL; j90 <- which.min(abs(taus - 0.90))
     out[i] <- vapply(seq_along(i), \(k) { q <- Q[k, ]; cc <- cut[i][k]
+      if (!is.null(tp) && cc > q[j90]) return((1 - taus[j90]) * dk_gpd_S(cc - q[j90], tp$scale[k], tp$shape[k]))
       if (cc <= q[1]) return(1 - taus[1] * max(0, (cc - (q[1] - 5)) / 5))             # below the 2nd percentile: to 1 over 5 points
       if (cc >= q[length(q)]) { j90 <- which.min(abs(taus - 0.90)); s <- max((q[length(q)] - q[j90]) / log((1 - taus[j90]) / (1 - taus[length(taus)])), 0.5)
         return((1 - taus[length(taus)]) * exp(-(cc - q[length(q)]) / s)) }
@@ -109,7 +116,7 @@ dk_exceed_q <- function(v, cut, pos, qg) {
 dk_odds <- function(v, cut, t, pos, S) {
   out <- rep(NA_real_, length(v)); ch <- S$exceed_spec
   for (p in unique(pos)) { i <- which(pos == p)
-    out[i] <- if (identical(unname(ch[p]), "Q")) dk_exceed_q(v[i], cut[i], pos[i], S$qgrid) else dk_exceed(v[i], cut[i], t[i], pos[i], S$exceed) }
+    out[i] <- if (identical(unname(ch[p]), "Q")) dk_exceed_q(v[i], cut[i], pos[i], S$qgrid, S$tail) else dk_exceed(v[i], cut[i], t[i], pos[i], S$exceed) }
   out
 }
 ## outcome quantiles from quantile regression y ~ v per position (as 68 does for the other formats): q10 q25 q50 q75 q90

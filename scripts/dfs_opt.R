@@ -36,7 +36,7 @@ OPT <- list(S = 10000, F = 20000, cash_q = 0.55, gcash_q = 0.76, top_q = 0.99, n
 ## ---- quantile functions ----
 ## player rows: matrix of quantiles on a fine u grid, from 94's quantile grid (skill) or the D/ST residual kernel
 OPT_U <- c(0.001, seq(0.02, 0.98, by = 0.02), 0.999)
-q_skill <- function(v, pos, qg) {
+q_skill <- function(v, pos, qg, tail = NULL) {
   taus <- sort(unique(qg$tau)); out <- matrix(NA_real_, length(v), length(OPT_U))
   for (p in unique(pos)) { i <- which(pos == p); r <- qg[qg$pos == p, ]
     b0 <- r$coef[r$term == "(Intercept)"][match(taus, r$tau[r$term == "(Intercept)"])]
@@ -46,7 +46,12 @@ q_skill <- function(v, pos, qg) {
     s <- pmax((Q[, n] - Q[, j90]) / log((1 - taus[j90]) / (1 - taus[n])), 0.5)
     lo <- pmax(-2, Q[, 1] - (Q[, 3] - Q[, 1]))
     hi <- Q[, n] + s * log((1 - taus[n]) / 0.001)
-    out[i, ] <- cbind(lo, Q, hi) }
+    out[i, ] <- cbind(lo, Q, hi)
+    ## boom tail (94 section 5b, 94b): above the 90th percentile, generalised Pareto quantiles instead of the exponential extension
+    if (!is.null(tail) && any(tail$pos == p)) { tp <- dk_tail_par(v[i], p, tail); j <- which.min(abs(OPT_U - 0.90)); hiu <- which(OPT_U > OPT_U[j])
+      q90 <- out[i, j]
+      for (jj in hiu) out[i, jj] <- q90 + dk_gpd_Q((1 - OPT_U[jj]) / (1 - OPT_U[j]), tp$scale, tp$shape)
+      out[i, ] <- t(apply(out[i, , drop = FALSE], 1, cummax)) } }
   out
 }
 q_dst <- function(proj, unc) {
@@ -254,7 +259,7 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
   gt <- ti |> group_by(game_id) |> summarise(total_g = sum(imp_team), .groups = "drop"); P$total_g <- coalesce(gt$total_g[match(P$game_id, gt$game_id)], 0)
   ## quantile rows
   Q <- matrix(NA_real_, nrow(P), length(OPT_U)); sk <- P$pos != "DST"
-  Q[sk, ] <- q_skill(P$dk_proj[sk], P$pos[sk], S_spec$qgrid)
+  Q[sk, ] <- q_skill(P$dk_proj[sk], P$pos[sk], S_spec$qgrid, S_spec$tail)
   if (any(!sk)) Q[!sk, ] <- q_dst(P$dk_proj[!sk], dst_unc)
   X <- sim_outcomes(P, Q, S_spec$cor, opt$S, opt$seed)
   say(sprintf("opt: %d players, %d simulations (%.0f s)", nrow(P), opt$S, el()))
