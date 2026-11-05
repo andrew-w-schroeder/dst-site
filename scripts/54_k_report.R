@@ -170,6 +170,7 @@ sys_html <- function(sy) { t <- sys_table(sy)
                        key_status(kit("(Q) / (D) / (O) injury status"), kit("\u26A0 ruled out: hover for the likely replacement"), kit("Weather * = no forecast yet"))))
   paste0(key,
          html_table(t, raw = c("Range bar", "Trend", "Kicker", "Weather", "ECR"), id = paste0("t_", sy), row_cls = attr(t, "row_cls"), cell_cls = attr(t, "cell_cls"), stick = 4),
+         bye_note(P$pred$team),                                                                        # teams on bye (Andrew 2026-11-04)
          "<p class='s'><b>Scoring:</b> ", esc(SC[[sy]]$long), "</p>") }
 panes <- c(paste0("<p class='s'>Colours follow the tiers: dark green = tier 1, light green = tier 2, light / dark red = the bottom two tiers (rank columns: that format's tier; Kicker: the average). Hover or tap a kicker for what drives the ESPN projection.</p>",
                   html_table(cmp_tbl, id = "t_cmp", raw = "Kicker", stick = 4,

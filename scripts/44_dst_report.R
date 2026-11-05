@@ -199,6 +199,7 @@ sys_tab <- function(p) {
   paste0(sprintf("<p class='note'>Feature families in this model: %s.</p>", esc(paste(p$families, collapse = ", "))), key,
          html_table(pt, id = paste0("t_", p$system), sortable = TRUE, left = if (refreshed) 6 else 5, raw_cols = c("Range", "Trend", "Team", "Opp QB", "Weather", "ECR"),
                     row_cls = row_cls, cell_cls = c(list(Team = team_cls, Rank = team_cls, Proj = team_cls), ext_cls), stick = 4),   # Proj coloured like Rank (Andrew 2026-09-25)
+         bye_note(p$pred$team),                                                                                                   # teams on bye (Andrew 2026-11-04)
          if (any(c("ESPN rk", "Vegas rk") %in% names(pt))) "<p class='note'>ECR = FantasyPros expert consensus rank (hover for the average expert rank). Vegas / ESPN / Sleeper rk (rk = rank): that source's rank this week (Vegas = the Vegas-only baseline), with its projected points in parentheses (ESPN and Sleeper in ESPN standard scoring).</p>" else "",
          sprintf("<p class='rules'><b>%s scoring:</b> %s</p>", esc(p$SC$label), esc(p$SC$rules)),
          if (is.null(p$holdout)) sprintf("<h3>Back-test: %s</h3><p class='note'>Each season predicted by models trained only on earlier seasons (from 2018). Every tuning, feature and blend choice maximizes the weekly top-8 edge over Vegas-only on these seasons, so these numbers are optimistic. %s %d is the clean test.</p>",

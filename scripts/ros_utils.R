@@ -111,10 +111,11 @@ function render(){
   const n3=W.slice(0,3),n4=W.slice(0,4),po=PO.filter(w=>W.includes(w));
   const sumW=(t,ws)=>ws.reduce((a,w)=>{const v=val(t,W.indexOf(w));return a+(v==null?0:v);},0);
   const avgW=(t,ws)=>{const vs=ws.map(w=>val(t,W.indexOf(w))).filter(x=>x!=null);return vs.length?vs.reduce((a,b)=>a+b,0)/vs.length:null;};
-  const rows=T.map(t=>{const vs=W.map((w,i)=>val(t,i)).filter(x=>x!=null);
+  const LAST=PO.length?Math.max.apply(null,PO):17,wa=W.filter(w=>w<=LAST);   // ROS avg stops at the last fantasy week: week 18 left out (Andrew 2026-11-04)
+  const rows=T.map(t=>{const vs=W.map((w,i)=>w<=LAST?val(t,i):null).filter(x=>x!=null);
     return {t:t,n3:avgW(t,n3),n4:avgW(t,n4),avg:vs.length?vs.reduce((a,b)=>a+b,0)/vs.length:null,po:po.length?sumW(t,po):null,
             byes:W.filter((w,i)=>!(sc.cells[t]&&sc.cells[t][i]))};});
-  const cols=[['n3','Next 3','pts/game · wks '+n3[0]+'–'+n3[n3.length-1]],['n4','Next 4','pts/game · wks '+n4[0]+'–'+n4[n4.length-1]],['avg','ROS avg','per game']];
+  const cols=[['n3','Next 3','pts/game · wks '+n3[0]+'–'+n3[n3.length-1]],['n4','Next 4','pts/game · wks '+n4[0]+'–'+n4[n4.length-1]],['avg','ROS avg','per game'+(wa.length?' · wks '+wa[0]+'–'+wa[wa.length-1]:'')]];
   if(po.length)cols.push(['po','Wk '+po[0]+'–'+po[po.length-1],'playoffs']);
   const cz={};cols.forEach(([k])=>{const xs=rows.map(r=>r[k]).filter(x=>x!=null),m=xs.reduce((a,b)=>a+b,0)/xs.length,
     sd=Math.sqrt(xs.reduce((a,b)=>a+(b-m)*(b-m),0)/Math.max(1,xs.length-1))||1,s=xs.slice().sort((a,b)=>b-a);cz[k]={m:m,sd:sd,s:s};});
@@ -132,7 +133,7 @@ function render(){
     h+='<tr><td class="tm">'+r.t+who+'</td>';
     cols.forEach(([k])=>{const x=r[k];if(x==null){h+='<td class="sum"></td>';return;}const z=(x-cz[k].m)/cz[k].sd,rr=cz[k].s.indexOf(x)+1;
       const span=k==='n3'?n3:k==='n4'?n4:k==='po'?po:[],by=r.byes.filter(w=>span.includes(w)),pg=k==='n3'||k==='n4';
-      const tip=(k==='avg'?'Average per remaining game: ':pg?'Average per game, weeks '+span[0]+'–'+span[span.length-1]+': ':'Total points: ')+x.toFixed(1)+
+      const tip=(k==='avg'?'Average per remaining game through week '+LAST+' (week 18 not included): ':pg?'Average per game, weeks '+span[0]+'–'+span[span.length-1]+': ':'Total points: ')+x.toFixed(1)+
         ' (rank '+rr+' of '+cz[k].s.length+')'+(by.length?(pg?' · * bye in week '+by.join(', ')+': average of '+(span.length-by.length)+' games':' · includes a bye (0 pts)'):'');
       h+='<td class="sum" style="'+bg(z)+'" title="'+esc(tip)+'">'+x.toFixed(1)+(pg&&by.length?'<sup class="byemark">*</sup>':'')+'</td>';});
     h+='<td class="gap"></td>';

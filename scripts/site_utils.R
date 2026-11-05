@@ -346,6 +346,15 @@ ecr_cell <- function(rk, avg, sd, html = TRUE) ifelse(is.na(rk), "", if (!html) 
   tip_span(as.character(rk), ifelse(is.na(avg), "FantasyPros ECR", sprintf("FantasyPros ECR %d: average expert rank %.1f (\u00b1 %.1f)", as.integer(rk), avg, sd))))
 rank_pts <- function(rk, pts) ifelse(is.na(rk), "", ifelse(is.na(pts), as.character(rk), sprintf("%d (%.1f)", as.integer(rk), pts)))
 ## ---- Track record tab (62_track_record.R → output/track/track_<season>.rds; rendered by 44 and 54) ----
+## ---- Teams on bye (Andrew 2026-11-04): a line under the weekly D/ST and kicker tables ----
+NFL_TEAMS <- c("ARI", "ATL", "BAL", "BUF", "CAR", "CHI", "CIN", "CLE", "DAL", "DEN", "DET", "GB", "HOU", "IND", "JAX", "KC",
+               "LA", "LAC", "LV", "MIA", "MIN", "NE", "NO", "NYG", "NYJ", "PHI", "PIT", "SEA", "SF", "TB", "TEN", "WAS")
+bye_note <- function(playing, what = "") {
+  playing <- dplyr::recode(playing, OAK = "LV", SD = "LAC", STL = "LA", LAR = "LA", JAC = "JAX", WSH = "WAS", ARZ = "ARI")
+  bye <- setdiff(NFL_TEAMS, playing)
+  if (!length(bye)) return("<p class='s bye-note'><b>On bye:</b> none this week.</p>")
+  sprintf("<p class='s bye-note'><b>On bye%s:</b> %s</p>", if (nzchar(what)) paste0(" (no ", what, ")") else "", paste(sort(bye), collapse = ", "))
+}
 track_file <- function(proj_dir, season) file.path(Sys.getenv("TRACK_DIR", file.path(proj_dir, "output/track")), sprintf("track_%d.rds", season))
 `%||%` <- function(a, b) if (is.null(a)) b else a
 .tr_esc <- function(x) { x <- as.character(x); x[is.na(x)] <- ""; x <- gsub("&", "&amp;", x); x <- gsub("<", "&lt;", x); gsub(">", "&gt;", x) }
@@ -363,7 +372,7 @@ tr_table <- function(cols, left = 1, foot = NULL, cls_row = NULL) {        # col
   sprintf('<div class="tw"><table class="track"><thead><tr>%s</tr></thead><tbody>%s</tbody></table></div>', paste(th, collapse = ""), paste(rows, collapse = ""))
 }
 # colour follows the source, never its position (palette slots 1-4 of the reference categorical palette)
-TR_SLOT <- c(Ours = "tc-s1", `Vegas-only` = "tc-s2", Sleeper = "tc-s3", ESPN = "tc-s4")
+TR_SLOT <- c(Ours = "tc-s1", `Vegas-only` = "tc-s2", Sleeper = "tc-s3", ESPN = "tc-s4", ECR = "tc-s5")   # ECR: FantasyPros consensus (Andrew 2026-11-04)
 # one small line chart: d = week, series, value (already cumulative); lower_better flips the note
 tr_chart <- function(d, title, note, fmt = function(v) sprintf("%.2f", v)) {
   d <- d[!is.na(d$value) & d$series %in% names(TR_SLOT), ]; if (!nrow(d)) return("")
@@ -406,6 +415,8 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
                                      tools::toTitleCase(wlab(bf)), if (length(bf) > 1) "are" else "is", if (length(bf) > 1) "those weeks" else "that week") else ""
   intro <- paste0("<p class='s'>How each source's projections did once the games were played: ours (the Tuesday projection), Vegas-only (a regression on the betting lines alone, refit each week on earlier games, same lines), ",
                   "and in ESPN standard scoring Sleeper's and ESPN's weekly projections (Sleeper's re-scored into ESPN standard from its projected stats; the last version before each kickoff). ",
+                  if (any(mm$source == "ECR")) sprintf("<b>ECR</b> = FantasyPros' expert consensus rank, the last version before each kickoff (ESPN standard section; %s): a ranking only, so it has no projection correlation, RMSE or bias, and its averages cover fewer weeks than the others (the site started saving it in week 4). ",
+                                                     wlab(sort(unique(mm$week[mm$source == "ECR"])))) else "",
                   "All ", units, " count, rostered or not, and every metric is computed on the teams all sources projected that week. Charts show the season to date after each week; hover a dot for its value.", bf_note, "</p>",
                   "<p class='s'><b>Rank correlation</b>: how well the order matched the actual finish (1 = perfect, 0 = random). <b>Projection correlation</b>: the same for the projected points themselves, so magnitude counts too. ",
                   "<b>Top-weighted score</b>: like rank correlation but mistakes near the top of the list cost the most (NDCG: 1 = perfect order). ",
@@ -714,10 +725,11 @@ TRACK_CSS <- '
 .tcell{margin:0}.tcell figcaption{font-size:12.5px;margin-bottom:2px}.tcell figcaption span{color:var(--muted,var(--mut,#666))}
 .tc-legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px;margin:.3rem 0}
 .tc-key i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
-:root{--tc1:#2a78d6;--tc2:#eb6834;--tc3:#1baf7a;--tc4:#eda100}
-@media (prefers-color-scheme: dark){:root{--tc1:#3987e5;--tc2:#d95926;--tc3:#199e70;--tc4:#c98500}}
+:root{--tc1:#2a78d6;--tc2:#eb6834;--tc3:#1baf7a;--tc4:#eda100;--tc5:#8a5cd1}
+@media (prefers-color-scheme: dark){:root{--tc1:#3987e5;--tc2:#d95926;--tc3:#199e70;--tc4:#c98500;--tc5:#a07ce6}}
 .tc-s1{stroke:var(--tc1);fill:var(--tc1);background:var(--tc1)}.tc-s2{stroke:var(--tc2);fill:var(--tc2);background:var(--tc2)}
 .tc-s3{stroke:var(--tc3);fill:var(--tc3);background:var(--tc3)}.tc-s4{stroke:var(--tc4);fill:var(--tc4);background:var(--tc4)}
+.tc-s5{stroke:var(--tc5);fill:var(--tc5);background:var(--tc5)}
 .tc-line{fill:none;stroke-width:2;stroke-linejoin:round}.tc-dot{stroke:var(--bg,#fff);stroke-width:2}
 .tc-grid{stroke:var(--line,var(--bd,#ddd));stroke-width:1}.tc-zero{stroke:var(--muted,var(--mut,#888))}.tc-ax{font-size:10.5px;fill:var(--muted,var(--mut,#666))}
 .tc-lab{font-size:11px;fill:var(--fg,#222)}
