@@ -311,8 +311,12 @@ inj_attach <- function(file, players) {
     dplyr::distinct(source, gsis_id, pulled_at, .keep_all = TRUE)
   if (!nrow(m)) return(NULL)
   pre <- m |> dplyr::filter(t < ko)
-  ## a team's latest pre-kickoff pull counts as a whole (a player missing from it has no status any more)
-  last_pull <- pre |> dplyr::group_by(source, gsis_id) |> dplyr::summarise(tl = max(t), .groups = "drop")
+  ## each source's latest pull before the player's kickoff counts as a whole: a player missing from it has no status any
+  ## more (Andrew 2026-11-05: this used the player's own latest row, so a player who came OFF the list kept his old
+  ## status — Joe Fagnano stayed "Out" from Sleeper's Nov 4 07:48 pull and was hidden from Players / DFS for TNF)
+  pulls <- h |> dplyr::filter(!is.na(t)) |> dplyr::distinct(source, t)
+  last_pull <- pre |> dplyr::distinct(source, gsis_id, ko) |> dplyr::inner_join(pulls, by = "source", relationship = "many-to-many") |>
+    dplyr::filter(t < ko) |> dplyr::group_by(source, gsis_id) |> dplyr::summarise(tl = max(t), .groups = "drop")
   pre <- pre |> dplyr::inner_join(last_pull, by = c("source", "gsis_id")) |> dplyr::filter(t == tl)
   post_rep <- m |> dplyr::filter(t >= ko, source == "report") |> dplyr::anti_join(pre |> dplyr::distinct(gsis_id), by = "gsis_id") |>
     dplyr::group_by(gsis_id) |> dplyr::slice_min(t, n = 1, with_ties = FALSE) |> dplyr::ungroup()

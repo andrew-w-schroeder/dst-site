@@ -84,6 +84,8 @@ jobs:
         id: dfs
         if: ${{ steps.players.outcome == 'success' }}
         continue-on-error: true
+        env:
+          STAT_API_KEY: ${{ secrets.STAT_API_KEY }}   # Showdown tab: DK showdown salaries (97s, sourced by 96)
         run: Rscript scripts/96_dfs_refresh.R
 
       - name: Save history and pages

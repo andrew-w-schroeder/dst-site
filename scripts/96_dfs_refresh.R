@@ -320,3 +320,8 @@ out <- rows |> transmute(season = SEASON, week = WEEK, refreshed = isoz(NOW), ga
 write.csv(out, file.path(PROJ_DIR, sprintf("data/dfs/dfs_proj_%d_wk%02d.csv", SEASON, WEEK)), row.names = FALSE)
 message(sprintf("dfs: page written (%d rows: %s; %d slate games; salaries %s)", nrow(rows),
                 paste(names(table(rows$pos)), table(rows$pos), collapse = " "), length(slate_games), if (is.na(sal_src)) "none yet" else sal_src))
+
+## ---- 7. Showdown (Andrew 2026-11-05): 20 lineups per primetime game, 97s_sd_refresh.R (uses the objects above). A failure there
+##          never affects the DFS page.
+if (file.exists(file.path(PROJ_DIR, "scripts/97s_sd_refresh.R")))
+  tryCatch(source(file.path(PROJ_DIR, "scripts/97s_sd_refresh.R"), local = TRUE), error = function(e) message("showdown: failed — ", conditionMessage(e)))
