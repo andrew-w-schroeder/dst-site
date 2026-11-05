@@ -26,8 +26,8 @@ PP_TIP <- c(
   Kickoff = "Kickoff (Eastern). \U0001F512 = game started: frozen at the last props pulled before kickoff.",
   Imp = "Team implied points from the latest pre-kickoff spread and total (median of sportsbooks, from the D/ST page's line pulls).",
   Proj = "Vegas-only projection: the sportsbook props converted to expected stats (yardage medians corrected for skew, counts via a Poisson fit to line and odds, anytime-TD price calibrated on 2023+ results) and scored in this format.",
-  "\u0394" = "Change since the first pull that had props for this player's game this week (see Trend).",
-  Trend = "Projection at every props pull this week, starting once his game's props are posted (open dot = that first pull; earlier pulls with only anytime-TD prices are left out) and stopping at kickoff. Green = up, red = down. Hover a dot for the time.",
+  "\u0394" = "Change since the first point of his Trend (blank for TD-only and no-props rows).",
+  Trend = "Projection at every props pull this week, starting once his own yardage / receptions props are posted (open dot = that first pull; pulls with only anytime-TD prices are left out) and stopping at kickoff. TD-only (TD) and no-props rows have no trend. Green = up, red = down. Hover a dot for the time.",
   "P(boom)" = "Chance of a boom week: half PPR QB 25+, RB / WR 20+, TE 15+ (other formats: the same share of player-games; FLEX uses each player's own position). Logistic fit per position on the Vegas projection and the anytime-TD price, 2023+: at the same projection a higher TD chance means more boom weeks, strongest for RBs, so RB P(boom) doesn't follow the rank exactly.",
   "P(bust)" = "Chance of a bust week: half PPR QB under 12, RB / WR under 6, TE under 4 (other formats: the same share). Logistic fit on the Vegas projection, 2023+.",
   "TD%" = "Anytime-TD price as a probability (median across books; includes the books' margin). Expected TDs in the projection are calibrated from it. On rows without props yet: the sportsbook price when one is posted (it then sets his expected TDs), otherwise italic* = the price implied by his expected TDs from history.",
@@ -160,23 +160,22 @@ pp_search_key <- function(name, team) {
 }
 ## Trend points (Andrew 2026-11-04): the line starts at the first pull in which his game counted as priced (FB_MIN_CORE
 ## players with a yardage / receptions prop, the same rule that ends the italic "no props yet" rows in 65), and never
-## includes a pull at or after his game's kickoff. Earlier pulls (anytime-TD only, or a handful of players) are left out;
-## a player who has his own yardage / receptions props now also skips any earlier pulls where he had only a TD price.
-## Rows still on the no-props fallback get no trend.
+## includes a pull at or after his game's kickoff. Earlier pulls (anytime-TD only, or a handful of players) are left out.
+## v2 (Andrew 2026-11-04): only the player's own rushing / receiving / passing props count, so a pull is a point only
+## when he had a yardage / receptions prop in it; TD-only rows "(TD)" and rows still on the no-props fallback get no
+## trend and no change.
 PP_MIN_CORE <- as.integer(Sys.getenv("FB_MIN_CORE", "6"))
 pp_trend_hist <- function(hist, d, fmt) {
   vc <- paste0("vfp_", fmt)
   empty <- tibble(gsis_id = character(), game_id = character(), t = as.POSIXct(character(), tz = "UTC"), proj = numeric())
   if (is.null(hist) || !nrow(hist) || !vc %in% names(hist)) return(empty)
   if (!"core" %in% names(hist)) hist$core <- TRUE
-  if (!"td_keep" %in% names(hist)) hist$td_keep <- FALSE
-  now <- d |> filter(!fallback %in% TRUE) |>
-    transmute(gsis_id, game_id, ko = if ("ko" %in% names(d)) ko else as.POSIXct(NA, tz = "UTC"),
-              core_now = if ("core" %in% names(d)) core %in% TRUE else TRUE)
+  now <- d |> filter(!fallback %in% TRUE, if ("core" %in% names(d)) core %in% TRUE else TRUE) |>
+    transmute(gsis_id, game_id, ko = if ("ko" %in% names(d)) ko else as.POSIXct(NA, tz = "UTC"))
   hist |> group_by(game_id, t) |> mutate(n_core = sum(core %in% TRUE)) |> ungroup() |>
-    filter(n_core >= PP_MIN_CORE, core %in% TRUE | td_keep %in% TRUE) |>
+    filter(n_core >= PP_MIN_CORE, core %in% TRUE) |>
     inner_join(now, by = c("gsis_id", "game_id")) |>
-    filter(is.na(ko) | t < ko, !(core_now & !core %in% TRUE)) |>
+    filter(is.na(ko) | t < ko) |>
     select(gsis_id, game_id, t, proj = all_of(vc)) |> arrange(t)
 }
 pp_pos_table <- function(P, pos, fmt) {
@@ -205,7 +204,7 @@ pp_pos_table <- function(P, pos, fmt) {
   t <- tibble(Rank = seq_len(nrow(d)), Tier = tr$tier,
               Player = pp_player_cell(d, prk),
               Team = d$team, Opp = paste0(ifelse(d$home == 1, "vs ", "@ "), d$opp), Kickoff = ko, Imp = pp_f(d$implied),
-              Proj = pp_f(v, 2), "\u0394" = ifelse(fb, "", pp_sg(v - first$proj[match(d$gsis_id, first$gsis_id)])),
+              Proj = pp_f(v, 2), "\u0394" = { f0 <- first$proj[match(d$gsis_id, first$gsis_id)]; ifelse(fb | is.na(f0), "", pp_sg(v - f0)) },
               Trend = spark, "P(boom)" = pp_pct(d[[paste0("p_boom_", fmt)]]), "P(bust)" = pp_pct(d[[paste0("p_bust_", fmt)]]))
   if (paste0("q10_", fmt) %in% names(d)) {
     q <- function(k) d[[paste0("q", k, "_", fmt)]]
