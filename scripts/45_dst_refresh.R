@@ -158,7 +158,8 @@ if (!can_swap) message("starters: this week's bundles have no QB scenarios (week
 starters <- tryCatch({
   S <- starter_sources(SEASON, WEEK, weekly_qb$team, cache = file.path(WORK_DIR, "starter_sources.rds"), now = NOW,
                        snap_dir = file.path(PROJ_DIR, "data/lines/sources"))
-  st <- pick_qbs(S, weekly_qb, wk_games, if (!is.null(b1$qb)) b1$qb$pool else NULL, QBO_CSV, SEASON, WEEK)
+  sch_chg <- tryCatch(sched_change_times(ST_CSV, SEASON, WEEK, wk_games, NOW), error = function(e) { message("starters: schedule change times — ", conditionMessage(e)); NULL })
+  st <- pick_qbs(S, weekly_qb, wk_games, if (!is.null(b1$qb)) b1$qb$pool else NULL, QBO_CSV, SEASON, WEEK, sched_changed = sch_chg)
   # games that have kicked off keep the last starter chosen before kickoff (else the weekly QB)
   ko <- if (!is.null(wk_games)) c(setNames(wk_games$kickoff, wk_games$home_team), setNames(wk_games$kickoff, wk_games$away_team)) else NULL
   started <- if (is.null(ko)) character() else st$team[!is.na(ko[st$team]) & NOW >= ko[st$team]]

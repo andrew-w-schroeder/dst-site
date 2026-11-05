@@ -10,12 +10,16 @@
 #   ourlads  : ourlads.com team depth charts — order + status flags (O, D, Q, IR, …), 32 pages
 #
 # Status of a player: the official game status once it exists this week (Out / Doubtful / Questionable);
-# before that, Out if Sleeper or Ourlads says Out / Doubtful. IR, PUP, NFI and suspensions from any source count.
+# before that, Sleeper's status (Out / Doubtful = out), or Ourlads' when Sleeper doesn't list the player (Ourlads pages
+# update about daily and can carry last week's flags; 2026-11-04). IR, PUP, NFI and suspensions count from the report,
+# from Sleeper, and from Ourlads when Sleeper doesn't list the player.
 # "Ruled out" = Out, Doubtful, IR, PUP, NFI or suspended.
 #
 # Starting QB per offense — the first rule that gives an answer:
 #   1. override file
-#   2. Sleeper and Ourlads agree on a starter who differs from the schedule's (e.g. a benching) → that QB
+#   2. Sleeper and Ourlads agree on a starter who differs from the schedule's (e.g. a benching) → that QB — unless the
+#      schedule changed its QB this week AFTER Ourlads last updated that team (the schedule is then the newer news;
+#      2026-11-04: PHI schedule → Joe Milton III while both depth charts still listed Tanner McKee)
 #   3. the schedule's QB, unless ruled out
 #   4. Sleeper depth chart: QB1 unless ruled out, else the first backup not ruled out (Questionable backups last)
 #   5. Ourlads depth chart, same rule
@@ -165,7 +169,10 @@ player_status <- function(S, team, name, id = NA, pos = "QB") {
   key <- st_norm(name); f <- function(tab) { if (is.null(tab) || !nrow(tab)) return(NULL)
     r <- st_match(tab[tab$pos == pos, ], team, key, id); if (NROW(r)) r[1, ] else NULL }
   rep <- f(S$report); sl <- f(S$sleeper); ol <- f(S$ourlads)
-  st <- c(report = if (!is.null(rep)) rep$status else NA, sleeper = if (!is.null(sl)) sl$status else NA, ourlads = if (!is.null(ol)) ol$status else NA)
+  # Sleeper updates continuously, Ourlads pages about once a day: when Sleeper lists the player, its status wins over
+  # Ourlads' (2026-11-04: a stale Ourlads "O" on Drew Lock beat Sleeper's Questionable and benched him on the page)
+  st <- c(report = if (!is.null(rep)) rep$status else NA, sleeper = if (!is.null(sl)) sl$status else NA,
+          ourlads = if (!is.null(ol) && is.null(sl)) ol$status else NA)
   hard <- st[st %in% ST_HARD]
   status <- if (length(hard)) hard[[1]] else if (!is.na(st[["report"]])) st[["report"]] else
     if (any(st[c("sleeper", "ourlads")] %in% c("Out", "Doubtful"))) st[c("sleeper", "ourlads")][st[c("sleeper", "ourlads")] %in% c("Out", "Doubtful")][[1]] else
@@ -179,10 +186,47 @@ player_status <- function(S, team, name, id = NA, pos = "QB") {
        detail = paste(det, collapse = ", "))
 }
 
+## ---- When did each source last change? ----
+# Ourlads' per-team "Updated" stamp, e.g. "11/03/2026 1:22PM" (Eastern) → POSIXct; NA if missing / unparseable
+ourlads_time <- function(x) { if (is.null(x) || !length(x) || is.na(x[1])) return(NA)
+  t <- as.POSIXct(trimws(x[1]), format = "%m/%d/%Y %I:%M%p", tz = "America/New_York"); attr(t, "tzone") <- "UTC"; t }
+# The schedule QB each logged QB row saw: the pick itself when the rule was the schedule, "schedule QB X ruled out", or
+# "Schedule: X" in the note (the schedule disagreed with the pick); NA when the row doesn't say.
+hist_sched_qb <- function(h) {
+  s <- rep(NA_character_, nrow(h))
+  s[h$rule == "nflverse schedule" | startsWith(h$rule, "nflverse schedule (changed")] <- h$player[h$rule == "nflverse schedule" | startsWith(h$rule, "nflverse schedule (changed")]
+  m <- regmatches(h$rule, regexec("^schedule QB (.+) ruled out", h$rule)); x <- vapply(m, function(z) if (length(z) > 1) z[2] else NA_character_, "")
+  s[is.na(s)] <- x[is.na(s)]
+  m <- regmatches(h$note, regexec("Schedule: ([^·]+)", h$note)); x <- trimws(vapply(m, function(z) if (length(z) > 1) z[2] else NA_character_, ""))
+  s[is.na(s)] <- x[is.na(s)]
+  s
+}
+# team → time the schedule's CURRENT QB first appeared, if the schedule changed its QB this week (else NA). From
+# starter_history.csv (this season / week, QB rows): the schedule QB at the team's first refresh of the week vs now. A
+# QB no refresh has logged yet appeared now.
+sched_change_times <- function(hist_file, season, week, games, now = Sys.time()) {
+  if (is.null(games) || !all(c("home_qb_name", "away_qb_name") %in% names(games)) || !file.exists(hist_file)) return(NULL)
+  cur <- c(setNames(games$home_qb_name, st_team(games$home_team)), setNames(games$away_qb_name, st_team(games$away_team)))
+  h <- utils::read.csv(hist_file, stringsAsFactors = FALSE, colClasses = "character")
+  h <- h[h$season == season & h$week == week & h$pos == "QB", ]; if (!nrow(h)) return(NULL)
+  h$note[is.na(h$note)] <- ""; h$rule[is.na(h$rule)] <- ""
+  h$sched <- hist_sched_qb(h); h$t <- as.POSIXct(h$pulled_at, format = "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
+  h <- h[!is.na(h$sched) & !is.na(h$t), ]; h <- h[order(h$t), ]
+  out <- lapply(names(cur), function(tm) {
+    x <- h[h$team == tm, ]; now_qb <- cur[[tm]]
+    if (!nrow(x) || is.na(now_qb) || st_norm(x$sched[1]) == st_norm(now_qb)) return(NA)
+    diff <- which(st_norm(x$sched) != st_norm(now_qb))                       # rows that still showed another QB
+    after <- x$t[seq_len(nrow(x)) > max(diff)]
+    if (length(after)) min(after) else now })
+  setNames(do.call(c, lapply(out, function(z) as.POSIXct(if (is.na(z)) NA else z, origin = "1970-01-01", tz = "UTC"))), names(cur))
+}
+
 ## ---- Starting QBs ----
 # weekly = tibble(team = offense, qb_id, qb_name) from the weekly run; games = week_games() (schedule QBs);
 # pool = tibble(qb_id, qb_name) of QBs the bundle knows (maps names → ids); returns one row per offense.
-pick_qbs <- function(S, weekly, games = NULL, pool = NULL, override_file = NULL, season, week) {
+# sched_changed: named POSIXct (team → when the schedule's current QB first appeared, only if it changed this week; else NA),
+# from sched_change_times()
+pick_qbs <- function(S, weekly, games = NULL, pool = NULL, override_file = NULL, season, week, sched_changed = NULL) {
   ov <- if (!is.null(override_file) && file.exists(override_file)) utils::read.csv(override_file, stringsAsFactors = FALSE, colClasses = "character") else NULL
   if (!is.null(ov) && nrow(ov)) ov <- ov[ov$season == season & ov$week == week, ] else ov <- NULL
   sched <- if (!is.null(games) && all(c("home_qb_name", "away_qb_name") %in% names(games)))
@@ -217,8 +261,13 @@ pick_qbs <- function(S, weekly, games = NULL, pool = NULL, override_file = NULL,
     agree <- !is.null(sl) && !is.null(ol) && same(sl, ol)
     sc_out <- !is.null(sc) && sc_st$out
     pre <- if (sc_out) sprintf("schedule QB %s ruled out (%s) → ", sc$name, sc_st$status) else ""
+    # did the schedule change its QB this week after Ourlads last updated this team? then the schedule is the newer news
+    chg <- if (!is.null(sched_changed) && tm %in% names(sched_changed)) sched_changed[[tm]] else NA
+    ol_upd <- if (!is.null(S$ourlads)) ourlads_time(S$ourlads$updated[S$ourlads$team == tm][1]) else NA
+    sc_newer <- !is.na(chg) && (is.na(ol_upd) || chg > ol_upd)
     if (!is.null(o) && nrow(o)) { pick <- list(name = o$qb_name[1], id = id_for(o$qb_name[1])); rule <- paste0("override file", if (nzchar(o$note[1] %||% "")) paste0(" (", o$note[1], ")") else "") }
-    else if (agree && !is.null(sc) && !sc_out && !same(sl, sc)) { pick <- sl; rule <- "Sleeper + Ourlads depth charts agree (schedule differs)" }
+    else if (agree && !is.null(sc) && !sc_out && !same(sl, sc) && !sc_newer) { pick <- sl; rule <- "Sleeper + Ourlads depth charts agree (schedule differs)" }
+    else if (!is.null(sc) && !sc_out && agree && !same(sl, sc)) { pick <- sc; rule <- sprintf("nflverse schedule (changed %s, after the depth charts' last update)", format(chg, "%a %H:%M UTC", tz = "UTC")) }
     else if (!is.null(sc) && !sc_out) { pick <- sc; rule <- "nflverse schedule" }
     else if (!is.null(sl)) { pick <- sl; rule <- paste0(pre, if (agree) "Sleeper + Ourlads depth charts" else "Sleeper depth chart") }
     else if (!is.null(ol)) { pick <- ol; rule <- paste0(pre, "Ourlads depth chart") }

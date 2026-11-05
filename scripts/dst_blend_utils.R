@@ -197,7 +197,8 @@ swap_avail <- function(b, status, override = NULL) {
 #   Sleeper (all players, one call): team, roster status (IR, PUP, NFI, suspended, practice squad, inactive) and injury status
 #   Ourlads depth charts (all positions, 32 pages): O / D / IR / PUP / SUS / NFI flags
 # out  = IR / PUP / NFI / suspended in any source, or the report's Out / Doubtful, or (no report game status yet) Sleeper or
-#        Ourlads Out / Doubtful - the same rule as player_status() for QBs and kickers
+#        Ourlads Out / Doubtful (Ourlads only for players Sleeper doesn't list, since 2026-11-04) - the same rule as
+#        player_status() for QBs and kickers
 # gone = not out, and Sleeper has him on another team, no team, or the practice squad / inactive list
 # A source that fails is skipped; if Sleeper fails, gone keeps the weekly value.
 avail_sleeper_all <- function() {
@@ -265,6 +266,9 @@ avail_live_status <- function(b, season, week, teams = unique(b$te$team), source
   s_ros <- if (!is.null(sl)) sl$roster[is] else rep(NA_character_, nrow(pl))
   s_hard <- if (!is.null(sl)) avail_canon(s_ros) else rep(NA_character_, nrow(pl))
   o_st <- if (!is.null(ol)) avail_canon(ol$flag[io]) else rep(NA_character_, nrow(pl))
+  # Ourlads counts only for players Sleeper doesn't list (its pages update about daily and can carry last week's flags;
+  # Sleeper is continuous) - the same rule as player_status() since 2026-11-04
+  o_st[!is.na(is)] <- NA_character_
   hard <- s_inj %in% ST_HARD | s_hard %in% ST_HARD | o_st %in% ST_HARD
   out <- hard | r_st %in% c("Out", "Doubtful") | (is.na(r_st) & (s_inj %in% c("Out", "Doubtful") | o_st %in% c("Out", "Doubtful")))
   if (is.null(sl)) out <- out | dplyr::coalesce(pl$out0, FALSE)     # without Sleeper, IR / PUP lists are unknown: keep the weekly outs
