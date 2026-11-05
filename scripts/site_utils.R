@@ -415,8 +415,10 @@ track_tab <- function(TR, pos, systems, ext_system = "espn", unit = "D/ST") {
                                      tools::toTitleCase(wlab(bf)), if (length(bf) > 1) "are" else "is", if (length(bf) > 1) "those weeks" else "that week") else ""
   intro <- paste0("<p class='s'>How each source's projections did once the games were played: ours (the Tuesday projection), Vegas-only (a regression on the betting lines alone, refit each week on earlier games, same lines), ",
                   "and in ESPN standard scoring Sleeper's and ESPN's weekly projections (Sleeper's re-scored into ESPN standard from its projected stats; the last version before each kickoff). ",
-                  if (any(mm$source == "ECR")) sprintf("<b>ECR</b> = FantasyPros' expert consensus rank, the last version before each kickoff (ESPN standard section; %s): a ranking only, so it has no projection correlation, RMSE or bias, and its averages cover fewer weeks than the others (the site started saving it in week 4). ",
-                                                     wlab(sort(unique(mm$week[mm$source == "ECR"])))) else "",
+                  if (any(mm$source == "ECR")) { ew <- sort(unique(mm$week[mm$source == "ECR"])); aw <- sort(unique(mm$week))
+                    sprintf("<b>ECR</b> = FantasyPros' expert consensus rank, the last version before each kickoff (ESPN standard section; %s%s): a ranking only, so it has no projection correlation, RMSE or bias%s. ",
+                            wlab(ew), if (min(ew) < 4) "; weeks before the site saved it itself (week 4) come from DynastyProcess's archive of the same FantasyPros rankings" else "",
+                            if (length(ew) < length(aw)) ", and its averages cover fewer weeks than the others" else "") } else "",
                   "All ", units, " count, rostered or not, and every metric is computed on the teams all sources projected that week. Charts show the season to date after each week; hover a dot for its value.", bf_note, "</p>",
                   "<p class='s'><b>Rank correlation</b>: how well the order matched the actual finish (1 = perfect, 0 = random). <b>Projection correlation</b>: the same for the projected points themselves, so magnitude counts too. ",
                   "<b>Top-weighted score</b>: like rank correlation but mistakes near the top of the list cost the most (NDCG: 1 = perfect order). ",
