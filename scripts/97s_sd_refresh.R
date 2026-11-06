@@ -82,7 +82,7 @@ kc <- SDS$kicker_combo
 k_combo <- function(k, sal, avg) { b <- kc; b[is.na(b)] <- 0
   b[["(Intercept)"]] + b[["k_espn"]] * k + b[["salary"]] * sal + b[["avg0"]] * coalesce(avg, 0) + (b[["has_avgTRUE"]] %||% 0) * (!is.na(avg) & avg > 0) }
 
-## ---- 3. lineups: the 20 best projections, >= md of 6 slots different, <= $1K left ----
+## ---- 3. lineups: the 20 best projections, >= md of 6 slots different, <= max_left unused (50000 = no rule, Andrew 2026-11-05) ----
 sd_best_n <- function(d, n_l = SDS$rules$n, md = SDS$rules$md, floor_sal = 50000 - SDS$rules$max_left) {
   n <- nrow(d); tA <- d$team == d$team[1]
   A <- rbind(c(rep(1, n), rep(0, n)), c(rep(0, n), rep(1, n)), cbind(diag(n), diag(n)), c(d$salary, d$cpt_salary), c(d$salary, d$cpt_salary), c(tA, tA) * 1, c(!tA, !tA) * 1)
@@ -151,7 +151,8 @@ sec_html <- vapply(SEC, \(s) {
          "<div class='lus'>", paste0(cards, collapse = ""), "</div>", ptab) }, "")
 note <- paste0("<p class='s'>For the DK NFL Showdown Play-Action [20 Entry Max] of each primetime game ($200K–$400K, ~80–120K entries). ",
   "Captain scores 1.5× (salary 1.5×). Projections in DK points: props for skill players (the Players page), the kicker model + salary + DK average for kickers, Vegas-only D/ST. ",
-  "<b>Build:</b> the 20 best projections with no player lacking props / a model, $1K or less left, at least 2 of 6 slots different (a captain swap counts).",
+  sprintf("<b>Build:</b> the 20 best projections with no player lacking props / a model, %s, at least 2 of 6 slots different (a captain swap counts).",
+          if ((SDS$rules$max_left %||% 1000) >= 50000) "any amount of salary left unused" else sprintf("$%s or less left", format(SDS$rules$max_left, big.mark = ","))),
   if (!is.null(BT)) sprintf(" <b>Back-test</b> (%d flagship showdowns 2023–26, each season left out): %.1f cashes per 20, %.2f top-1%% lineups per game, %d games with a top-0.01%% lineup, ROI %+.0f%% (plain top projection %.1f / %.2f / %d / %+.0f%%). Levels are optimistic; the comparison is the point. Game script (spread / total) and fading chalk did not help.",
                             BT$games, BT$cash, BT$top1, BT$top001, 100 * BT$roi, BT$tp_cash, BT$tp_top1, BT$tp_top001, 100 * BT$tp_roi) else "", "</p>")
 html <- paste0('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">',
