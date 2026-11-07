@@ -219,7 +219,7 @@ const v=r=>{const s=r.children[i].innerText.replace(/[$,%+*\\u{1F512}]/gu,"").tr
 ## ---- Sub-navigation of the DFS section and the two lineup pages (Andrew 2026-10-04) ----
 dfs_subnav <- function(active, b) {
   it <- c(players = "Players", cash = "Cash (double-ups)", floor = "High floor (tournaments)", gpp = "High ceiling (top 1%)", max = "Max ceiling (top 0.01%)",
-          showdown = "Showdown (primetime)", track = "Track record")                                   # showdown: 97s_sd_refresh.R (Andrew 2026-11-05)
+          showdown = "Showdown", track = "Track record")                                   # showdown: 97s_sd_refresh.R (Andrew 2026-11-05)
   hr <- c(players = paste0(b, "dfs/"), cash = paste0(b, "dfs/cash/"), floor = paste0(b, "dfs/floor/"), gpp = paste0(b, "dfs/gpp/"), max = paste0(b, "dfs/max/"),
           showdown = paste0(b, "dfs/showdown/"), track = paste0(b, "dfs/track/"))
   paste0('<div class="subnav">', paste0(sprintf('<a class="%s" href="%s">%s</a>', ifelse(names(it) == active, "on", ""), hr, it), collapse = ""), '</div>')
@@ -381,10 +381,10 @@ td.p{color:var(--pos)}td.n{color:var(--neg)}tr.tot td{font-weight:600;background
   ## Showdown game by game (this season): which game won or lost inside a week's cell
   gt <- if (!is.null(sdg) && nrow(sdg)) sdg |> filter(season == !!season) |> arrange(desc(week), desc(ko)) else NULL
   gt_html <- if (!is.null(gt) && nrow(gt)) paste0("<h2>Showdown, game by game</h2><p class='s'>20 lineups in each game's flagship Play-Action ($3). ",
-      "<b>Primetime</b> = kickoff 7 pm ET or later, the games the Showdown tab posts.</p><div class='tw'><table><thead><tr><th class='l'>Week</th><th class='l'>Game</th><th class='l'>Kickoff (ET)</th>",
+      "<b>On tab</b> = the games the Showdown tab posts: kickoff 7 pm ET or later, or alone in its kickoff slot (international, holiday, Saturday games).</p><div class='tw'><table><thead><tr><th class='l'>Week</th><th class='l'>Game</th><th class='l'>Kickoff (ET)</th>",
       "<th class='l'>Lineups</th><th>Field</th><th>ROI</th><th>Won</th><th>Cashes</th><th>Top-1% lineups</th><th>Best finish</th><th>Our best</th><th>Winner</th></tr></thead><tbody>",
       paste0(sprintf("<tr><td class='l'>%d</td><td class='l'>%s%s</td><td class='l'>%s</td><td class='l'><span class='tag%s'>%s</span></td><td>%s</td>%s<td>%s</td><td>%s</td><td>%s</td><td>top %s</td><td>%.1f</td><td>%.1f</td></tr>",
-        gt$week, gt$game, ifelse(gt$primetime %in% TRUE, " <span class='tag'>primetime</span>", ""), gt$ko_et, ifelse(gt$source == "live", " live", ""), gt$source,
+        gt$week, gt$game, ifelse((if ("tab_game" %in% names(gt)) gt$tab_game else gt$primetime) %in% TRUE, " <span class='tag'>on tab</span>", ""), gt$ko_et, ifelse(gt$source == "live", " live", ""), gt$source,
         formatC(gt$field, format = "d", big.mark = ","), vapply(gt$roi, cell, ""), dfs_money(round(gt$won)), ifelse(is.na(gt$cashes), "", sprintf("%d of %d", as.integer(gt$cashes), as.integer(gt$entries))),
         ifelse(is.na(gt$n_top1), "", gt$n_top1), ifelse(gt$best_pct < 0.001, sprintf("%.3f%%", 100 * gt$best_pct), sprintf("%.1f%%", 100 * gt$best_pct)), gt$best, gt$win), collapse = ""),
       "</tbody></table></div>") else ""
@@ -397,7 +397,7 @@ td.p{color:var(--pos)}td.n{color:var(--neg)}tr.tot td{font-weight:600;background
       if (!is.null(SDT$track) && nrow(SDT$track)) sprintf(paste0("<p class='s'><b>Showdown</b> = 20 lineups in each game's flagship Play-Action ($3, the largest \"NFL Showdown $___K Play-Action [20 Entry Max]\"), built the way the Showdown tab builds them ",
         "(the 20 best projections with no player lacking props / a model, ", if ((SDT$rules$max_left %||% 1000) >= 50000) "any salary left unused" else sprintf("$%s or less left", format(SDT$rules$max_left, big.mark = ",")),
         ", at least 2 of 6 slots different); a week's cell adds up all of that week's games. ",
-        "<b>backfill</b> = every flagship game (primetime or not) through week %d, with projections fitted without that season; <b>live</b> (from week %d) = the Showdown tab's lineups frozen at kickoff, which it posts for primetime games only. ",
+        "<b>backfill</b> = every flagship game (primetime or not) through week %d, with projections fitted without that season; <b>live</b> (from week %d) = the Showdown tab's lineups frozen at kickoff, which it posts for primetime games and games alone in their kickoff slot. ",
         "Scored on the real contest the same way. Updated %s.</p>"), SDT$live_from[["week"]] - 1, SDT$live_from[["week"]], format(SDT$built, "%b %d")) else ""),
     "<h2>Week by week</h2><div class='tw'><table><thead><tr><th class='l'>Week</th><th class='l'>Lineups</th>", paste0("<th>", cols$head, "</th>", collapse = ""), "<th class='l'>Big finishes</th></tr></thead><tbody>",
     paste(rows, collapse = ""), tot_pre, tot, "</tbody></table></div>",

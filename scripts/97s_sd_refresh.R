@@ -1,5 +1,6 @@
 # ==============================================================================
 # 97s_sd_refresh.R — DK NFL Showdown page (…/dfs/showdown/): 20 lineups for each primetime game (Andrew 2026-11-05)
+#   + every game with its own kickoff slot: international mornings, holiday games, Saturday games (Andrew 2026-11-07)
 #
 # Sourced at the end of 96_dfs_refresh.R (GitHub Site refresh, DFS step) and uses its objects: the Players page's props
 # (cur), the DFS spec (S, DK bonus fits), the week's games, the D/ST bundle (dst_b) and line history. A failure here never
@@ -28,10 +29,10 @@ KEY <- Sys.getenv("STAT_API_KEY"); BASE <- Sys.getenv("SD_SA_BASE", "https://api
 ET <- "America/New_York"
 OUT_ST <- c("O", "OUT", "IR", "D", "DOUBTFUL", "SUSP", "PUP", "NFI")
 
-## ---- 1. primetime games + salaries ----
+## ---- 1. the tab's games + salaries: primetime (7 pm ET or later) or alone in its kickoff slot (international, holiday, Saturday games) ----
 gm <- games |> mutate(et_h = as.integer(format(ko, "%H", tz = ET)), et_date = as.Date(format(ko, "%Y-%m-%d", tz = ET))) |>
-  filter(et_h >= 19) |> arrange(ko)
-if (!nrow(gm)) { message("showdown: no primetime games this week"); return(invisible()) }
+  add_count(ko, name = "n_slot") |> filter(et_h >= 19 | n_slot == 1) |> arrange(ko)
+if (!nrow(gm)) { message("showdown: no primetime / standalone games this week"); return(invisible()) }
 sa_get <- function(path, query = list()) {
   if (!nzchar(KEY)) return(NULL)
   q <- if (length(query)) paste0("?", paste(names(query), vapply(query, \(v) utils::URLencode(as.character(v), reserved = TRUE), ""), sep = "=", collapse = "&")) else ""
@@ -144,12 +145,18 @@ sec_html <- vapply(SEC, \(s) {
   cards <- vapply(seq_len(nl), \(k) { x <- L |> filter(lineup == k)
     sprintf("<div class='lu'><h3><span>#%d</span><span>%s pts · %s</span></h3><table><tbody>%s</tbody></table></div>", k, f1(sum(x$proj)), dol(sum(x$salary)),
             paste0(sprintf("<tr><td class='sl'>%s</td><td class='l'>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>", x$slot, x$name, x$pos, x$team, dol(x$salary), f1(x$proj)), collapse = "")) }, "")
+  ## exposure across the 20 (Andrew 2026-11-07: as on the Play-Action tabs, split by slot)
+  ex <- L |> group_by(name, pos, team) |> summarise(cpt = sum(slot == "CPT"), flex = sum(slot == "FLEX"), .groups = "drop") |> mutate(n = cpt + flex) |> arrange(desc(n), desc(cpt), name)
+  ex_html <- paste0("<h3 class='ex'>Exposure across the ", nl, "</h3><div class='tw'><table><thead><tr><th class='l'>Player</th><th class='l'>Pos</th><th class='l'>Team</th><th>Captain</th><th>Flex</th><th>Lineups</th></tr></thead><tbody>",
+    paste0(sprintf("<tr><td class='l'>%s</td><td class='l'>%s</td><td class='l'>%s</td><td>%s</td><td>%s</td><td>%d of %d</td></tr>", ex$name, ex$pos, ex$team,
+                   ifelse(ex$cpt > 0, as.character(ex$cpt), ""), ifelse(ex$flex > 0, as.character(ex$flex), ""), ex$n, nl), collapse = ""), "</tbody></table></div>")
   pl <- s$LU$pool |> filter(!is.na(proj)) |> arrange(desc(proj))
   ptab <- sprintf("<details><summary>Player pool (%d with props / model numbers)</summary><div class='tw'><table><thead><tr><th class='l'>Player</th><th>Pos</th><th>Team</th><th>Flex $</th><th>Captain $</th><th>Proj</th><th>Captain proj</th><th class='l'>Source</th></tr></thead><tbody>%s</tbody></table></div></details>",
                   nrow(pl), paste0(sprintf("<tr><td class='l'>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class='l'>%s</td></tr>", pl$name, pl$pos, pl$team, dol(pl$salary), dol(pl$cpt_salary), f1(pl$proj), f1(1.5 * pl$proj), pl$src), collapse = ""))
   paste0(h, sprintf("<p class='s'>%s %d lineups.</p>", when, nl), sprintf("<a class='btn' href='%s' download>DK upload CSV (%d lineups)</a>", csv, nl),
-         "<div class='lus'>", paste0(cards, collapse = ""), "</div>", ptab) }, "")
-note <- paste0("<p class='s'>For the DK NFL Showdown Play-Action [20 Entry Max] of each primetime game ($200K–$400K, ~80–120K entries). ",
+         sprintf("<div class='sdwrap'><button class='sdb l' aria-label='Scroll left' onclick='sdScroll(this,-1)'>&#8249;</button><div class='sdrow'>%s</div><button class='sdb r' aria-label='Scroll right' onclick='sdScroll(this,1)'>&#8250;</button></div>",
+                 paste0(cards, collapse = "")), ex_html, ptab) }, "")
+note <- paste0("<p class='s'>For the DK NFL Showdown Play-Action [20 Entry Max] of each primetime game and every game with its own kickoff slot (international, holiday and Saturday games) ($200K–$400K, ~80–120K entries). ",
   "Captain scores 1.5× (salary 1.5×). Projections in DK points: props for skill players (the Players page), the kicker model + salary + DK average for kickers, Vegas-only D/ST. ",
   sprintf("<b>Build:</b> the 20 best projections with no player lacking props / a model, %s, at least 2 of 6 slots different (a captain swap counts).",
           if ((SDS$rules$max_left %||% 1000) >= 50000) "any amount of salary left unused" else sprintf("$%s or less left", format(SDS$rules$max_left, big.mark = ","))),
@@ -162,8 +169,14 @@ html <- paste0('<!doctype html><html><head><meta charset="utf-8"><meta name="vie
 body{background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;max-width:1500px;margin:1.5rem auto;padding:0 16px}
 h1{font-size:1.4rem;margin:.2rem 0}h2{font-size:1.1rem;margin:1.4rem 0 .4rem}.s{color:var(--mut);font-size:13px}a{color:var(--acc)}.tw{overflow-x:auto}
 table{border-collapse:collapse;font-size:13px;white-space:nowrap}th,td{border:1px solid var(--bd);padding:3px 7px;text-align:right}th{background:var(--th)}td.l,th.l{text-align:left}
-details{margin:.6rem 0}summary{cursor:pointer;color:var(--acc)}', DFS_SUBNAV_CSS, DFS_LU_CSS, SITE_CSS, '</style></head><body>', site_nav("dfs", SITE_BASE), dfs_subnav("showdown", SITE_BASE),
+details{margin:.6rem 0}summary{cursor:pointer;color:var(--acc)}
+.sdwrap{position:relative;margin:.8rem 0}.sdrow{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x proximity;scrollbar-width:none;-webkit-overflow-scrolling:touch;padding:2px 0}
+.sdrow::-webkit-scrollbar{display:none}.sdrow .lu{flex:0 0 auto;width:max-content;overflow:visible;scroll-snap-align:start}.sdrow .lu table{width:auto;white-space:nowrap}
+@media (max-width:560px){.sdrow .lu table{font-size:11.5px}.sdrow .lu td{padding:3px 4px}}
+.sdb{position:absolute;top:40%;z-index:2;width:30px;height:30px;border-radius:50%;border:1px solid var(--bd);background:var(--bg);color:var(--fg);font-size:20px;line-height:26px;cursor:pointer;opacity:.85}
+.sdb.l{left:-15px}.sdb.r{right:-15px}@media (hover:none){.sdb{display:none}}h3.ex{font-size:14px;margin:.8rem 0 .3rem}', DFS_SUBNAV_CSS, DFS_LU_CSS, SITE_CSS,
+  '</style><script>function sdScroll(b,d){var r=b.parentNode.querySelector(".sdrow");var c=r.querySelector(".lu");r.scrollBy({left:d*((c?c.offsetWidth:300)+12)*2,behavior:"smooth"});}</script></head><body>', site_nav("dfs", SITE_BASE), dfs_subnav("showdown", SITE_BASE),
   sprintf("<h1>DraftKings Showdown — %d week %d</h1>", SEASON, WEEK), note, paste0(sec_html, collapse = ""), "</body></html>")
 writeLines(html, file.path(odir, "index.html"))
-message(sprintf("showdown: page written (%d primetime game%s, %d built this run)", nrow(gm), if (nrow(gm) == 1) "" else "s", n_built))
+message(sprintf("showdown: page written (%d showdown game%s, %d built this run)", nrow(gm), if (nrow(gm) == 1) "" else "s", n_built))
 })
