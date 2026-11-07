@@ -154,8 +154,7 @@ sec_html <- vapply(SEC, \(s) {
   ptab <- sprintf("<details><summary>Player pool (%d with props / model numbers)</summary><div class='tw'><table><thead><tr><th class='l'>Player</th><th>Pos</th><th>Team</th><th>Flex $</th><th>Captain $</th><th>Proj</th><th>Captain proj</th><th class='l'>Source</th></tr></thead><tbody>%s</tbody></table></div></details>",
                   nrow(pl), paste0(sprintf("<tr><td class='l'>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class='l'>%s</td></tr>", pl$name, pl$pos, pl$team, dol(pl$salary), dol(pl$cpt_salary), f1(pl$proj), f1(1.5 * pl$proj), pl$src), collapse = ""))
   paste0(h, sprintf("<p class='s'>%s %d lineups.</p>", when, nl), sprintf("<a class='btn' href='%s' download>DK upload CSV (%d lineups)</a>", csv, nl),
-         sprintf("<div class='sdwrap'><button class='sdb l' aria-label='Scroll left' onclick='sdScroll(this,-1)'>&#8249;</button><div class='sdrow'>%s</div><button class='sdb r' aria-label='Scroll right' onclick='sdScroll(this,1)'>&#8250;</button></div>",
-                 paste0(cards, collapse = "")), ex_html, ptab) }, "")
+         sprintf("<div class='sdwrap'><div class='sdrow'>%s</div></div>", paste0(cards, collapse = "")), ex_html, ptab) }, "")
 note <- paste0("<p class='s'>For the DK NFL Showdown Play-Action [20 Entry Max] of each primetime game and every game with its own kickoff slot (international, holiday and Saturday games) ($200K–$400K, ~80–120K entries). ",
   "Captain scores 1.5× (salary 1.5×). Projections in DK points: props for skill players (the Players page), the kicker model + salary + DK average for kickers, Vegas-only D/ST. ",
   sprintf("<b>Build:</b> the 20 best projections with no player lacking props / a model, %s, at least 2 of 6 slots different (a captain swap counts).",
@@ -170,12 +169,26 @@ body{background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;max-w
 h1{font-size:1.4rem;margin:.2rem 0}h2{font-size:1.1rem;margin:1.4rem 0 .4rem}.s{color:var(--mut);font-size:13px}a{color:var(--acc)}.tw{overflow-x:auto}
 table{border-collapse:collapse;font-size:13px;white-space:nowrap}th,td{border:1px solid var(--bd);padding:3px 7px;text-align:right}th{background:var(--th)}td.l,th.l{text-align:left}
 details{margin:.6rem 0}summary{cursor:pointer;color:var(--acc)}
-.sdwrap{position:relative;margin:.8rem 0}.sdrow{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x proximity;scrollbar-width:none;-webkit-overflow-scrolling:touch;padding:2px 0}
-.sdrow::-webkit-scrollbar{display:none}.sdrow .lu{flex:0 0 auto;width:max-content;overflow:visible;scroll-snap-align:start}.sdrow .lu table{width:auto;white-space:nowrap}
+.sdwrap{position:relative;margin:.4rem 0 .8rem}.sdrow{display:flex;gap:12px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;padding:2px 0}
+.sdrow::-webkit-scrollbar{display:none}.sdrow .lu{flex:0 0 auto;width:max-content;overflow:visible}.sdrow .lu table{width:auto;white-space:nowrap}
 @media (max-width:560px){.sdrow .lu table{font-size:11.5px}.sdrow .lu td{padding:3px 4px}}
-.sdb{position:absolute;top:40%;z-index:2;width:30px;height:30px;border-radius:50%;border:1px solid var(--bd);background:var(--bg);color:var(--fg);font-size:20px;line-height:26px;cursor:pointer;opacity:.85}
-.sdb.l{left:-15px}.sdb.r{right:-15px}@media (hover:none){.sdb{display:none}}h3.ex{font-size:14px;margin:.8rem 0 .3rem}', DFS_SUBNAV_CSS, DFS_LU_CSS, SITE_CSS,
-  '</style><script>function sdScroll(b,d){var r=b.parentNode.querySelector(".sdrow");var c=r.querySelector(".lu");r.scrollBy({left:d*((c?c.offsetWidth:300)+12)*2,behavior:"smooth"});}</script></head><body>', site_nav("dfs", SITE_BASE), dfs_subnav("showdown", SITE_BASE),
+h3.ex{font-size:14px;margin:.8rem 0 .3rem}', DFS_SUBNAV_CSS, DFS_LU_CSS, SITE_CSS,
+  '</style><script>
+/* lineup rows scroll like the D/ST and kicker tables (site_utils dragScroll): drag anywhere with the mouse, swipe on touch, or hold the arrows */
+function sdDrag(){document.querySelectorAll(".sdrow").forEach(sc=>{if(sc.dataset.drag)return;sc.dataset.drag="1";sc.classList.add("dragx");
+let down=false,x0=0,s0=0,moved=false;
+sc.addEventListener("mousedown",e=>{if(e.button!==0)return;down=true;moved=false;x0=e.pageX;s0=sc.scrollLeft});
+window.addEventListener("mousemove",e=>{if(!down)return;const dx=e.pageX-x0;if(Math.abs(dx)>5){moved=true;sc.classList.add("dragging")}if(moved){sc.scrollLeft=s0-dx;e.preventDefault()}});
+window.addEventListener("mouseup",()=>{down=false;sc.classList.remove("dragging")});
+sc.addEventListener("click",e=>{if(moved){e.stopPropagation();e.preventDefault();moved=false}},true);
+const bar=document.createElement("div");bar.className="scrollbtns";bar.innerHTML=`<span>drag the lineups or hold</span><button type="button" data-d="-1" aria-label="scroll left">\u25C0</button><button type="button" data-d="1" aria-label="scroll right">\u25B6</button>`;
+sc.parentNode.insertBefore(bar,sc);
+bar.querySelectorAll("button").forEach(b=>{let iv=null;const go=()=>{sc.scrollLeft+=(+b.dataset.d)*14};
+const start=e=>{e.preventDefault();go();clearInterval(iv);iv=setInterval(go,16)},stop=()=>{clearInterval(iv);iv=null};
+b.addEventListener("mousedown",start);b.addEventListener("touchstart",start,{passive:false});
+["mouseup","mouseleave","touchend","touchcancel"].forEach(ev=>b.addEventListener(ev,stop))})})}
+window.addEventListener("load",sdDrag);
+</script></head><body>', site_nav("dfs", SITE_BASE), dfs_subnav("showdown", SITE_BASE),
   sprintf("<h1>DraftKings Showdown — %d week %d</h1>", SEASON, WEEK), note, paste0(sec_html, collapse = ""), "</body></html>")
 writeLines(html, file.path(odir, "index.html"))
 message(sprintf("showdown: page written (%d showdown game%s, %d built this run)", nrow(gm), if (nrow(gm) == 1) "" else "s", n_built))
