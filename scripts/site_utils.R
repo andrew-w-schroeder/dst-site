@@ -764,7 +764,9 @@ site_sched_crons <- function() {
   yml <- yml[file.exists(yml)]
   L <- if (length(yml)) grep('^\\s*- cron:', readLines(yml[1], warn = FALSE), value = TRUE) else character()
   cr <- if (length(L)) sub('^\\s*- cron:\\s*"([^"]+)".*$', "\\1", L) else SITE_SCHED_DEFAULT
-  why <- if (length(L)) ifelse(grepl("E[DS]?T:\\s*", L), sub("^.*E[DS]?T:\\s*", "", L), "") else rep("", length(cr))
+  ## site_publish fires each run early to absorb GitHub's queue (Andrew 2026-11-07): show the intended time, "[shown <cron>]", when present
+  sh <- grepl("\\[shown [^]]+\\]", L); if (length(L)) cr[sh] <- sub("^.*\\[shown ([^]]+)\\].*$", "\\1", L[sh])
+  why <- if (length(L)) ifelse(grepl("E[DS]?T:\\s*", L), trimws(sub("\\s*\\[shown [^]]+\\]", "", sub("^.*E[DS]?T:\\s*", "", L))), "") else rep("", length(cr))
   dows <- function(x) unlist(lapply(strsplit(x, ",")[[1]], function(p) if (grepl("-", p)) { r <- as.integer(strsplit(p, "-")[[1]]); r[1]:r[2] } else as.integer(p)))
   out <- lapply(seq_along(cr), function(k) { f <- strsplit(trimws(cr[k]), "\\s+")[[1]]
     if (length(f) != 5 || !grepl("^\\d+$", f[1]) || !grepl("^\\d+$", f[2])) return(NULL)
@@ -776,7 +778,7 @@ site_sched_html <- function() {
   paste0('<div class="navsched" id="navsched" tabindex="0"><span class="schedbtn">&#x1F552; <span id="navnext">Update schedule</span></span><div class="schedpop">',
     '<b>Update schedule</b> <span class="schedtz">(Eastern, approximate)</span><table id="schedtab"></table>',
     '<p>All pages (D/ST, Kickers, ROS, Players, DFS) refresh together in each run: new lines, props, weather and starters. ',
-    'GitHub can start a run up to about 30 minutes late. The weekly models refit on Tuesdays. Games lock at kickoff.</p></div></div>',
+    'Runs are started early to allow for GitHub&rsquo;s queue, so pages are usually updated around these times. The weekly models refit on Tuesdays. Games lock at kickoff.</p></div></div>',
     '<script>(function(){const C=', jsonlite::toJSON(cr, auto_unbox = TRUE), ';',
     'const tz="America/New_York",now=new Date(),occ=[];for(let o=-1;o<9;o++){const d=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()+o));',
     'C.forEach(c=>{if([].concat(c.d).includes(d.getUTCDay()))occ.push({t:new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate(),c.h,c.m)),w:c.w});});}',
