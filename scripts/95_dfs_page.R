@@ -20,6 +20,12 @@ DFS_TIP <- c(
   Ceiling = "90th percentile of his DK score (1 week in 10 he scores at least this).",
   "Range bar" = "How much his DK score can swing: light band = 80% of outcomes, dark = 50%, line = projection, orange = the ±. Same scale within a tab.",
   Bonus = "Chance of DK's +3 yardage bonus: QB 300+ passing yards; RB 100+ rushing (and 100+ receiving when higher); WR / TE 100+ receiving. Logistic on the expected yards (tighter when a sportsbook line exists), fit on 2023+ results.",
+  "P(300+)" = "Chance of 300+ passing yards (DK +3 bonus). Plain = the sportsbooks' alternate passing-yards ladder at 300 (median across books, margin removed); italic* = estimated from his expected passing yards (fit on 2023+ results). Hover for both. The projection's bonus odds always use the estimate.",
+  "P(100+ rush)" = "Chance of 100+ rushing yards (DK +3 bonus). Plain = the sportsbooks' alternate rushing-yards ladder at 100 (median across books, margin removed); italic* = estimated from his expected rushing yards (fit on 2023+ results). Hover for both.",
+  "P(100+ rec)" = "Chance of 100+ receiving yards (DK +3 bonus). Plain = the sportsbooks' alternate receiving-yards ladder at 100 (median across books, margin removed); italic* = estimated from his expected receiving yards (fit on 2023+ results). Hover for both.",
+  "P(2+ TD)" = "Chance of 2+ rushing / receiving TDs. Plain = the sportsbooks' price (player TDs over 1.5, median across books, margin removed); italic* = estimated from his anytime-TD price (fit on 2023+ results). Hover for both.",
+  "P(2+ TD or 100+)" = "Chance of 2+ TDs or a DK yardage bonus (RB: 100+ rushing or 100+ receiving; WR / TE: 100+ receiving). Combined from the columns before it with a fit on 2023+ results (they often happen together). Italic* when no part has a sportsbook price.",
+  "P(no TD)" = "Chance he doesn't score a rushing / receiving TD (a floor number). Italic* = 1 minus his anytime-TD price calibrated on 2023+ results (The Odds API doesn't carry DraftKings' \"not to score\" market; a \"No\" price would be shown plain if one ever comes through).",
   Imp = "Team implied points from the latest pre-kickoff spread and total. D/ST: the OPPONENT's implied points (lower = better for a defense).",
   Form = "Recent DK points, decay-weighted (x0.5 per game back, this season); used by the ownership model.",
   Last = "His DK points in his most recent game this season (week in brackets).",
@@ -80,7 +86,23 @@ dfs_pos_table <- function(P, pos) {
     mv <- if (pos == "DST") v - d$alt_proj else d$alt_proj - v
     t <- t |> mutate(!!(if (pos == "DST") "Vegas" else "Model") := pp_f(d$alt_proj, 2), "Model − Vegas" = ifelse(is.na(mv), "", pp_sg(mv, 2)), .after = Proj)
   }
-  if (!pos %in% c("DST", "DSTV")) t$Bonus <- dfs_pct(d$p_bonus)
+  bnames <- character()
+  if (!pos %in% c("DST", "DSTV")) {
+    if ("bp_td2" %in% names(d) && exists("boom_cell")) {        # milestone odds (boom_utils.R; Andrew 2026-11-07): replace the single Bonus column
+      pc <- function(x) ifelse(is.na(x), "–", paste0(round(100 * x), "%"))
+      if (pos == "QB") t$`P(300+)` <- boom_cell(d, "pass300", "300+ passing yards") else {
+        if (pos %in% c("RB", "FLEX")) t$`P(100+ rush)` <- ifelse(d$pos == "RB", boom_cell(d, "rush100", "100+ rushing yards"), "")
+        t$`P(100+ rec)` <- boom_cell(d, "rec100", "100+ receiving yards")
+        t$`P(2+ TD)` <- boom_cell(d, "td2", "2+ rushing / receiving TDs")
+        un <- ifelse(is.na(d$bp_boomdk), "", paste0(round(100 * d$bp_boomdk), "%"))
+        un <- ifelse(d$bs_boomdk %in% "est", paste0("<i class='fill'>", un, "*</i>"), un)
+        t$`P(2+ TD or 100+)` <- ifelse(nzchar(un), tip_span(un, sprintf("<b>2+ TDs or a yardage bonus</b>\n2+ TDs %s%s · 100+ rec %s\nAny: %s (they often happen together)",
+          pc(d$bp_td2), ifelse(d$pos == "RB", paste0(" · 100+ rush ", pc(d$bp_rush100)), ""), pc(d$bp_rec100), pc(d$bp_boomdk))), un)
+        t$`P(no TD)` <- boom_cell(d, "notd", "No rushing / receiving TD")
+      }
+      bnames <- intersect(c("P(300+)", "P(100+ rush)", "P(100+ rec)", "P(2+ TD)", "P(2+ TD or 100+)", "P(no TD)"), names(t))
+    } else t$Bonus <- dfs_pct(d$p_bonus)
+  }
   t$Imp <- pp_f(d$implied)
   scols <- DFS_STAT_COLS[[pos]]
   for (s in names(scols)) {
@@ -94,7 +116,7 @@ dfs_pos_table <- function(P, pos) {
                    `P(4x)` = dfs_shade(d$p_4x))
   if (flex) cell_cls$Pos <- paste0("pz ", tolower(d$pos))
   row_cls <- ifelse(d$fallback %in% TRUE, "nop", "")
-  html <- pp_table(t, raw = c("Player", "Range bar", unname(scols)), id = paste0("d_", pos), row_cls = row_cls, cell_cls = cell_cls,
+  html <- pp_table(t, raw = c("Player", "Range bar", unname(scols), bnames), id = paste0("d_", pos), row_cls = row_cls, cell_cls = cell_cls,
            stick = if (flex) 2 else 1, row_key = pp_search_key(d$player_name, d$team))
   dfs_header_tips(html, names(t))
 }

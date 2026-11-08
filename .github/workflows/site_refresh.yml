@@ -38,7 +38,7 @@ jobs:
     timeout-minutes: 40
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy2.outputs.page_url }}
     env:
       FF_PROJ_DIR: ${{ github.workspace }}
       LANG: C.UTF-8
@@ -111,8 +111,18 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
+      # Pages sometimes hangs in "syncing_files" (Andrew 2026-11-07): give up after 5 min and try once more; the history above
+      # is already saved either way, and the next run redeploys everything
       - id: deploy
         uses: actions/deploy-pages@v4
+        continue-on-error: true
+        with:
+          timeout: 300000
+      - id: deploy2
+        if: ${{ steps.deploy.outcome == 'failure' }}
+        uses: actions/deploy-pages@v4
+        with:
+          timeout: 600000
 
       - name: Steps that failed
         if: ${{ always() }}
@@ -125,5 +135,6 @@ jobs:
           [ "${{ steps.players.outcome }}" = "failure" ] && failed="$failed (DFS skipped)"
           [ "${{ steps.dfs.outcome }}" = "failure" ] && failed="$failed DFS"
           [ "${{ steps.save.outcome }}" = "failure" ] && failed="$failed save-history"
+          [ "${{ steps.deploy.outcome }}" = "failure" ] && [ "${{ steps.deploy2.outcome }}" != "success" ] && failed="$failed publish-pages"
           if [ -n "$failed" ]; then echo "::error::Failed:$failed (the site was still published with everything else)"; exit 1; fi
           echo "All pages refreshed."

@@ -60,6 +60,7 @@ for (k in names(old_env)) if (is.na(old_env[[k]])) Sys.unsetenv(k) else do.call(
 source(file.path(PROJ_DIR, "scripts/site_utils.R")); source(file.path(PROJ_DIR, "scripts/props_utils.R"))
 source(file.path(PROJ_DIR, "scripts/player_site_utils.R")); source(file.path(PROJ_DIR, "scripts/64_player_page.R"))
 source(file.path(PROJ_DIR, "scripts/95_dfs_page.R"))
+if (file.exists(file.path(PROJ_DIR, "scripts/boom_utils.R"))) source(file.path(PROJ_DIR, "scripts/boom_utils.R"))   # milestone odds cells
 cur <- if (ok65 && !is.null(E$cur) && nrow(E$cur)) E$cur else tibble()
 games <- if (!is.null(E$games)) E$games else readRDS(file.path(PROJ_DIR, "output/players_site", sprintf("bundle_%d_wk%02d.rds", SEASON, WEEK)))$games |> mutate(ko = utc(kickoff_utc))
 imp <- if (!is.null(E$imp)) E$imp else tibble(game_id = character(), team = character(), implied = numeric(), spread = numeric())
@@ -116,7 +117,7 @@ if (nrow(cur)) {
                               ifelse(pos != "QB", sprintf("%.1f catches, %.0f rec yds (100+ %s), ", e.rec, e.rec_yds, dfs_pct(p100c)), ""), e.tds))
   rows <- d |> select(game_id, gsis_id, player_name, pos, team, opp, home, ko, locked, fallback, implied, spread, p_td_raw,
                       starts_with("e."), starts_with("src."), dk_base, dk_bonus, dk_proj, p300, p100r, p100c, p_bonus, ci_half, exp_line,
-                      inj_status, inj_badge, inj_out, inj_detail) |> rename(any_of(c(t_pull = "t")))
+                      inj_status, inj_badge, inj_out, inj_detail, matches("^b[pmens]_")) |> rename(any_of(c(t_pull = "t")))   # + milestone odds (boom_utils.R via 65)
 }
 ## D/ST: Yahoo projection, last D/ST-page refresh before kickoff
 dst_rows <- tibble()
@@ -317,7 +318,9 @@ writeLines(c('<!doctype html><html><head><meta charset="utf-8"><meta name="viewp
 out <- rows |> transmute(season = SEASON, week = WEEK, refreshed = isoz(NOW), game_id, gsis_id, player_name, pos, team, opp, kickoff = isoz(ko), locked,
                          fallback, salary, dk_proj = round(dk_proj, 3), dk_bonus = round(dk_bonus, 3), p_boom = round(p_boom, 4), p_4x = round(p_4x, 4),
                          q90 = round(q90, 2), ppk = round(ppk, 3), value = round(value, 3), form = round(form, 2), last_pts = last_pts,
-                         implied, own = round(own, 4), own_milly = round(own_milly, 4), lev = round(lev, 4), dk_status, inj_status)
+                         implied, own = round(own, 4), own_milly = round(own_milly, 4), lev = round(lev, 4), dk_status, inj_status,
+                         across(any_of(paste0("bp_", c("td2", "notd", "pass300", "rush100", "rec100", "boomdk"))), \(x) round(x, 4)),
+                         across(any_of(paste0("bs_", c("td2", "notd", "pass300", "rush100", "rec100", "boomdk")))))
 write.csv(out, file.path(PROJ_DIR, sprintf("data/dfs/dfs_proj_%d_wk%02d.csv", SEASON, WEEK)), row.names = FALSE)
 message(sprintf("dfs: page written (%d rows: %s; %d slate games; salaries %s)", nrow(rows),
                 paste(names(table(rows$pos)), table(rows$pos), collapse = " "), length(slate_games), if (is.na(sal_src)) "none yet" else sal_src))

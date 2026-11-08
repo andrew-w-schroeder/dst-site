@@ -15,6 +15,10 @@
 #      average; P(boom) / P(bust) from the bundle's calibrations. Shows players with a yardage / receptions
 #      prop, plus TD-only players whose anytime-TD price is at or above the position's median.
 #   5. Writes site/players/index.html (+ archive). Trend = projection at every pull since props posted.
+#   Milestone odds (Andrew 2026-11-07, boom_utils.R): every pull also buys BOOM_MARKETS (player TDs over, alternate pass / rush /
+#   rec yardage ladders, rush + rec yards) for every game (about +4-6 credits a game; PROPS_BOOM=0 turns it off); stored in
+#   data/players/props_boom_<season>_wk<ww>.csv and shown as P(2+ TD), P(100+), P(2+ TD or 100+), P(no TD), P(300+). They never
+#   enter the projection (the alternates still fill in only for ladder games, as before).
 # Usage: Rscript scripts/65_player_refresh.R
 #   env PROPS_API_KEY (no key: re-renders from stored pulls), PROPS_MIN_REMAINING (default 300: stop pulling
 #   below this many credits), REFRESH_NOW=2026-09-27T16:00:00Z and PLAYER_PROPS_MOCK=<rds> for testing
@@ -29,6 +33,7 @@ source(file.path(PROJ_DIR, "scripts/player_site_utils.R"))
 source(file.path(PROJ_DIR, "scripts/site_utils.R"))
 source(file.path(PROJ_DIR, "scripts/64_player_page.R"))
 source(file.path(PROJ_DIR, "scripts/ext_player_utils.R"))
+if (file.exists(file.path(PROJ_DIR, "scripts/boom_utils.R"))) source(file.path(PROJ_DIR, "scripts/boom_utils.R"))   # milestone odds (Andrew 2026-11-07)
 utc <- function(x) as.POSIXct(sub("Z$", "", x), format = "%Y-%m-%dT%H:%M:%S", tz = "UTC")
 isoz <- function(t) format(t, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
 NOW <- if (nzchar(Sys.getenv("REFRESH_NOW"))) utc(Sys.getenv("REFRESH_NOW")) else as.POSIXct(format(Sys.time(), tz = "UTC"), tz = "UTC")
@@ -47,6 +52,9 @@ B <- readRDS(file.path(PROJ_DIR, "output/players_site", sprintf("bundle_%d_wk%02
 games <- B$games |> mutate(ko = utc(kickoff_utc))
 LIVE_CSV <- file.path(PROJ_DIR, sprintf("data/players/props_live_%d_wk%02d.csv", SEASON, WEEK))
 CI_CSV <- file.path(PROJ_DIR, sprintf("data/players/props_ci_%d_wk%02d.csv", SEASON, WEEK))
+## milestone odds per pull (boom_utils.R): P(2+ TDs), P(no TD), P(100+ rush / rec / rush + rec yds), P(300+ pass yds) from the books
+BOOM_CSV <- file.path(PROJ_DIR, sprintf("data/players/props_boom_%d_wk%02d.csv", SEASON, WEEK))
+BOOM_ON <- exists("BOOM_MARKETS") && Sys.getenv("PROPS_BOOM", "1") != "0"
 LIVE_COLS <- c("pulled_at", "game_id", "event_id", "commence_time", "market", "player", "n_books", "line", "p_over", "med_est",
                "line_min", "line_max", "p_td_raw")
 message(sprintf("players: %d week %d, %d games, %d started", SEASON, WEEK, nrow(games), sum(NOW >= games$ko)))
@@ -101,7 +109,7 @@ if (nzchar(KEY) || nzchar(MOCK)) tryCatch({
   longs <- list()
   for (i in seq_len(nrow(m))) {
     if (!is.na(left) && left < MIN_LEFT) { message(sprintf("players: stopping, %s credits left (< %s)", left, MIN_LEFT)); break }
-    mk <- c(PROP_MARKETS, if (m$game_id[i] %in% lad_games) PROP_ALT_MARKETS)
+    mk <- unique(c(PROP_MARKETS, if (m$game_id[i] %in% lad_games) PROP_ALT_MARKETS, if (BOOM_ON) BOOM_MARKETS))   # boom markets: every game, every pull (Andrew 2026-11-07)
     r <- tryCatch(get_json(sprintf("/events/%s/odds", m$event_id[i]),
                            list(apiKey = KEY, regions = "us", markets = paste(mk, collapse = ","), oddsFormat = "american")),
                   error = function(e) { message("players: ", m$game_id[i], " — ", conditionMessage(e)); NULL })
@@ -119,6 +127,25 @@ if (nzchar(KEY) || nzchar(MOCK)) tryCatch({
     BOOKS_RDS <- file.path(PROJ_DIR, sprintf("data/players/props_books_%d_wk%02d.rds", SEASON, WEEK))
     raw0 <- bind_rows(longs); near <- m$game_id[as.numeric(difftime(m$ct, NOW, units = "hours")) <= 3]
     near <- intersect(near, unique(raw0$game_id))
+    if (BOOM_ON) tryCatch({                                      # milestone odds, then leave the projections exactly as before
+      bm <- boom_market(raw0)
+      if (nrow(bm)) {
+        mp <- match_players(bm |> distinct(game_id, player), games |> select(game_id, season, week, home_team, away_team), B$roster)
+        bm <- bm |> left_join(mp |> select(game_id, player, gsis_id), by = c("game_id", "player")) |>
+          left_join(m |> select(game_id, commence_time), by = "game_id") |>
+          transmute(pulled_at = isoz(NOW), game_id, commence_time, player, gsis_id, stat, p = round(p, 4), n_books)
+        dir.create(dirname(BOOM_CSV), recursive = TRUE, showWarnings = FALSE)
+        write.table(bm, BOOM_CSV, sep = ",", row.names = FALSE, col.names = !file.exists(BOOM_CSV), append = file.exists(BOOM_CSV), qmethod = "double")
+        message(sprintf("players: milestone odds for %d players (%s)", n_distinct(paste(bm$game_id, bm$player)), paste(names(table(bm$stat)), table(bm$stat), collapse = ", ")))
+      }
+      ## per-book milestone prices of games kicking off within 3 h (for later recalibration; 66b uses the consensus CSV)
+      if (length(near)) { bbf <- file.path(PROJ_DIR, sprintf("data/players/props_boom_books_%d_wk%02d.rds", SEASON, WEEK))
+        bk <- if (file.exists(bbf)) readRDS(bbf) else list()
+        for (g in near) bk[[g]] <- list(pulled_at = isoz(NOW), long = raw0[raw0$game_id == g & raw0$market %in% c(BOOM_MARKETS, "player_anytime_td", "player_pass_yds", "player_rush_yds", "player_reception_yds"), ])
+        saveRDS(bk, bbf) }
+    }, error = function(e) message("players: milestone odds — ", conditionMessage(e)))
+    ## the projections use only the markets they used before: no boom-only markets, alternates only for ladder games
+    if (BOOM_ON) raw0 <- raw0 |> filter(!market %in% setdiff(BOOM_MARKETS, PROP_ALT_MARKETS), !(market %in% PROP_ALT_MARKETS & !game_id %in% lad_games))
     if (length(near)) tryCatch({ bk <- if (file.exists(BOOKS_RDS)) readRDS(BOOKS_RDS) else list()
       for (g in near) bk[[g]] <- list(pulled_at = isoz(NOW), event_id = m$event_id[m$game_id == g][1], long = raw0[raw0$game_id == g, ])
       saveRDS(bk, BOOKS_RDS) }, error = function(e) message("players: per-book save — ", conditionMessage(e)))
@@ -288,6 +315,19 @@ if (nrow(cur) && "fb_qb" %in% names(cur)) {
   out1 <- if ("inj_out" %in% names(cur)) cur |> filter(fallback, fb_qb %in% 1, inj_out %in% TRUE) |> distinct(game_id, team) else tibble(game_id = character(), team = character())
   cur <- cur |> mutate(include = include & !(fallback & fb_qb %in% 2 & !paste(game_id, team) %in% paste(out1$game_id, out1$team)))
 }
+
+## ---- 4c. Milestone odds (boom_utils.R; Andrew 2026-11-07): each game's newest pre-kickoff pull of the books' milestone prices,
+##          else the estimate from his expected stats (66b's fit, output/players_site/boom_fit.rds) ----
+if (nrow(cur) && exists("boom_attach")) tryCatch({
+  BF <- { f <- file.path(PROJ_DIR, "output/players_site/boom_fit.rds"); if (file.exists(f)) readRDS(f) }
+  bmk <- if (file.exists(BOOM_CSV)) as_tibble(read.csv(BOOM_CSV, stringsAsFactors = FALSE, colClasses = c(gsis_id = "character"))) |>
+    filter(!is.na(gsis_id), nzchar(gsis_id)) |> mutate(t = utc(pulled_at)) |> left_join(games |> select(game_id, ko), by = "game_id") |>
+    filter(t < ko) |> group_by(game_id) |> filter(t == max(t)) |> ungroup() |> distinct(game_id, gsis_id, stat, .keep_all = TRUE) else NULL
+  cur <- boom_attach(cur, bmk, BF)
+  message(sprintf("players: milestone odds on %d shown players (%d with a market price%s)", sum(!is.na(cur$bp_td2[cur$include]) | !is.na(cur$bp_pass300[cur$include])),
+                  sum(rowSums(as.matrix(cur[cur$include, grep("^bs_", names(cur))]) == "mkt", na.rm = TRUE) > 0),
+                  if (is.null(BF)) "; no boom_fit.rds yet: market prices only, 2+ TDs from the TD price" else ""))
+}, error = function(e) message("players: milestone odds attach — ", conditionMessage(e)))
 
 ## ---- 5. Page ----
 P <- list(season = SEASON, week = WEEK, now = NOW, cur = cur, hist = hist, games = games, bundle_time = B$created,

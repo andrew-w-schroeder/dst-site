@@ -32,6 +32,11 @@ PP_TIP <- c(
   "P(bust)" = "Chance of a bust week: half PPR QB under 12, RB / WR under 6, TE under 4 (other formats: the same share). Logistic fit on the Vegas projection, 2023+.",
   "TD%" = "Anytime-TD price as a probability (median across books; includes the books' margin). Expected TDs in the projection are calibrated from it. On rows without props yet: the sportsbook price when one is posted (it then sets his expected TDs), otherwise italic* = the price implied by his expected TDs from history.",
   Books = "Sportsbooks behind the median lines (most for any one of this player's markets).",
+  "P(2+ TD)" = "Chance of 2+ rushing / receiving TDs. Plain = the sportsbooks' own price (player TDs over 1.5, median across books, margin removed); italic* = no price posted, estimated from his anytime-TD price (and expected yards) with a fit on 2023+ results. Hover for both numbers.",
+  "P(100+)" = "Chance of 100+ yards: RB rushing + receiving yards together, WR / TE receiving yards. Plain = the sportsbooks' alternate-line ladder at 100 (median across books, margin removed; RBs: the rush + rec yards market, which DraftKings, BetMGM, BetRivers, FanDuel and Bovada post for each team's lead backs); italic* = estimated from his Vegas-only expected yards (fit on 2023+ results). Hover for both numbers.",
+  "P(2+ TD or 100+)" = "Chance of a boom game by either route: 2+ TDs or 100+ yards (as P(100+)). Combined from the two columns with a fit on 2023+ results (the two often happen together, so it is less than adding them). Italic* when neither part has a sportsbook price.",
+  "P(no TD)" = "Chance he doesn't score a rushing / receiving TD (a floor number). Italic* = 1 minus his anytime-TD price calibrated on 2023+ results (The Odds API doesn't carry DraftKings' \"not to score\" market; a book's \"No\" price would be shown plain if one ever comes through) (the TD% column includes the books' margin, so this is a little higher than 100% minus TD%).",
+  "P(300+)" = "Chance of 300+ passing yards (DraftKings' +3 bonus). Plain = the sportsbooks' alternate passing-yards ladder at 300 (median across books, margin removed); italic* = estimated from his expected passing yards (fit on 2023+ results). Hover for both numbers.",
   "Pass att" = "Expected pass attempts (volume; doesn't score).", "Rush att" = "Expected rushing attempts (volume; doesn't score).",
   Pos = "FLEX tab: the player's rank at his own position in this format.",
   "\u00b1" = "Model uncertainty of the projection, like the kicker and D/ST pages: half the width of its 90% bootstrap interval. Each of 60 draws resamples the sportsbooks behind the median lines (with replacement, per game) and uses one of 100 bootstrap refits of the props-to-stats calibration; the interval is the 5th to 95th percentile of the projections. Wide = books disagree, thin markets or lines far from typical. Hover for the interval. It measures how sure we are of the projection, not how much the player's score can swing (that is the range bar).",
@@ -178,6 +183,25 @@ pp_trend_hist <- function(hist, d, fmt) {
     filter(is.na(ko) | t < ko) |>
     select(gsis_id, game_id, t, proj = all_of(vc)) |> arrange(t)
 }
+## milestone odds columns (boom_utils.R via 65; Andrew 2026-11-07): QB 300+ passing; RB / WR / TE 2+ TDs, 100+ (RB rush + rec), either, no TD
+pp_boom_cols <- function(d) {
+  if (!"bp_td2" %in% names(d) || !exists("boom_cell")) return(NULL)
+  rb <- d$pos == "RB"
+  for (k in c("bp_", "bm_", "be_", "bn_", "bs_")) d[[paste0(k, "y100")]] <- ifelse(rb, d[[paste0(k, "scr100")]], d[[paste0(k, "rec100")]])
+  pc <- function(x) ifelse(is.na(x), "–", paste0(round(100 * x), "%"))
+  un <- ifelse(is.na(d$bp_boom), "", paste0(round(100 * d$bp_boom), "%"))
+  un <- ifelse(d$bs_boom %in% "est", paste0("<i class='fill'>", un, "*</i>"), un)
+  un <- ifelse(nzchar(un), tip_span(un, sprintf("<b>2+ TDs or 100+ %s</b>\n2+ TDs %s · 100+ %s\nEither: %s (the two often happen together)",
+                                                ifelse(rb, "rush + rec yds", "rec yds"), pc(d$bp_td2), pc(d$bp_y100), pc(d$bp_boom))), un)
+  qb <- d$pos == "QB"
+  tibble("P(300+)" = ifelse(qb, boom_cell(d, "pass300", "300+ passing yards"), ""),
+         "P(2+ TD)" = ifelse(qb, "", boom_cell(d, "td2", "2+ rushing / receiving TDs")),
+         "P(100+)" = ifelse(qb, "", boom_cell(d, "y100", ifelse(rb, "100+ rushing + receiving yards", "100+ receiving yards"))),
+         "P(2+ TD or 100+)" = ifelse(qb, "", un),
+         "P(no TD)" = ifelse(qb, "", boom_cell(d, "notd", "No rushing / receiving TD")))
+}
+PP_BOOM_NAMES <- c("P(300+)", "P(2+ TD)", "P(100+)", "P(2+ TD or 100+)", "P(no TD)")
+
 pp_pos_table <- function(P, pos, fmt) {
   if (!nrow(P$cur)) return("<p class='s'>No props posted yet for this position.</p>")
   flex <- pos == "FLEX"
@@ -237,6 +261,8 @@ pp_pos_table <- function(P, pos, fmt) {
   if (length(ext_c)) t <- t |> relocate(any_of(c("ECR", "ESPN rk", "Sleeper rk")), .after = any_of(c("Proj", "\u00b1")))
   t <- bind_cols(t, as_tibble(stat_cells), tibble("TD%" = ifelse(fb & !tdp & !is.na(d$p_td_raw), paste0("<i class='fill'>", pp_pct(d$p_td_raw), "*</i>"), pp_pct(d$p_td_raw)),
     Books = ifelse(fb & !tdp, "", do.call(pmax, c(map(grep("^n_books\\.", names(d), value = TRUE), \(c) coalesce(d[[c]], 0)), na.rm = TRUE)))))
+  bc <- pp_boom_cols(d)
+  if (!is.null(bc)) { bc <- if (pos == "QB") bc["P(300+)"] else bc[setdiff(names(bc), "P(300+)")]; t <- t |> mutate(!!!bc, .after = "TD%") }
   brk <- c(FALSE, tr$tier[-1] != tr$tier[-length(tr$tier)])
   row_cls <- trimws(paste(ifelse(tr$tier %% 2 == 1, "tier-odd", ""), ifelse(brk, ifelse(tr$clear[tr$tier] %in% TRUE, "tb-clear", "tb-soft"), ""),
                           ifelse(fb, "nop", "")))
@@ -244,7 +270,7 @@ pp_pos_table <- function(P, pos, fmt) {
   tc <- if (ng <= 2) tier_cls(tr$tier, k = max(tr$tier)) else
     ifelse(tr$tier <= ng, paste0("g", ng, "_", tr$tier), tier_cls(tr$tier, k = max(tr$tier)))
   pos_cls <- if (flex) list(Pos = paste0("pz ", tolower(d$pos))) else list()        # FLEX: colour-coded position (Andrew 2026-10-03): RB pink (not green: the tiers are green), WR sky blue, TE orange
-  pp_table(t, raw = c("Player", "Trend", "ECR", "Range bar", "\u00b1", "TD%", unname(scols)), id = paste0("t_", pos, "_", fmt), row_cls = row_cls,
+  pp_table(t, raw = c("Player", "Trend", "ECR", "Range bar", "\u00b1", "TD%", unname(scols), PP_BOOM_NAMES), id = paste0("t_", pos, "_", fmt), row_cls = row_cls,
            cell_cls = c(list(Rank = tc, Player = tc, Proj = tc), ext_c, pos_cls), row_key = pp_search_key(d$player_name, d$team))
 }
 
