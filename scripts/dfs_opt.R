@@ -29,6 +29,12 @@ suppressPackageStartupMessages({ library(dplyr); library(tidyr); library(purrr) 
 ## max ceiling (Andrew 2026-10-30; 91e build search, 527K back-test lineups): QB + 3 receivers + a bring-back, >= $49.9K, aimed at the
 ## 90th percentile, no ownership discount, nobody facing our D/ST
 MAX_RECIPE <- list(k = 3, bb = TRUE, floor = 49900, aim = "ceil", fade = 0, sd = 0.20, n = 20, tries = 600)
+## Millionaire 150 (Andrew 2026-11-08; 91j / 91k / 91l back-tests on 58 real 2023-26 Millionaires, objective capped ROI with
+## the most cashes while keeping the top-0.1% finishes): build "A" = 60% high floor (best projections with QB + 1+ of his
+## WR / TE, nobody facing our D/ST), then 25% Max-recipe lineups (QB + 3 + bring-back, >= $49.9K, 90th pct x noise; 2/3 plain,
+## 1/3 light ownership fade) ranked by ceiling, then the rest high floor again; every lineup >= 3 players different, no caps.
+## In sample: 55.8 cashes of 150 a week (base 39.9), capped ROI +11.5% (base -7.7%), top 0.1% in 15 of 58 weeks.
+MILLY150 <- list(n = 150, core_first = 0.6, max_share = 0.25, min_diff = 3, core_draws = 1200, draws = 450, light_share = 1 / 3, light_fade = 0.3)
 OPT <- list(S = 10000, F = 20000, cash_q = 0.55, gcash_q = 0.76, top_q = 0.99, n_gpp_cand = 2500, n_cash_cand = 300, n_lineups = 10, floor_n = 20,
             gpp_n = 20, gpp_top = 1e-4, contest_n = 277447, min_diff = 3, max_expo_frac = 0.5, smooth = 2.5,
             field_stack = 0.60, cap = 50000, field_min_sal = 48500, seed = 7)
@@ -201,8 +207,9 @@ lp_no_vs_dst <- function(P) {
 }
 lp_join <- function(...) { l <- list(...); list(A = do.call(c, lapply(l, `[[`, "A")), dir = do.call(c, lapply(l, `[[`, "dir")), rhs = do.call(c, lapply(l, `[[`, "rhs"))) }
 ## the n best lineups by w under extra constraints, each differing from the earlier ones by min_diff+ players (and 2+ games)
-lp_best_n <- function(P, w, base, extra, n, min_diff) {
+lp_best_n <- function(P, w, base, extra, n, min_diff, prior = list()) {
   out <- list(); cuts <- list(A = list(), dir = c(), rhs = c())
+  for (l in prior) { a <- numeric(nrow(P)); a[l] <- 1; cuts <- lp_join(cuts, list(A = list(a), dir = "<=", rhs = 9 - min_diff)) }   # differ from earlier picks too
   while (length(out) < n) { l <- lp_solve_lineup(w, base, lp_join(extra, cuts)); if (is.null(l)) break
     a <- numeric(nrow(P)); a[l] <- 1
     if (length(unique(P$game_id[l])) >= 2) { out[[length(out) + 1]] <- sort(l); cuts <- lp_join(cuts, list(A = list(a), dir = "<=", rhs = 9 - min_diff)) }
@@ -294,6 +301,27 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
     if (all(vapply(mx, \(j) 9 - length(intersect(l, j)) >= opt$min_diff, TRUE))) mx[[length(mx) + 1]] <- l }
   for (l in mx) { cands[[length(cands) + 1]] <- l; typ <- c(typ, "max") }
   say(sprintf("opt: %d max-ceiling lineups (%.0f s)", length(mx), el()))
+  ## Millionaire 150 (MILLY150, build A): high floor core, then the Max-recipe slice by ceiling, then the rest high floor
+  m1 <- MILLY150; ml <- list()
+  if (isTRUE(opt$milly150 %||% TRUE)) {
+    exq <- lp_join(lp_stack(P, STACKS$qb1), nvd); own_m <- coalesce(P$own_milly %||% P$own, P$own)
+    ## candidate pools (as the back-test's): near-best projections under the high-floor rules (projection x small noise, plus the
+    ## exact high-floor lineups), and Max-recipe draws; then greedy, every pick >= min_diff different from all earlier picks
+    keyf <- function(x) vapply(x, paste, "", collapse = "-")
+    core <- hf; for (it in seq_len(m1$core_draws)) { l <- lp_solve_lineup(P$dk_proj * exp(rnorm(nrow(P), 0, sample(c(0.03, 0.06, 0.10, 0.15), 1))), base, exq)
+      if (!is.null(l) && length(unique(P$game_id[l])) >= 2) core[[length(core) + 1]] <- sort(l) }
+    core <- core[!duplicated(keyf(core))]; core <- core[order(-vapply(core, \(l) sum(P$dk_proj[l]), 0))]
+    dr <- list(); for (it in seq_len(m1$draws)) { w <- q90 * exp(rnorm(nrow(P), 0, mr$sd)) * (if (it <= m1$draws * m1$light_share) (1 - own_m)^m1$light_fade else 1)
+      l <- lp_solve_lineup(w, base, exm); if (!is.null(l) && length(unique(P$game_id[l])) >= 2) dr[[length(dr) + 1]] <- sort(l) }
+    dr <- dr[!duplicated(keyf(dr))]; dr <- dr[order(-vapply(dr, \(l) sum(q90[l]), 0))]
+    greedy <- function(pool, k) { got <- 0; for (l in pool) { if (got >= k || length(ml) >= m1$n) break
+        if (!any(keyf(list(l)) == keyf(ml)) && all(vapply(ml, \(j) 9 - length(intersect(l, j)) >= m1$min_diff, TRUE))) { ml[[length(ml) + 1]] <<- l; got <- got + 1 } }; got }
+    n1 <- greedy(core, round(m1$core_first * m1$n)); n_m <- greedy(dr, round(m1$max_share * m1$n)); n2 <- greedy(core, m1$n - length(ml))
+    n_max <- round(m1$max_share * m1$n) - n_m
+    if (length(ml) < m1$n) ml <- c(ml, lp_best_n(P, P$dk_proj, base, exq, m1$n - length(ml), m1$min_diff, prior = ml))   # pool ran dry: exact top-up
+    for (l in ml) { cands[[length(cands) + 1]] <- l; typ <- c(typ, "milly") }
+    say(sprintf("opt: %d Millionaire-150 lineups (%d Max-recipe) (%.0f s)", length(ml), round(m1$max_share * m1$n) - n_max, el()))
+  }
   ## high ceiling candidates (as 91c); q90 is set above: projection x noise under a random stack rule, 30% with a $49.9K floor, 25% with a light
   ## ownership discount; nobody facing our D/ST
   for (it in seq_len(opt$n_gpp_cand)) {
@@ -332,6 +360,7 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
   kf <- match(vapply(hf, paste, "", collapse = "-"), key); kf <- kf[!is.na(kf)]
   kc <- pick_cash(p_cash, Lc, opt$n_lineups, opt$min_diff)                             # double-ups: the 10 best P(cash)
   km <- match(vapply(mx, paste, "", collapse = "-"), key); km <- km[!is.na(km)]
+  kml <- if (length(ml)) { x <- match(vapply(ml, paste, "", collapse = "-"), key); x[!is.na(x)] } else integer()
   Tt <- lineup_traits(Lc, P) |> mutate(proj = rowSums(matrix(P$dk_proj[Lc], nC)), ceil = rowSums(matrix(q90[Lc], nC)))
   ci <- which(typ == "ceiling")
   sc <- if (!is.null(trait_model)) trait_score(Tt, trait_model) else qlogis(pmin(pmax(p_top, 1e-4), 1 - 1e-4))
@@ -356,7 +385,7 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
     mean(hit) }
   port_of <- function(k) tibble(any_elite = any_hits(k, "elite"), any_top01 = any_hits(k, "top01"), any_top = any_hits(k, "top"),
                  exp_elite = sum(p_elite[k]), mean_own = mean(P$own[c(Lc[k, ])]), field_mean_own = sum(P$own^2) / sum(P$own))
-  port <- port_of(kg); port_max <- if (length(km)) port_of(km) else NULL
+  port <- port_of(kg); port_max <- if (length(km)) port_of(km) else NULL; port_milly <- if (length(kml)) port_of(kml) else NULL
   n_cash <- if (length(kc)) mean(colSums(hcash[kc, , drop = FALSE])) else NA
   ## stack exploration: every tournament candidate's odds by the stack it ended up with
   stx <- tibble(stack = lab, p_top = p_top, p_elite = p_elite, p_cash = p_cash) |> group_by(stack) |>
@@ -364,7 +393,8 @@ dfs_optimize <- function(rows, S_spec, dst_unc, env_tab, opt = OPT, say = messag
               best_top = max(p_top), best_cash = max(p_cash), .groups = "drop") |> arrange(desc(mean_elite10))
   say(sprintf("opt: done in %.0f s; tournament P(any of %d in the top %s%%) %.1f%% (top 0.1%%: %.1f%%, top 1%%: %.1f%%); double-up expected cashes %.1f of %d",
               el(), length(kg), format(100 * opt$gpp_top), 100 * port$any_elite, 100 * port$any_top01, 100 * port$any_top, n_cash, length(kc)))
-  list(cash = mk(kc, "cash"), floor = mk(kf, "floor"), gpp = mk(kg, "gpp"), max = mk(km, "max"), any_top = port$any_top, port = port, port_max = port_max,
+  list(cash = mk(kc, "cash"), floor = mk(kf, "floor"), gpp = mk(kg, "gpp"), max = mk(km, "max"), milly = mk(kml, "milly"), any_top = port$any_top, port = port, port_max = port_max,
+       port_milly = port_milly, milly_n_cash = if (length(kml)) mean(colSums(hgcash[kml, , drop = FALSE])) else NA, milly_recipe = MILLY150,
        max_n_cash = if (length(km)) mean(colSums(hgcash[km, , drop = FALSE])) else NA, max_recipe = MAX_RECIPE, n_cash = n_cash, stacks = stx,
        ranker = if (!is.null(trait_model)) "trait" else "sim",
        floor_n_cash = if (length(kf)) mean(colSums(hgcash[kf, , drop = FALSE])) else NA, gpp_n_cash = if (length(kg)) mean(colSums(hgcash[kg, , drop = FALSE])) else NA,
