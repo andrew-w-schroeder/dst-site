@@ -241,9 +241,9 @@ const v=r=>{const s=r.children[i].innerText.replace(/[$,%+*\\u{1F512}]/gu,"").tr
 ## ---- Sub-navigation of the DFS section and the two lineup pages (Andrew 2026-10-04) ----
 dfs_subnav <- function(active, b) {
   it <- c(players = "Players", cash = "Cash (double-ups)", floor = "High floor (tournaments)", gpp = "High ceiling (top 1%)", max = "Max ceiling (top 0.01%)",
-          milly = "Millionaire (150)", showdown = "Showdown", track = "Track record")                    # milly: Andrew 2026-11-08                                   # showdown: 97s_sd_refresh.R (Andrew 2026-11-05)
+          milly = "Millionaire (150)", showdown = "Showdown · Highest projected", showdown_cpt = "Showdown · Captain spread", track = "Track record")   # showdown_cpt: Andrew 2026-11-09                    # milly: Andrew 2026-11-08                                   # showdown: 97s_sd_refresh.R (Andrew 2026-11-05)
   hr <- c(players = paste0(b, "dfs/"), cash = paste0(b, "dfs/cash/"), floor = paste0(b, "dfs/floor/"), gpp = paste0(b, "dfs/gpp/"), max = paste0(b, "dfs/max/"),
-          milly = paste0(b, "dfs/milly/"), showdown = paste0(b, "dfs/showdown/"), track = paste0(b, "dfs/track/"))
+          milly = paste0(b, "dfs/milly/"), showdown = paste0(b, "dfs/showdown/"), showdown_cpt = paste0(b, "dfs/showdown-cpt/"), track = paste0(b, "dfs/track/"))
   paste0('<div class="subnav">', paste0(sprintf('<a class="%s" href="%s">%s</a>', ifelse(names(it) == active, "on", ""), hr, it), collapse = ""), '</div>')
 }
 DFS_SUBNAV_CSS <- '.subnav{display:flex;flex-wrap:wrap;gap:6px;margin:.2rem 0 .8rem}.subnav a{padding:6px 14px;border:1px solid var(--bd);border-radius:999px;text-decoration:none;color:var(--fg);font-size:14px}
@@ -265,7 +265,8 @@ dfs_lineup_page <- function(P, kind) {
 body{background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;max-width:1500px;margin:1.5rem auto;padding:0 16px}
 h1{font-size:1.4rem;margin:.2rem 0}h2{font-size:1.1rem;margin:1.4rem 0 .4rem}.s{color:var(--mut);font-size:13px}a{color:var(--acc)}.tw{overflow-x:auto}
 table{border-collapse:collapse;font-size:13px;white-space:nowrap}th,td{border:1px solid var(--bd);padding:3px 7px;text-align:right}th{background:var(--th)}td.l,th.l{text-align:left}',
-    DFS_SUBNAV_CSS, DFS_LU_CSS, SITE_CSS, '</style></head><body>', site_nav("dfs", b), dfs_subnav(kind, b),
+    DFS_SUBNAV_CSS, DFS_LU_CSS, SITE_CSS, if (exists("DKFILL_CSS")) DKFILL_CSS else "", '</style>', if (exists("DKFILL_JS")) paste0("<script>", DKFILL_JS, "</script>") else "",
+    '</head><body>', site_nav("dfs", b), dfs_subnav(kind, b),
     sprintf("<h1>DraftKings %s — %d week %d</h1>", title, P$season, P$week))
   if (is.null(LU) || is.null(LU[[kind]]) || !nrow(LU[[kind]])) return(paste0(head, "<p>No lineups yet: they're built once DK salaries for the main slate are in (see the Players tab).</p></body></html>"))
   L <- LU[[kind]]; nl <- n_distinct(L$lineup)
@@ -361,7 +362,8 @@ table{border-collapse:collapse;font-size:13px;white-space:nowrap}th,td{border:1p
                      ifelse(is.na(rr[2, ]), "", format(rr[2, ], big.mark = ","))), collapse = ""), "</tbody></table></div>") }
   paste0(head,
     sprintf("<p class='s'>%s %s</p>", when, how),
-    sprintf('<a class="btn" href="%s" download>Download the %d lineups for DraftKings (CSV)</a> <span class="s">DK: Lineups → Upload lineups → this file (player IDs in QB, RB, RB, WR, WR, WR, TE, FLEX, DST order).</span>', csv, nl),
+    if (exists("dk_fill_box")) dk_fill_box(list(list(label = title, lineups = dk_fill_lineups(L))), sprintf("these %d lineups", nl)) else "",
+    sprintf('<p class="s">Not reserving? <a href="%s" download>New-lineups CSV (%d lineups)</a> for DK &rarr; Lineups &rarr; Upload Lineups (player IDs in QB, RB, RB, WR, WR, WR, TE, FLEX, DST order).</p>', csv, nl),
     '<div class="kpis">', kpis, '</div>', if (length(cards)) paste0('<div class="lus">', paste0(cards, collapse = ""), '</div>') else "",
     sprintf("<h2>Exposure across the %d</h2>", nl), ex_html, st_html, cor_html,
     "<p class='s'>Caveats: the simulation treats our projections as the true averages, so the odds are optimistic in absolute terms; ",
@@ -391,24 +393,28 @@ td.p{color:var(--pos)}td.n{color:var(--neg)}tr.tot td{font-weight:600;background
   T <- TR$track |> filter(season == !!season)
   if (!nrow(T)) return(paste0(head, "<p>No scored weeks for this season yet.</p></body></html>"))
   lf <- TR$live_from %||% c(season = season, week = 8)
-  cols <- tibble(tab = c("cash", "floor", "floor", "gpp", "gpp", "max", "max", "milly150", "showdown"), contest = c("double-up", "pa", "milly", "pa", "milly", "pa", "milly", "milly", "sd_pa"),
-                 head = c("Cash (double-ups)", "High floor · PA", "High floor · Milly", "High ceiling · PA", "High ceiling · Milly", "Max ceiling · PA", "Max ceiling · Milly", "Millionaire 150", "Showdown · PA"))
-  TAB_ORD <- c("Cash (double-ups)", "High floor", "High ceiling", "Max ceiling", "Millionaire (150)", "Showdown")
+  ## Showdown: two models from 2026-11-09 (Andrew): Highest projected (tab "showdown") and Captain spread ("showdown_cpt")
+  cols <- tibble(tab = c("cash", "floor", "floor", "gpp", "gpp", "max", "max", "milly150", "showdown", "showdown_cpt"), contest = c("double-up", "pa", "milly", "pa", "milly", "pa", "milly", "milly", "sd_pa", "sd_pa"),
+                 head = c("Cash (double-ups)", "High floor · PA", "High floor · Milly", "High ceiling · PA", "High ceiling · Milly", "Max ceiling · PA", "Max ceiling · Milly", "Millionaire 150",
+                          if (any(T$tab == "showdown_cpt")) "Showdown HP · PA" else "Showdown · PA", "Showdown CS · PA"))
+  TAB_ORD <- c("Cash (double-ups)", "High floor", "High ceiling", "Max ceiling", "Millionaire (150)", "Showdown", "Showdown · Highest projected", "Showdown · Captain spread")
   if (!any(T$tab == "showdown")) cols <- cols[cols$tab != "showdown", ]
+  if (!any(T$tab == "showdown_cpt")) cols <- cols[cols$tab != "showdown_cpt", ]
   if (!any(T$tab == "milly150")) cols <- cols[cols$tab != "milly150", ]
   cell <- function(r) if (is.na(r)) "<td></td>" else sprintf("<td class='%s'>%+.0f%%</td>", if (r >= 0) "p" else "n", 100 * r)
   agg <- function(d) vapply(seq_len(nrow(cols)), \(j) { x <- d[d$tab == cols$tab[j] & d$contest == cols$contest[j], ]; if (!nrow(x)) NA_real_ else sum(x$won) / sum(x$fees) - 1 }, 0)
   wk <- sort(unique(T$week))
   rows <- vapply(wk, \(w) { d <- T[T$week == w, ]; src <- if (any(d$source == "live")) "live" else d$source[1]
     big <- function(x) c(if (any(x$top001, na.rm = TRUE)) "top 0.01%", if (any(x$top01 & !x$top001, na.rm = TRUE)) "top 0.1%")
-    hit <- tibble(t = paste(c(big(d |> filter(contest != "double-up", !tab %in% c("showdown", "milly150"))),
-                              sub("^", "Milly 150 ", big(d |> filter(tab == "milly150"))), sub("^", "Showdown ", big(d |> filter(tab == "showdown")))), collapse = ", "))
+    hit <- tibble(t = paste(c(big(d |> filter(contest != "double-up", !tab %in% c("showdown", "showdown_cpt", "milly150"))),
+                              sub("^", "Milly 150 ", big(d |> filter(tab == "milly150"))), sub("^", if (any(T$tab == "showdown_cpt")) "Showdown HP " else "Showdown ", big(d |> filter(tab == "showdown"))),
+                              sub("^", "Showdown CS ", big(d |> filter(tab == "showdown_cpt")))), collapse = ", "))
     paste0("<tr><td class='l'>", w, "</td><td class='l'><span class='tag", if (src == "live") " live" else "", "'>", src, "</span></td>",
            paste(vapply(agg(d), cell, ""), collapse = ""), "<td class='l'>", hit$t, "</td></tr>") }, "")
   pre <- T |> filter(week < lf[["week"]]); tot_pre <- if (nrow(pre)) paste0("<tr class='tot'><td class='l' colspan='2'>Through week ", lf[["week"]] - 1, "</td>", paste(vapply(agg(pre), cell, ""), collapse = ""), "<td></td></tr>") else ""
   tot <- paste0("<tr class='tot'><td class='l' colspan='2'>Season to date</td>", paste(vapply(agg(T), cell, ""), collapse = ""), "<td></td></tr>")
   if (!"games" %in% names(T)) T$games <- NA_real_
-  sd_lab <- function(x) mutate(x, contest_label = ifelse(tab_label == "Showdown", sprintf("%s · %d games", contest_label, games), contest_label))
+  sd_lab <- function(x) mutate(x, contest_label = ifelse(grepl("^Showdown", tab_label), sprintf("%s · %d games", contest_label, games), contest_label))
   money <- T |> group_by(tab_label, contest_label) |> summarise(weeks = n(), games = sum(games, na.rm = TRUE), fees = sum(fees), won = sum(won), cashes = sum(cashes, na.rm = TRUE), entries = sum(entries),
     top1 = sum(top1, na.rm = TRUE), top01 = sum(top01, na.rm = TRUE), top001 = sum(top001, na.rm = TRUE), .groups = "drop") |>
     mutate(roi = won / fees - 1, ord = match(tab_label, TAB_ORD)) |> arrange(ord, contest_label) |> sd_lab()
@@ -420,12 +426,16 @@ td.p{color:var(--pos)}td.n{color:var(--neg)}tr.tot td{font-weight:600;background
     summarise(weeks = n(), games = sum(games, na.rm = TRUE), roi = sum(won) / sum(fees) - 1, top001 = sum(top001, na.rm = TRUE), .groups = "drop") |>
     mutate(ord = match(tab_label, TAB_ORD)) |> arrange(ord, contest_label) |> sd_lab()
   ## Showdown game by game (this season): which game won or lost inside a week's cell
-  gt <- if (!is.null(sdg) && nrow(sdg)) sdg |> filter(season == !!season) |> arrange(desc(week), desc(ko)) else NULL
+  if (!is.null(sdg) && !"model" %in% names(sdg)) sdg$model <- "top"
+  gt <- if (!is.null(sdg) && nrow(sdg)) sdg |> filter(season == !!season) |> mutate(mo = match(model, c("top", "cpt"))) |> arrange(desc(week), desc(ko), mo) else NULL
+  two_m <- !is.null(gt) && n_distinct(gt$model) > 1; mlab <- c(top = "Highest projected", cpt = "Captain spread")
   gt_html <- if (!is.null(gt) && nrow(gt)) paste0("<h2>Showdown, game by game</h2><p class='s'>20 lineups in each game's flagship Play-Action ($3). ",
-      "<b>On tab</b> = the games the Showdown tab posts: kickoff 7 pm ET or later, or alone in its kickoff slot (international, holiday, Saturday games).</p><div class='tw'><table><thead><tr><th class='l'>Week</th><th class='l'>Game</th><th class='l'>Kickoff (ET)</th>",
+      "<b>On tab</b> = the games the Showdown tabs post: kickoff 7 pm ET or later, or alone in its kickoff slot (international, holiday, Saturday games).</p><div class='tw'><table><thead><tr><th class='l'>Week</th><th class='l'>Game</th><th class='l'>Kickoff (ET)</th>",
+      if (two_m) "<th class='l'>Model</th>" else "",
       "<th class='l'>Lineups</th><th>Field</th><th>ROI</th><th>Won</th><th>Cashes</th><th>Top-1% lineups</th><th>Best finish</th><th>Our best</th><th>Winner</th></tr></thead><tbody>",
-      paste0(sprintf("<tr><td class='l'>%d</td><td class='l'>%s%s</td><td class='l'>%s</td><td class='l'><span class='tag%s'>%s</span></td><td>%s</td>%s<td>%s</td><td>%s</td><td>%s</td><td>top %s</td><td>%.1f</td><td>%.1f</td></tr>",
-        gt$week, gt$game, ifelse((if ("tab_game" %in% names(gt)) gt$tab_game else gt$primetime) %in% TRUE, " <span class='tag'>on tab</span>", ""), gt$ko_et, ifelse(gt$source == "live", " live", ""), gt$source,
+      paste0(sprintf("<tr><td class='l'>%d</td><td class='l'>%s%s</td><td class='l'>%s</td>%s<td class='l'><span class='tag%s'>%s</span></td><td>%s</td>%s<td>%s</td><td>%s</td><td>%s</td><td>top %s</td><td>%.1f</td><td>%.1f</td></tr>",
+        gt$week, gt$game, ifelse((if ("tab_game" %in% names(gt)) gt$tab_game else gt$primetime) %in% TRUE, " <span class='tag'>on tab</span>", ""), gt$ko_et,
+        if (two_m) sprintf("<td class='l'>%s</td>", mlab[gt$model]) else "", ifelse(gt$source == "live", " live", ""), gt$source,
         formatC(gt$field, format = "d", big.mark = ","), vapply(gt$roi, cell, ""), dfs_money(round(gt$won)), ifelse(is.na(gt$cashes), "", sprintf("%d of %d", as.integer(gt$cashes), as.integer(gt$entries))),
         ifelse(is.na(gt$n_top1), "", gt$n_top1), ifelse(gt$best_pct < 0.001, sprintf("%.3f%%", 100 * gt$best_pct), sprintf("%.1f%%", 100 * gt$best_pct)), gt$best, gt$win), collapse = ""),
       "</tbody></table></div>") else ""
@@ -437,7 +447,8 @@ td.p{color:var(--pos)}td.n{color:var(--neg)}tr.tot td{font-weight:600;background
       lf[["week"]], 100 * (TR$du_frac %||% 0.25), format(TR$built, "%b %d"),
       if (!is.null(SDT$track) && nrow(SDT$track)) sprintf(paste0("<p class='s'><b>Showdown</b> = 20 lineups in each game's flagship Play-Action ($3, the largest \"NFL Showdown $___K Play-Action [20 Entry Max]\"), built the way the Showdown tab builds them ",
         "(the 20 best projections with no player lacking props / a model, ", if ((SDT$rules$max_left %||% 1000) >= 50000) "any salary left unused" else sprintf("$%s or less left", format(SDT$rules$max_left, big.mark = ",")),
-        ", at least 2 of 6 slots different); a week's cell adds up all of that week's games. ",
+        ", at least 2 of 6 slots different)", if (any(T$tab == "showdown_cpt")) sprintf("; <b>HP</b> = Highest projected (that build), <b>CS</b> = Captain spread (every QB / RB / WR / TE projected %s+ DK points captains at least one lineup, the rest the same build)",
+          format(SDT$cpt_thr %||% 8.5)) else "", "; a week's cell adds up all of that week's games. ",
         "<b>backfill</b> = every flagship game (primetime or not) through week %d, with projections fitted without that season; <b>live</b> (from week %d) = the Showdown tab's lineups frozen at kickoff, which it posts for primetime games and games alone in their kickoff slot. ",
         "Scored on the real contest the same way. Updated %s.</p>"), SDT$live_from[["week"]] - 1, SDT$live_from[["week"]], format(SDT$built, "%b %d")) else "",
       if (!is.null(M150$track) && nrow(M150$track)) sprintf(paste0("<p class='s'><b>Millionaire 150</b> = the Millionaire (150) tab's build as if entered: 150 lineups in the $20 Millionaire Maker ($3,000 a week; not actually entered). ",

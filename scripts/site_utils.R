@@ -855,3 +855,94 @@ details.sitekey>summary{cursor:pointer;font-weight:600;color:var(--fg,#222);font
 .krb .ci{left:31px;width:8px;top:3px;height:6px;background:#dd6b20;border-radius:2px}.krb .pt{left:34px;width:2px;top:-2px;height:16px;background:var(--fg,#222)}
 @media (max-width:640px){.sitekey .kr{display:block}.sitekey .kl{display:block;margin-bottom:1px}.sitekey .k{white-space:normal}}'
 SITE_CSS <- paste0(SITE_CSS, KEY_CSS)
+
+## ---- Fill DK reserved entries in the browser (Andrew 2026-11-08: "I'm only going to reserve entries from now on") ----
+## DK's Lineups > Edit Entries > Download gives a DKEntries.csv with the reserved entries (Entry ID, contest, fee, then the
+## roster columns) and DK's player list; its Upload CSV only takes that layout. dk_fill_box() puts a small form on a lineup
+## page: the visitor picks that file (read locally, never sent anywhere), picks the contest, and gets the same file back with
+## our lineups in the roster cells (ids checked against DK's player list in the file; name + roster position if an id
+## differs, e.g. another draft group). Classic tabs pass their own lineups; the Showdown page passes every game and the
+## game whose players are in the file is used. DKFILL_JS goes in the page's <head>.
+DKFILL_JS <- r"---(/* DK reserved-entries filler (Andrew 2026-11-08: "I'm only going to reserve entries from now on").
+   In the browser: the DKEntries.csv that DK's Lineups > Edit Entries > Download gives you is read locally (never uploaded
+   anywhere), our lineups are written into the CPT / FLEX (showdown) or QB..DST (classic) cells of the chosen contest's
+   entries, and a filled file is offered for DK's Upload CSV on the same page. Player ids are checked against DK's own player
+   list in that file; a player whose id isn't there is matched by name + roster position (another draft group). */
+function dkCsvParse(t){t=t.replace(/^﻿/,"");const R=[];let row=[],f="",q=false;
+  for(let i=0;i<t.length;i++){const c=t[i];
+    if(q){if(c=='"'){if(t[i+1]=='"'){f+='"';i++}else q=false}else f+=c}
+    else if(c=='"')q=true;else if(c==','){row.push(f);f=""}else if(c=='\n'||c=='\r'){if(c=='\r'&&t[i+1]=='\n')i++;row.push(f);R.push(row);row=[];f=""}else f+=c}
+  if(f.length||row.length){row.push(f);R.push(row)}return R}
+function dkCsvCell(x){x=String(x==null?"":x);return /[",\n]/.test(x)?'"'+x.replace(/"/g,'""')+'"':x}
+function dkNorm(s){return String(s||"").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/\b(jr|sr|ii|iii|iv|v)\b\.?/g,"").replace(/[^a-z0-9]/g,"")}
+/* read a DKEntries file: entries, roster headers, player list */
+function dkRead(text){const R=dkCsvParse(text);if(!R.length)return{err:"The file is empty."};
+  const H=R[0].map(s=>s.trim());if(H[0]!=="Entry ID")return{err:"This isn't DK's entries file: its first column should be “Entry ID”. Download it from DK → Lineups → Edit Entries."};
+  const pos=[];for(let j=4;j<H.length&&H[j];j++)pos.push(H[j]);
+  const E=R.slice(1).filter(r=>/^\d+$/.test((r[0]||"").trim())).map(r=>({id:r[0].trim(),cname:r[1],cid:r[2],fee:r[3],cur:r.slice(4,4+pos.length)}));
+  let P=[],hr=-1,hc=-1;for(let i=0;i<R.length&&hr<0;i++){const k=R[i].indexOf("Name + ID");if(k>0){hr=i;hc=k-1}}
+  if(hr>=0)for(let i=hr+1;i<R.length;i++){const r=R[i];const id=(r[hc+3]||"").trim();if(!/^\d+$/.test(id))continue;
+    P.push({id:id,name:r[hc+2],rp:(r[hc+4]||"").split("/").map(s=>s.trim()),sal:+r[hc+5]||0,team:(r[hc+7]||"").trim()})}
+  return{pos:pos,E:E,P:P}}
+/* contests in the file */
+function dkContests(F){const m=new Map();F.E.forEach(e=>{const k=e.cid;if(!m.has(k))m.set(k,{cid:e.cid,cname:e.cname,fee:e.fee,n:0,blank:0});const c=m.get(k);c.n++;if(e.cur.every(x=>!String(x).trim()))c.blank++});return[...m.values()]}
+/* map one lineup onto the file's ids; slots = the file's roster headers */
+function dkMap(lu,F){const byId=new Map(F.P.map(p=>[p.id,p]));const out=[],miss=[];let sal=0;
+  for(let k=0;k<F.pos.length;k++){const want=F.pos[k],pl=lu[k];if(!pl){miss.push("(empty slot)");continue}
+    let p=byId.get(String(pl.id));
+    if(p&&p.rp.indexOf(want)<0)p=null;                                   /* e.g. a FLEX id in the captain slot */
+    if(!p){const n=dkNorm(pl.name);const c=F.P.filter(q=>dkNorm(q.name)===n&&q.rp.indexOf(want)>=0&&(!pl.team||!q.team||q.team===pl.team||F.P.filter(z=>dkNorm(z.name)===n).length===1));p=c.length?c[0]:null}
+    if(!p){miss.push(pl.name+" ("+want+")");continue}out.push(p.id);sal+=p.sal}
+  return{ids:out,miss:miss,sal:sal}}
+/* the filled file for one contest; sets = [{label, lineups:[[{id,name,team}...]]}] */
+function dkFill(text,sets,opt){opt=opt||{};const F=dkRead(text);if(F.err)return{err:F.err};
+  if(!F.E.length)return{err:"No entries in this file. Reserve entries first, then download the file again."};
+  const C=dkContests(F);const cid=opt.cid||C.slice().sort((a,b)=>b.n-a.n)[0].cid;const con=C.find(c=>c.cid===cid);
+  const fit=sets.filter(s=>s.lineups.length&&s.lineups[0].length===F.pos.length);
+  if(!fit.length)return{err:"This file is for a contest with "+F.pos.length+" roster spots ("+F.pos.join(", ")+"); these lineups have "+(sets[0]&&sets[0].lineups[0]?sets[0].lineups[0].length:0)+". Use the "+(F.pos.length===6?"Showdown":"classic lineup")+" tab for this file.",C:C};
+  /* the set (game) whose players are in this file */
+  const ids=new Set(F.P.map(p=>p.id)),names=new Set(F.P.map(p=>dkNorm(p.name)));
+  const score=s=>{let a=0,b=0;s.lineups.forEach(l=>l.forEach(p=>{b++;if(ids.has(String(p.id))||names.has(dkNorm(p.name)))a++}));return b?a/b:0};
+  const S=opt.set!=null?fit[opt.set]:fit.slice().sort((x,y)=>score(y)-score(x))[0];
+  if(score(S)<0.5)return{err:"These lineups' players aren't in this file (wrong game or slate?).",C:C};
+  const E=F.E.filter(e=>e.cid===cid);const rows=[],bad=[];let li=0;
+  for(const e of E){let m=null;while(li<S.lineups.length){m=dkMap(S.lineups[li],F);li++;if(!m.miss.length&&(!m.sal||m.sal<=50000))break;bad.push("lineup "+li+": "+(m.miss.length?"not in this file: "+m.miss.join(", "):"salary $"+m.sal));m=null}
+    if(!m)break;rows.push([e.id,e.cname,e.cid,e.fee].concat(m.ids))}
+  const head=["Entry ID","Contest Name","Contest ID","Entry Fee"].concat(F.pos);
+  const csv=[head].concat(rows).map(r=>r.map(dkCsvCell).join(",")).join("\r\n")+"\r\n";
+  return{csv:csv,filled:rows.length,entries:E.length,lineups:S.lineups.length,label:S.label,contest:con,C:C,bad:bad}}
+/* the box on the page */
+function dkFillInit(box){const sets=JSON.parse(box.querySelector("script[type='application/json']").textContent);
+  const inp=box.querySelector("input[type=file]"),sel=box.querySelector("select"),btn=box.querySelector("button"),msg=box.querySelector(".dkmsg");let text=null;
+  const show=(h,cls)=>{msg.className="dkmsg "+(cls||"");msg.innerHTML=h};
+  inp.addEventListener("change",()=>{const f=inp.files[0];if(!f)return;const rd=new FileReader();rd.onload=()=>{text=rd.result;const F=dkRead(text);
+    if(F.err){show(F.err,"bad");sel.innerHTML="";btn.disabled=true;return}
+    const C=dkContests(F);sel.innerHTML=C.map(c=>`<option value="${c.cid}">${c.cname.replace(/</g,"&lt;")} · ${c.n} entr${c.n===1?"y":"ies"}${c.blank?" ("+c.blank+" empty)":""}</option>`).join("");
+    sel.value=C.slice().sort((a,b)=>b.n-a.n)[0].cid;sel.disabled=false;btn.disabled=false;show(`Read ${F.E.length} entr${F.E.length===1?"y":"ies"} in ${C.length} contest${C.length===1?"":"s"}. Pick the contest and press the button.`)};rd.readAsText(f)});
+  btn.addEventListener("click",()=>{if(!text)return;const r=dkFill(text,sets,{cid:sel.value});if(r.err){show(r.err,"bad");return}
+    const blob=new Blob([r.csv],{type:"text/csv"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);
+    a.download="DKEntries_filled_"+(r.label||"lineups").replace(/[^A-Za-z0-9]+/g,"_")+".csv";document.body.appendChild(a);a.click();a.remove();
+    show(`<b>Filled ${r.filled} of ${r.entries} entries</b> in ${r.contest.cname.replace(/</g,"&lt;")} with ${r.label} (${r.lineups} lineups available). `+
+      (r.filled<r.entries?`${r.entries-r.filled} entr${r.entries-r.filled===1?"y":"ies"} left as they were (more entries than lineups). `:"")+
+      (r.bad.length?`<br>Skipped: ${r.bad.slice(0,5).join("; ")}${r.bad.length>5?" …":""}. `:"")+
+      "Now upload the downloaded file on DK's Edit Entries page (Upload CSV).",r.bad.length?"warn":"ok")})}
+if(typeof window!=="undefined")window.addEventListener("load",()=>document.querySelectorAll(".dkfill").forEach(dkFillInit));
+if(typeof module!=="undefined")module.exports={dkCsvParse,dkRead,dkContests,dkMap,dkFill};
+)---"
+DKFILL_CSS <- ".dkfill{border:1px solid var(--bd,#ddd);border-radius:8px;padding:10px 12px;margin:.8rem 0;max-width:900px;font-size:13px}
+.dkfill ol{margin:.3rem 0 .5rem 1.1rem;padding:0}.dkfill .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.dkfill select{max-width:100%;font-size:13px}
+.dkfill button{background:var(--acc,#2b6cb0);color:#fff;border:0;border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer}.dkfill button:disabled{opacity:.45;cursor:default}
+.dkmsg{margin-top:.5rem}.dkmsg.ok{color:#2f855a}.dkmsg.warn{color:#b7791f}.dkmsg.bad{color:#c53030}@media (prefers-color-scheme:dark){.dkmsg.ok{color:#68d391}.dkmsg.warn{color:#f6c35b}.dkmsg.bad{color:#fc8181}}"
+## sets: list of list(label =, lineups = list of lineups, each a list of list(id =, name =, team =) in the contest's roster order)
+dk_fill_box <- function(sets, what = "these lineups") {
+  js <- gsub("</", "<\\/", as.character(jsonlite::toJSON(sets, auto_unbox = TRUE)), fixed = TRUE)
+  paste0('<div class="dkfill"><b>Fill your reserved DraftKings entries with ', what, '</b><ol>',
+    '<li>Reserve your entries on DraftKings.</li>',
+    '<li>DK &rarr; Lineups &rarr; <b>Edit Entries</b> &rarr; pick NFL, the style and the start time &rarr; <b>Download</b>.</li>',
+    '<li>Choose that file here, pick the contest, press <b>Fill and download</b> (the file stays on your device).</li>',
+    '<li>Back on Edit Entries &rarr; <b>Upload CSV</b> &rarr; the downloaded <i>DKEntries_filled_&hellip;csv</i>.</li></ol>',
+    '<div class="row"><input type="file" accept=".csv,text/csv"><select disabled></select><button type="button" disabled>Fill and download</button></div>',
+    '<div class="dkmsg"></div><script type="application/json">', js, '</script></div>')
+}
+## a lineup table (lineup, slot order as the DK roster, dk_id, name, team) -> the lineups list dk_fill_box() wants
+dk_fill_lineups <- function(L) lapply(unname(split(L, L$lineup)[as.character(sort(unique(L$lineup)))]), \(x) lapply(seq_len(nrow(x)), \(i) list(id = as.character(x$dk_id[i]), name = x$name[i], team = x$team[i])))
