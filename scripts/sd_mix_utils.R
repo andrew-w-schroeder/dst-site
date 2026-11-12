@@ -15,6 +15,8 @@
 ##             not, K / D/ST / TE in or out, captain's team heavy / even / light), relaxed step by step when nothing fits
 ##   cpt_rel   a captain must project at least cpt_rel x the best projection at his position in the game (e.g. 0.5): stops a
 ##             position quota from being filled with punt captains (NA = off)
+##   fv        flex values (default proj; e.g. proj - lambda x log(predicted ownership) for leverage)
+##   prev      lineups already built (same format): kept, and the new ones must differ from them (to finish a portfolio another way)
 ##   md, floor_sal: >= md of 6 slots different from every earlier lineup; salary floor
 ## Every lineup is the highest-projected lineup that satisfies its rules (sequential ILPs, lpSolve, scale 0).
 
@@ -37,11 +39,11 @@ sd_prof_rows <- function(d, p, cpt_only = FALSE) {
 }
 SD_RELAX <- c("side", "te", "dst", "k", "qb2", "cpt")                     # order in which a profile is relaxed when nothing fits
 
-sd_mix_build <- function(d, n_l = 20, md = 2, floor_sal = 0, oc = NULL, cs_thr = NA, cpt_caps = NULL, prof = NULL, cpt_rel = NA) {
+sd_mix_build <- function(d, n_l = 20, md = 2, floor_sal = 0, oc = NULL, cs_thr = NA, cpt_caps = NULL, prof = NULL, cpt_rel = NA, fv = NULL, prev = NULL) {
   n <- nrow(d); pr <- d$proj; tA <- d$team == d$team[1]; P <- d$pos
   ocv <- if (is.null(oc)) 1.5 * pr else oc
   A <- rbind(c(rep(1, n), rep(0, n)), c(rep(0, n), rep(1, n)), cbind(diag(n), diag(n)), c(d$salary, d$cpt_salary), c(d$salary, d$cpt_salary), sd_both(tA), sd_both(!tA))
-  dir <- c("=", "=", rep("<=", n), "<=", ">=", ">=", ">="); rhs <- c(5, 1, rep(1, n), 50000, floor_sal, 1, 1); obj <- c(pr, ocv)
+  dir <- c("=", "=", rep("<=", n), "<=", ">=", ">=", ">="); rhs <- c(5, 1, rep(1, n), 50000, floor_sal, 1, 1); obj <- c(if (is.null(fv)) pr else fv, ocv)
   if (!is.na(cpt_rel)) { ok <- pr >= cpt_rel * ave(pr, P, FUN = max); if (any(!ok)) { A <- rbind(A, c(rep(0, n), (!ok) * 1)); dir <- c(dir, "="); rhs <- c(rhs, 0) } }
   out <- list(); ccnt <- c(QB = 0, RB = 0, WR = 0, TE = 0, K = 0, DST = 0); relaxed <- 0L
   solve <- function(groups = list(), cp = NA) {
@@ -55,6 +57,7 @@ sd_mix_build <- function(d, n_l = 20, md = 2, floor_sal = 0, oc = NULL, cs_thr =
   take <- function(sel) { cp <- sel[sel > n] - n; out[[length(out) + 1]] <<- list(cpt = cp, flex = sel[sel <= n])
     if (P[cp] %in% names(ccnt)) ccnt[[P[cp]]] <<- ccnt[[P[cp]]] + 1
     cut <- rep(0, 2 * n); cut[sel] <- 1; A <<- rbind(A, cut); dir <<- c(dir, "<="); rhs <<- c(rhs, 6 - md) }
+  for (b in prev) take(c(b$flex, n + b$cpt))
   elig <- if (is.na(cs_thr)) integer() else { e <- which(P %in% c("QB", "RB", "WR", "TE") & pr >= cs_thr); e[order(-pr[e])] }
   used_cpt <- function() vapply(out, `[[`, 0, "cpt")
   if (is.null(prof)) {
