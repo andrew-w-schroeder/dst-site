@@ -23,6 +23,12 @@
 #      one lineup (that player's best lineup), then the rest are the best projections; >= 2 of 6 slots different throughout.
 #      Why: TB @ CHI (wk 9 SNF) went 0 for 20 with Caleb Williams in all 20 and the MVP (Bucky Irving) in none; 91s_sd_spread.R
 #      tested ways of spreading the 20. Both models are frozen at kickoff in the same file (lineups / lineups_cpt).
+# 2026-11-12 (Andrew): a third model, "Winners' mix" (dfs/showdown-mix/): "balance captain spread and highest projections while
+#   also keeping our 20 lineups consistent with >$100 cash frequencies across both play-action and milly". 93u found $100+
+#   lineups captain WR / RB far more than QB, unlike our builds. The 20 lineups follow 20 profiles drawn from the $100+ lineups'
+#   joint mix (captain position, 2 QBs, K / D/ST / TE in or out, captain's team heavy / even / light), each the best projection
+#   that fits, with Captain spread inside each captain position (variant chosen by 91s_sd_captain.R's back-test; SDS$mix).
+#   Code: sd_mix_utils.R (shared with the back-test and 98s). Frozen with the other two (lineups_mix).
 # Env: STAT_API_KEY; SD_SA_BASE (test server only).
 # ==============================================================================
 local({
@@ -106,6 +112,12 @@ sd_best_n <- function(d, n_l = SDS$rules$n, md = SDS$rules$md, floor_sal = 50000
   while (length(out) < n_l) { sel <- one(); if (is.null(sel)) break; add(sel) }
   out }
 CPT_THR <- SDS$rules$cpt_thr %||% 8.5                                      # Captain spread threshold (DK points), from 91s_sd_live_spec.R
+MIX <- SDS$mix; MIX_F <- file.path(PROJ_DIR, "scripts/sd_mix_utils.R")
+if (!is.null(MIX) && file.exists(MIX_F)) source(MIX_F, local = TRUE) else MIX <- NULL   # Winners' mix (Andrew 2026-11-12)
+mix_build <- function(d) {
+  prof <- if (is.null(MIX$prof)) NULL else switch(MIX$prof, full = mix_profiles(MIX$table, SDS$rules$n), cpt = mix_profiles(MIX$table, SDS$rules$n, cpt_only = TRUE), NULL)
+  sd_mix_build(d, n_l = SDS$rules$n, md = SDS$rules$md, floor_sal = 50000 - SDS$rules$max_left, oc = if (isTRUE(MIX$ceil) && !is.null(MIX$SF)) sd_ceiling(d, MIX$SF, MIX$ceil_p %||% 0.85) else NULL,
+               cs_thr = if (isTRUE(MIX$cs)) CPT_THR else NA, cpt_caps = MIX$caps, prof = prof, cpt_rel = MIX$rel %||% NA) }
 lu_tbl <- function(bl, d) { L <- bind_rows(lapply(seq_along(bl), \(k) { b <- bl[[k]]; bind_rows(
     tibble(lineup = k, slot = "CPT", name = d$name[b$cpt], pos = d$pos[b$cpt], team = d$team[b$cpt], salary = d$cpt_salary[b$cpt], proj = 1.5 * d$proj[b$cpt], dk_id = d$cpt_id[b$cpt]),
     tibble(lineup = k, slot = "FLEX", name = d$name[b$flex], pos = d$pos[b$flex], team = d$team[b$flex], salary = d$salary[b$flex], proj = d$proj[b$flex], dk_id = d$export_id[b$flex])) }))
@@ -141,7 +153,9 @@ for (i in seq_len(nrow(gm))) {
   L <- lu_tbl(sd_best_n(d), d)
   sk_i <- which(d$pos %in% c("QB", "RB", "WR", "TE") & d$proj >= CPT_THR); sk_i <- sk_i[order(-d$proj[sk_i])]
   Lc <- lu_tbl(sd_best_n(d, force_cpt = sk_i), d)
-  LU <- list(game_id = g$game_id, label = lab, ko = g$ko, built = NOW, lineups = L, lineups_cpt = Lc, cpt_thr = CPT_THR, cpt_forced = d$name[sk_i], pool = pool, frozen = FALSE)
+  Lm <- if (!is.null(MIX)) tryCatch(lu_tbl(mix_build(d), d), error = function(e) { message("showdown: Winners' mix — ", conditionMessage(e)); NULL }) else NULL
+  LU <- list(game_id = g$game_id, label = lab, ko = g$ko, built = NOW, lineups = L, lineups_cpt = Lc, cpt_thr = CPT_THR, cpt_forced = d$name[sk_i],
+             lineups_mix = Lm, mix_variant = MIX$variant, pool = pool, frozen = FALSE)
   saveRDS(LU, lu_f); n_built <- n_built + 1L
   write.csv(pool |> transmute(game_id = g$game_id, refreshed = isoz(NOW), name, pos, team, salary, cpt_salary, proj = round(proj, 3), src, injury_status, dk_id = export_id, cpt_id),
             file.path(SD_LIVE, sprintf("sd_proj_%s.csv", g$game_id)), row.names = FALSE)
@@ -153,6 +167,7 @@ f1 <- function(x) ifelse(is.na(x), "", sprintf("%.1f", x)); dol <- function(x) p
 BT <- SDS$backtest; BTS <- SDS$backtest_spread                               # BTS: 91s_sd_spread.R, same scoring for both models
 MODELS <- list(top = list(dir = "showdown", nav = "showdown", name = "Highest projected", lu = "lineups", csv = "DK_showdown_%s.csv", bt = "cur"),
                cpt = list(dir = "showdown-cpt", nav = "showdown_cpt", name = "Captain spread", lu = "lineups_cpt", csv = "DK_showdown_cpt_%s.csv", bt = "cpt"))
+if (!is.null(MIX)) MODELS$mix <- list(dir = "showdown-mix", nav = "showdown_mix", name = "Winners' mix", lu = "lineups_mix", csv = "DK_showdown_mix_%s.csv", bt = "mix")
 bts_txt <- function(b) if (is.null(b)) "" else sprintf("%d flagship showdowns 2023–26, each season left out: %.2f cashes per 20, %.1f%% of games with no cash, %.1f%% with 2 or fewer, %d games with a top-0.1%% lineup, ROI %+.0f%% (%+.0f%% without the best game)",
   b$games, b$cash, 100 * b$zero, 100 * b$le2, as.integer(round(b$top01)), 100 * b$roi, 100 * b$roi_wo)
 for (MD in names(MODELS)) { M <- MODELS[[MD]]
@@ -165,7 +180,11 @@ sec_html <- vapply(SEC, \(s) {
   nl <- n_distinct(L$lineup)
   csv <- sprintf(M$csv, s$g$game_id)
   fc <- if (MD == "cpt") sprintf("<p class='s'><b>Captains required</b> (QB / RB / WR / TE projected %s+ DK points): %s.</p>", format(s$LU$cpt_thr %||% CPT_THR),
-                                 if (length(s$LU$cpt_forced)) paste(s$LU$cpt_forced, collapse = ", ") else "none") else ""
+                                 if (length(s$LU$cpt_forced)) paste(s$LU$cpt_forced, collapse = ", ") else "none") else
+        if (MD == "mix") { cc <- table(factor(L$pos[L$slot == "CPT"], c("WR", "RB", "QB", "TE", "DST", "K"))); cc <- cc[cc > 0]
+          sprintf("<p class='s'><b>Captain positions</b> (winners' mix): %s. Lineups with 2 QBs %d, a kicker %d, a D/ST %d, a TE %d of %d.</p>",
+                  paste(names(cc), cc, collapse = " · "), sum(tapply(L$pos == "QB", L$lineup, sum) == 2), sum(tapply(L$pos == "K", L$lineup, any)),
+                  sum(tapply(L$pos == "DST", L$lineup, any)), sum(tapply(L$pos == "TE", L$lineup, any)), nl) } else ""
   up <- L |> group_by(lineup) |> summarise(ids = paste(c(dk_id[slot == "CPT"], dk_id[slot == "FLEX"]), collapse = ","), .groups = "drop")
   writeLines(c("CPT,FLEX,FLEX,FLEX,FLEX,FLEX", up$ids), file.path(odir, csv))
   when <- if (isTRUE(s$LU$frozen)) sprintf("<b>Frozen at kickoff</b> (built %s ET).", pp_et(s$LU$built, "%a %I:%M %p")) else
@@ -186,14 +205,23 @@ sec_html <- vapply(SEC, \(s) {
 note <- paste0("<p class='s'>For the DK NFL Showdown Play-Action [20 Entry Max] of each primetime game and every game with its own kickoff slot (international, holiday and Saturday games) ($200K–$400K, ~80–120K entries). ",
   "Captain scores 1.5× (salary 1.5×). Projections in DK points: props for skill players (the Players page), the kicker model + salary + DK average for kickers, Vegas-only D/ST. ",
   sprintf("<b>Build:</b> %sthe 20 best projections with no player lacking props / a model, %s, at least 2 of 6 slots different (a captain swap counts).",
-          if (MD == "cpt") sprintf("every QB / RB / WR / TE projected %s+ DK points captains at least one lineup (his best lineup); the rest are ", format(CPT_THR)) else "",
+          if (MD == "cpt") sprintf("every QB / RB / WR / TE projected %s+ DK points captains at least one lineup (his best lineup); the rest are ", format(CPT_THR)) else
+          if (MD == "mix" && !is.null(MIX$prof)) paste0("the 20 lineups follow the make-up of every lineup that won $100+ in the Showdown Play-Actions and Millionaires of 2023–26 (",
+                                  "captain position, 2 QBs or 1, kicker / D/ST / TE in or out, how many of the 6 come from the captain's team): each lineup is ",
+                                  if (isTRUE(MIX$ceil)) "the best lineup for its profile, with the captain chosen by his 85th-percentile outcome; " else "the best projection that fits its profile; ",
+                                  if (isTRUE(MIX$cs)) sprintf("inside each captain position, every QB / RB / WR / TE projected %s+ captains before anyone captains twice. Otherwise ", format(CPT_THR)) else "otherwise ") else
+          if (MD == "mix") paste0(if (isTRUE(MIX$cs)) sprintf("every QB / RB / WR / TE projected %s+ DK points captains at least one lineup; ", format(CPT_THR)) else "",
+                                  if (length(MIX$caps)) paste0(paste(sprintf(ifelse(MIX$caps == 0, "no %s captain", "at most %2$d %1$s captains"), names(MIX$caps), MIX$caps), collapse = ", "),
+                                                               ", which brings the captain mix close to that of lineups that won $100+ (QB ~20%, RB ~30%, WR ~35%). ") else "",
+                                  "Otherwise ") else "",
           if ((SDS$rules$max_left %||% 1000) >= 50000) "any amount of salary left unused" else sprintf("$%s or less left", format(SDS$rules$max_left, big.mark = ","))),
-  if (MD == "cpt") " <b>Why:</b> the Highest projected build puts its 20 lineups on one game script; when its core busts, all 20 bust together (TB @ CHI, 2026 week 9: 0 of 20, the game's MVP in none). This build makes sure each good skill player captains at least once." else "",
-  if (!is.null(BTS[[M$bt]])) paste0(" <b>Back-test</b> (", bts_txt(BTS[[M$bt]]), if (MD == "cpt" && !is.null(BTS$cur)) sprintf("; Highest projected: %s", sub("^.*?: ", "", bts_txt(BTS$cur), perl = TRUE)) else "",
+  if (MD == "cpt") " <b>Why:</b> the Highest projected build puts its 20 lineups on one game script; when its core busts, all 20 bust together (TB @ CHI, 2026 week 9: 0 of 20, the game's MVP in none). This build makes sure each good skill player captains at least once." else
+  if (MD == "mix") " <b>Why:</b> lineups that won $100+ in 2023–26 captain a WR or RB about 60–70% of the time, a QB about 20% and a kicker about 2%; the Highest projected build captains QBs about half the time, because QBs project highest." else "",
+  if (!is.null(BTS[[M$bt]])) paste0(" <b>Back-test</b> (", bts_txt(BTS[[M$bt]]), if (MD != "top" && !is.null(BTS$cur)) sprintf("; Highest projected: %s", sub("^.*?: ", "", bts_txt(BTS$cur), perl = TRUE)) else "",
     "). Levels are optimistic; the comparison is the point.") else
   if (MD == "top" && !is.null(BT)) sprintf(" <b>Back-test</b> (%d flagship showdowns 2023–26, each season left out): %.1f cashes per 20, %.2f top-1%% lineups per game, %d games with a top-0.01%% lineup, ROI %+.0f%% (plain top projection %.1f / %.2f / %d / %+.0f%%). Levels are optimistic; the comparison is the point. Game script (spread / total) and fading chalk did not help.",
                             BT$games, BT$cash, BT$top1, BT$top001, 100 * BT$roi, BT$tp_cash, BT$tp_top1, BT$tp_top001, 100 * BT$tp_roi) else "",
-  sprintf(" Other model: <a href='%sdfs/%s/'>%s</a>.", SITE_BASE, MODELS[[setdiff(names(MODELS), MD)]]$dir, MODELS[[setdiff(names(MODELS), MD)]]$name), "</p>")
+  sprintf(" Other models: %s.", paste(vapply(setdiff(names(MODELS), MD), \(o) sprintf("<a href='%sdfs/%s/'>%s</a>", SITE_BASE, MODELS[[o]]$dir, MODELS[[o]]$name), ""), collapse = ", ")), "</p>")
 ## reserved entries (Andrew 2026-11-08): one form for every game; the game whose players are in DK's file is used
 fill_sets <- Filter(Negate(is.null), lapply(SEC, \(s) if (is.null(s$LU) || is.null(s$LU[[M$lu]]) || !nrow(s$LU[[M$lu]])) NULL else {
   L <- s$LU[[M$lu]] |> group_by(lineup) |> arrange(slot != "CPT", .by_group = TRUE) |> ungroup()
@@ -230,5 +258,5 @@ window.addEventListener("load",sdDrag);
   sprintf("<h1>DraftKings Showdown: %s — %d week %d</h1>", M$name, SEASON, WEEK), note, fill_html, paste0(sec_html, collapse = ""), "</body></html>")
 writeLines(html, file.path(odir, "index.html"))
 }
-message(sprintf("showdown: pages written (2 models; %d showdown game%s, %d built this run)", nrow(gm), if (nrow(gm) == 1) "" else "s", n_built))
+message(sprintf("showdown: pages written (%d models; %d showdown game%s, %d built this run)", length(MODELS), nrow(gm), if (nrow(gm) == 1) "" else "s", n_built))
 })
