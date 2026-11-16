@@ -10,7 +10,7 @@
 #      data/dfs/showdown/live/sd_sal_<game_id>.csv.
 #   2. Projections in DK points, as in the back-test (91s stage 1 / 2):
 #      skill players = the Players page's props (dk_project, 94's bonus fits; no-props rows are not used);
-#      kickers = Andrew's kicker model (ESPN, the kicker page's last pre-kickoff refresh) + salary + DK average
+#      kickers = Andrew's kicker model (ESPN, the kicker page's last pre-kickoff refresh) + salary + DK average, for the kicker page's starter
 #      (output/dfs/showdown/sd_live_spec.rds, fitted on 2023-26 showdowns: beat salary + average with t 4.8);
 #      D/ST = Vegas-only (the Yahoo bundle's Vegas fit on the game's last pre-kickoff line, as the DFS page).
 #   3. The build that won the back-test (162 flagship Play-Actions 2023-26, leaving each season out): the 20 best
@@ -82,6 +82,11 @@ ph <- tryCatch(as_tibble(read.csv(file.path(PROJ_DIR, "data/lines/proj_history.c
 k_espn <- if (!is.null(ph)) ph |> filter(model == "k", system == "espn", season == SEASON, week == WEEK) |> mutate(t = utc(time)) |>
   inner_join(gl |> select(game_id, team, ko), by = "team") |> filter(t < ko, game_id %in% gm$game_id) |> group_by(team) |> slice_max(t, n = 1, with_ties = FALSE) |> ungroup() |>
   select(team, k_espn = proj) else tibble(team = character(), k_espn = numeric())
+## kicker page's starter per team (starters.R / 55 auto-swap), so the Showdown K matches the kicker page (Andrew 2026-11-16: BAL Patterson, not Mevis)
+k_names <- tryCatch(as_tibble(read.csv(file.path(PROJ_DIR, "data/lines/starter_history.csv"), stringsAsFactors = FALSE)) |>
+  filter(pos == "K", season == SEASON, week == WEEK) |> mutate(t = utc(pulled_at)) |>
+  inner_join(gl |> select(game_id, team, ko), by = "team") |> filter(t < ko) |> group_by(team) |> slice_max(t, n = 1, with_ties = FALSE) |> ungroup() |>
+  transmute(team, k_key = own_key(player)), error = function(e) tibble(team = character(), k_key = character()))
 dst_v <- tryCatch({
   lh <- as_tibble(read.csv(file.path(PROJ_DIR, "data/lines/line_history.csv"), stringsAsFactors = FALSE)) |> mutate(t = utc(pulled_at), ct = utc(commence_time)) |> filter(t < ct)
   lx <- bind_rows(lh |> inner_join(gm |> select(game_id, home = home_team, away = away_team, ko), by = c("home", "away")) |> mutate(sp = home_spread),
@@ -142,7 +147,10 @@ for (i in seq_len(nrow(gm))) {
   sk <- dk_rows |> filter(game_id == g$game_id) |> mutate(key = own_key(player_name)) |> distinct(key, team, .keep_all = TRUE)
   pool <- pool |> left_join(sk |> select(key, team, dk_proj, inj_out), by = c("key", "team"))
   ks <- k_espn |> filter(team %in% c(g$home_team, g$away_team))
-  pool <- pool |> group_by(team) |> mutate(k_start = pos == "K" & salary == max(c(salary[pos == "K"], -Inf))) |> ungroup() |>
+  ## starter K = the kicker page's starter when DK lists him; else the highest-salary K (one only: ties broken by DK average)
+  pool <- pool |> left_join(k_names, by = "team") |> group_by(team) |>
+    mutate(k_hit = pos == "K" & !is.na(k_key) & key == k_key, k_rank = ifelse(pos == "K", rank(-(salary + 1e-3 * coalesce(avg_points, 0)), ties.method = "first"), NA),
+           k_start = pos == "K" & (if (any(k_hit)) k_hit else k_rank == min(c(k_rank, Inf), na.rm = TRUE))) |> ungroup() |> select(-k_key, -k_hit, -k_rank) |>
     left_join(ks, by = "team") |> left_join(dst_v |> filter(game_id == g$game_id) |> select(team, dst_proj), by = "team") |>
     mutate(proj = case_when(out | inj_out %in% TRUE ~ NA_real_, pos %in% c("QB", "RB", "WR", "TE") ~ dk_proj,
                             pos == "K" & k_start & !is.na(k_espn) ~ pmax(k_combo(k_espn, salary, avg_points), 0), pos == "DST" ~ dst_proj, TRUE ~ NA_real_),
