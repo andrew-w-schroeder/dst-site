@@ -50,6 +50,40 @@ if (!length(bf)) {
 key <- max(sub("bundle_(\\d{4})_wk(\\d{2}).*", "\\1\\2", bf)); SEASON <- as.integer(substr(key, 1, 4)); WEEK <- as.integer(substr(key, 5, 6))
 B <- readRDS(file.path(PROJ_DIR, "output/players_site", sprintf("bundle_%d_wk%02d.rds", SEASON, WEEK)))
 games <- B$games |> mutate(ko = utc(kickoff_utc))
+## ---- 1b. Team moves since the bundle was built (Andrew 2026-11-16): the bundle's rosters are nflverse's as of Tuesday morning, so a
+## trade / signing after that (2026 deadline: Cousins MIN, Downs KC, Allen SF, X. Smith LA) left the player on his old team and his props
+## unmatched. Each run with outside pulls snapshots Sleeper's current team for QB/RB/WR/TE (one call) into moves_<season>_wk<ww>.csv; every
+## run (and 96's re-run, which has no pulls) moves those players to their new team on B$roster (this week) and B$players before matching.
+MOVES_CSV <- file.path(PROJ_DIR, sprintf("data/players/moves_%d_wk%02d.csv", SEASON, WEEK))
+if (!nzchar(Sys.getenv("NO_EXT")) && any(games$ko > NOW)) tryCatch({
+  txt <- xp_get("https://api.sleeper.app/v1/players/nfl", mock = "sleeper_players.json")
+  if (!is.null(txt)) {
+    js <- jsonlite::fromJSON(txt, simplifyVector = FALSE)
+    g1 <- function(p, f) { v <- p[[f]]; if (is.null(v) || !length(v)) NA_character_ else as.character(v[[1]]) }
+    js <- Filter(function(p) !is.null(p$team) && !is.null(p$position) && p$position %in% c("QB", "RB", "WR", "TE", "FB"), js)
+    sl <- tibble(gsis_id = trimws(vapply(js, g1, "", "gsis_id")), name = coalesce(vapply(js, g1, "", "full_name"), paste(vapply(js, g1, "", "first_name"), vapply(js, g1, "", "last_name"))),
+                 pos = ifelse(vapply(js, g1, "", "position") == "FB", "RB", vapply(js, g1, "", "position")), to = xp_team(vapply(js, g1, "", "team"))) |>
+      mutate(gsis_id = ifelse(grepl("^00-", gsis_id), gsis_id, NA_character_), key = name_key(name))
+    bp <- B$players |> mutate(key = name_key(player_name))
+    by_id <- sl |> filter(!is.na(gsis_id)) |> inner_join(bp |> select(gsis_id, player_name, from = team), by = "gsis_id")
+    uk <- bp |> add_count(key, pos, name = "n") |> filter(n == 1) |> select(key, pos, gsis_id2 = gsis_id, player_name, from = team)
+    by_nm <- sl |> filter(is.na(gsis_id) | !gsis_id %in% bp$gsis_id) |> add_count(key, pos, name = "n") |> filter(n == 1) |>
+      inner_join(uk, by = c("key", "pos")) |> filter(!gsis_id2 %in% by_id$gsis_id) |> mutate(gsis_id = gsis_id2)
+    mv <- bind_rows(by_id, by_nm) |> filter(!is.na(to), nzchar(to), to != from) |> distinct(gsis_id, .keep_all = TRUE) |>
+      transmute(pulled_at = isoz(NOW), gsis_id, player_name, pos, from, to)
+    if (nrow(mv)) { dir.create(dirname(MOVES_CSV), recursive = TRUE, showWarnings = FALSE)
+      write.table(mv, MOVES_CSV, sep = ",", row.names = FALSE, col.names = !file.exists(MOVES_CSV), append = file.exists(MOVES_CSV), qmethod = "double") }
+  } }, error = function(e) message("players: team moves — ", conditionMessage(e)))
+moves <- if (file.exists(MOVES_CSV)) as_tibble(read.csv(MOVES_CSV, stringsAsFactors = FALSE)) |> mutate(t = utc(pulled_at)) |> filter(t <= NOW) |>
+  group_by(gsis_id) |> slice_max(t, n = 1, with_ties = FALSE) |> ungroup() |> filter(to != from) else tibble()
+moves <- if (nrow(moves)) moves |> semi_join(B$players |> mutate(cur = team) |> select(gsis_id, from = cur), by = c("gsis_id", "from")) else moves
+if (nrow(moves)) {
+  last_ro <- B$roster |> filter(gsis_id %in% moves$gsis_id) |> group_by(gsis_id) |> slice_max(week, n = 1, with_ties = FALSE) |> ungroup()
+  B$roster <- bind_rows(B$roster |> filter(!(gsis_id %in% moves$gsis_id & week == WEEK)),
+                        last_ro |> select(-team) |> inner_join(moves |> select(gsis_id, team = to), by = "gsis_id") |> mutate(season = SEASON, week = WEEK))
+  B$players <- B$players |> left_join(moves |> select(gsis_id, to), by = "gsis_id") |> mutate(team = coalesce(to, team)) |> select(-to)
+  message("players: team moves since the bundle (Sleeper): ", paste(sprintf("%s %s→%s", moves$player_name, moves$from, moves$to), collapse = ", "))
+}
 LIVE_CSV <- file.path(PROJ_DIR, sprintf("data/players/props_live_%d_wk%02d.csv", SEASON, WEEK))
 CI_CSV <- file.path(PROJ_DIR, sprintf("data/players/props_ci_%d_wk%02d.csv", SEASON, WEEK))
 ## milestone odds per pull (boom_utils.R): P(2+ TDs), P(no TD), P(100+ rush / rec / rush + rec yds), P(300+ pass yds) from the books

@@ -64,7 +64,7 @@ if (file.exists(file.path(PROJ_DIR, "scripts/boom_utils.R"))) source(file.path(P
 cur <- if (ok65 && !is.null(E$cur) && nrow(E$cur)) E$cur else tibble()
 games <- if (!is.null(E$games)) E$games else readRDS(file.path(PROJ_DIR, "output/players_site", sprintf("bundle_%d_wk%02d.rds", SEASON, WEEK)))$games |> mutate(ko = utc(kickoff_utc))
 imp <- if (!is.null(E$imp)) E$imp else tibble(game_id = character(), team = character(), implied = numeric(), spread = numeric())
-Bp <- readRDS(file.path(PROJ_DIR, "output/players_site", sprintf("bundle_%d_wk%02d.rds", SEASON, WEEK)))
+Bp <- if (ok65 && !is.null(E$B)) E$B else readRDS(file.path(PROJ_DIR, "output/players_site", sprintf("bundle_%d_wk%02d.rds", SEASON, WEEK)))   # E$B: with 65's team moves
 message(sprintf("dfs: %d player rows from the Players page's projections", nrow(cur)))
 
 ## ---- 2. DK main-slate salaries ----
@@ -160,6 +160,9 @@ DST_NAMES <- c(ARI = "Cardinals", ATL = "Falcons", BAL = "Ravens", BUF = "Bills"
 ## ---- 4. Salaries onto rows (names -> gsis_id within each game; D/ST by team) ----
 n_unm <- 0L
 if (!is.null(sal) && nrow(sal)) {
+  mv_ <- if (ok65 && !is.null(E$moves) && nrow(E$moves)) E$moves |> transmute(k_ = name_key(player_name), team = from, to) |> distinct(k_, team, .keep_all = TRUE) else NULL
+  if (!is.null(mv_)) sal <- sal |> mutate(k_ = name_key(name)) |> left_join(mv_, by = c("k_", "team")) |>       # a DK file saved before a trade: his new team
+    mutate(team = ifelse(dk_pos != "DST" & !is.na(to), to, team)) |> select(-k_, -to)
   sk_ <- sal |> filter(dk_pos != "DST") |> inner_join(gl |> select(game_id, team), by = "team")
   mp <- match_players(sk_ |> transmute(game_id, player = name), games |> select(game_id, season, week, home_team, away_team), Bp$roster) |>
     filter(!is.na(gsis_id)) |> select(game_id, player, gsis_id)
