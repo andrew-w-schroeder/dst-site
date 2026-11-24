@@ -79,6 +79,7 @@ sal <- NULL; sal_src <- NA; dk_err <- NA_character_
 man <- c(MAN_CSV[file.exists(MAN_CSV)], { f <- list.files(file.path(PROJ_DIR, "data/dfs"), pattern = "^DKSalaries.*\\.csv$", full.names = TRUE)
   f <- setdiff(f, MAN_CSV); f[order(file.mtime(f), decreasing = TRUE)] })
 for (f in man) {
+  if (dk_is_showdown(f)) next                                  # a Showdown export (DKSalaries_sd_<game_id>.csv): 97s reads it
   x <- tryCatch(dk_parse_csv(f), error = function(e) { message("dfs: ", basename(f), " — ", conditionMessage(e)); NULL })
   if (is.null(x) || !nrow(x)) next
   if (dk_game_share(x$game, games) < 0.9) { message("dfs: ", basename(f), " is not this week's slate (its games aren't this week's matchups), skipped"); next }

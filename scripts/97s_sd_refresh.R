@@ -6,7 +6,8 @@
 # (cur), the DFS spec (S, DK bonus fits), the week's games, the D/ST bundle (dst_b) and line history. A failure here never
 # affects the DFS page.
 #   1. Primetime games of the week (kickoff 7 pm ET or later). Their DK showdown salaries (captain + flex rows, DK ids)
-#      from stat-api (STAT_API_KEY, a repo secret), re-pulled every run until kickoff (injury status), stored in
+#      from a DK Showdown export uploaded by site_publish.R (data/dfs/DKSalaries_sd_<game_id>.csv; Andrew 2026-11-23, stat-api plan
+#      ended), else from stat-api (STAT_API_KEY, a repo secret), re-pulled every run until kickoff (injury status), stored in
 #      data/dfs/showdown/live/sd_sal_<game_id>.csv.
 #   2. Projections in DK points, as in the back-test (91s stage 1 / 2):
 #      skill players = the Players page's props (dk_project, 94's bonus fits; no-props rows are not used);
@@ -135,11 +136,28 @@ for (i in seq_len(nrow(gm))) {
   g <- gm[i, ]; started <- NOW >= g$ko; lab <- sprintf("%s @ %s", g$away_team, g$home_team)
   sal_f <- file.path(SD_LIVE, sprintf("sd_sal_%s.csv", g$game_id)); lu_f <- file.path(SD_LIVE, sprintf("sd_lineups_%s.rds", g$game_id))
   sal <- if (file.exists(sal_f)) read.csv(sal_f, stringsAsFactors = FALSE, colClasses = c(export_id = "character")) else NULL
-  if (!started) { new <- tryCatch(pull_sal(g), error = function(e) { message("showdown: salary pull — ", conditionMessage(e)); NULL })
-    if (!is.null(new) && nrow(new)) { sal <- new; write.csv(sal, sal_f, row.names = FALSE) } }
+  ## Andrew 2026-11-23 (stat-api plan ended): a DK Showdown export uploaded by site_publish.R as data/dfs/DKSalaries_sd_<game_id>.csv
+  ## comes first; stat-api is only tried when there is none. Stored as sd_sal_<game_id>.csv like a pull (no injury flags in the export:
+  ## the Players page's Out still removes players).
+  up_f <- file.path(PROJ_DIR, "data/dfs", sprintf("DKSalaries_sd_%s.csv", g$game_id)); up <- NULL
+  if (!started && file.exists(up_f)) {
+    up <- tryCatch(dk_parse_sd_csv(up_f), error = function(e) { message("showdown: ", basename(up_f), " — ", conditionMessage(e)); NULL })
+    if (!is.null(up) && !setequal(unique(up$team), c(g$home_team, g$away_team))) { message("showdown: ", basename(up_f), " isn't ", lab, " — skipped"); up <- NULL }
+    if (!is.null(up) && nrow(up) >= 20) {
+      sal <- up |> select(-game) |> mutate(pulled_at = isoz(file.mtime(up_f))); write.csv(sal, sal_f, row.names = FALSE)
+      message(sprintf("showdown: %s salaries from the uploaded DK export (%d rows)", lab, nrow(sal)))
+    } else up <- NULL }
+  if (!started && is.null(up)) { new <- tryCatch(pull_sal(g), error = function(e) { message("showdown: salary pull — ", conditionMessage(e)); NULL })
+    ## Andrew 2026-11-21: from Fri 11/20 stat-api returned only the 5 highest-salary CPT rows per slate, and each run overwrote the
+    ## full stored file, so the games lost their pool. A pull with fewer than 20 players, or under half the stored count, is treated
+    ## as a failed pull: the stored salaries are kept (only their injury flags go stale; the Players page's Out still applies).
+    n_old <- if (!is.null(sal)) nrow(sal) else 0L
+    if (!is.null(new) && nrow(new) >= 20 && nrow(new) >= 0.5 * n_old) { sal <- new; write.csv(sal, sal_f, row.names = FALSE) }
+    else if (!is.null(new) && nrow(new)) message(sprintf("showdown: stat-api returned only %d salary rows for %s (stored: %d) — %s", nrow(new), lab,
+                                                        n_old, if (n_old >= 20) "kept the stored salaries" else "not enough to build lineups")) }
   if (started && file.exists(lu_f)) { LU <- readRDS(lu_f); LU$frozen <- TRUE; SEC[[length(SEC) + 1]] <- list(g = g, lab = lab, LU = LU); next }
   if (is.null(sal) || !nrow(sal)) { SEC[[length(SEC) + 1]] <- list(g = g, lab = lab, LU = NULL,
-      msg = if (nzchar(KEY)) "DK showdown salaries aren't on stat-api yet." else "STAT_API_KEY isn't set for this run, and no salaries are stored."); next }
+      msg = "No DK Showdown salaries yet: export this game's DKSalaries.csv from a DK Showdown contest into ~/ML/ff/data/dfs/ and run site_publish.R."); next }
   fx <- sal |> filter(position != "CPT") |> distinct(player_id, .keep_all = TRUE)
   cp <- sal |> filter(position == "CPT") |> distinct(player_id, .keep_all = TRUE) |> transmute(player_id, cpt_salary = salary, cpt_id = export_id)
   pool <- fx |> left_join(cp, by = "player_id") |> mutate(cpt_salary = coalesce(cpt_salary, 1.5 * salary), pos = ifelse(position %in% c("D", "DST"), "DST", position),

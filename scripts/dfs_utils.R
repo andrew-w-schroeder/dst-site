@@ -233,6 +233,21 @@ dk_pull_main <- function(games, now = Sys.time()) {
 }
 ## a readable reason for a failed pull (DK answers 403 to scripts on GitHub and on Stratus)
 dk_err_text <- function(msg) if (grepl("HTTP 403", msg)) "DraftKings refuses automated salary requests (HTTP 403): export this week's DKSalaries.csv from the DK lobby and upload it" else msg
+## Showdown exports (Andrew 2026-11-23: stat-api plan ended) have the same columns, with Roster Position CPT / FLEX (each player twice).
+## dk_is_showdown(): TRUE for those, so the main-slate readers (96, site_publish.R) skip them; dk_parse_sd_csv(): 97s salary rows.
+dk_is_showdown <- function(file) {
+  x <- tryCatch(utils::read.csv(file, stringsAsFactors = FALSE, check.names = FALSE), error = function(e) NULL)
+  if (is.null(x)) return(FALSE); names(x) <- trimws(names(x))
+  rp <- x[["Roster Position"]]; !is.null(rp) && any(toupper(trimws(rp)) %in% c("CPT", "MVP"))
+}
+dk_parse_sd_csv <- function(file) {
+  x <- utils::read.csv(file, stringsAsFactors = FALSE, check.names = FALSE); names(x) <- trimws(names(x))
+  team <- dk_team(x$TeamAbbrev); pos <- toupper(trimws(x$Position)); cpt <- toupper(trimws(x[["Roster Position"]])) %in% c("CPT", "MVP")
+  tibble(slate_id = NA_real_, player_id = paste(x$Name, team, pos, sep = "|"), name = x$Name, position = ifelse(cpt, "CPT", pos), team = team,
+         salary = as.numeric(x$Salary), export_id = as.character(x$ID),
+         avg_points = if (!is.null(x$AvgPointsPerGame)) suppressWarnings(as.numeric(x$AvgPointsPerGame)) else NA_real_,
+         injury_status = "", game = sub(" .*$", "", x$`Game Info`)) |> dplyr::distinct(export_id, .keep_all = TRUE)
+}
 ## DKSalaries.csv (lobby export): Position, Name + ID, Name, ID, Roster Position, Salary, Game Info, TeamAbbrev, AvgPointsPerGame
 dk_parse_csv <- function(file) {
   x <- utils::read.csv(file, stringsAsFactors = FALSE, check.names = FALSE)
